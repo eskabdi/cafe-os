@@ -30,12 +30,13 @@ Suspended/cancelled tenants resolve to NULL (no access); `past_due` is read-only
 | day_sessions | T + (`reports.view`/`day_close.execute`/`day.open`); operational staff use `fn_get_open_day()` | none (RPC) | none; closed rows trigger-frozen | none; trigger-blocked |
 | orders | T + `orders.view` + (`orders.view_all` or own or `station_ids && current_station_ids()`) | none (fn_submit_order later) | none | none |
 | order_items | T + `orders.view` + (`orders.view_all` or `station_id = any(current_station_ids())` or own order) | none | none | none |
+| kiosk_devices | T + `kiosks.manage` (column grant: no `token_hash`) | none (`fn_register_kiosk`) | none (`fn_revoke_kiosk`; service role refreshes `last_seen_at`) | none |
 | payments | T + `payments.view` | none (fn_confirm_payment later) | trigger-blocked for all roles | trigger-blocked for all roles |
 | vouchers, installments | T + `vouchers.view` | none | none | none |
 | expenses | T + `expenses.view`/`expenses.manage` | T + `expenses.manage` + W (actor, day, method snapshot set by trigger; **requires an open business day**, else `day_closed`; a foreign `restaurant_id` is refused with the RLS 42501 before any lookup) | same; frozen once its day is closed | same; frozen once its day is closed |
 
 Policies per table: admin_audit_log 1, audit_logs 1, categories 4, customer_sessions 1, day_sessions 1, expense_categories 4, expenses 4,
-ingredients 4, installments 1, menu_items 4, order_items 1, orders 1, payment_methods 4, payments 1, permissions 1, plans 5,
+ingredients 4, installments 1, kiosk_devices 1, menu_items 4, order_items 1, orders 1, payment_methods 4, payments 1, permissions 1, plans 5,
 platform_admins 3, platform_invoices 4, profiles 2, qr_credentials 1, recipe_lines 4, restaurants 3, role_permissions 1,
 role_station_access 1, roles 4, stations 4, stock_movements 1, subscriptions 4, table_areas 4, table_sessions 1, tables 4, vouchers 1;
 profile_secrets, tenant_counters, idempotency_keys: 0 (deny all).
@@ -66,3 +67,5 @@ execute by default and a role-global default privilege now prevents it for FUTUR
 - `seed.sql` is local-only (guarded); see `supabase/seed.sql` header.
 - 0019/0020: branding CHECK (size < 4096, key whitelist, hex colours, JSON null refused); `menu_items`, `recipe_lines`, `tables` use column grants (no `id`/timestamps: closes the foreign-id existence oracle); `profiles.username` is not client-updatable; renaming another user needs the same rights-coverage rule as `is_active`/`role_id`; `orders` is published to Realtime with a column list (no `public_token_hash`, no `station_ids`) and REPLICA IDENTITY USING INDEX (restaurant_id, id).
 - Test note: `23_review_followups` attacks every client UPDATE/DELETE privilege from the other tenant (behavioural) and checks every write policy carries its own tenant predicate (structural: RLS hides a missing predicate behind the SELECT policy).
+
+- 0022: `kiosk_devices` (1 SELECT policy; 81 policies in total). The service-only roster / eligibility functions are in no client EXECUTE list.

@@ -25,7 +25,7 @@ select is((select string_agg(name, ',' order by name) from _fn where has_functio
 select is((select string_agg(name, ',' order by name) from _fn where has_function_privilege('anon', oid, 'execute')),
           'fn_resolve_tenant_slug', 'anon may execute only fn_resolve_tenant_slug (fn_err is authenticated/service_role only)');
 select is((select string_agg(name, ',' order by name) from _fn where has_function_privilege('authenticated', oid, 'execute')),
-          'current_restaurant_id,current_role_id,current_station_ids,current_tenant_writable,current_user_id,fn_change_user_role,fn_create_staff_profile,fn_err,fn_get_open_day,fn_get_restaurant_settings,fn_get_session_context,fn_prepare_staff_creation,fn_provision_tenant,fn_reactivate_tenant,fn_reset_pin_lockout,fn_resolve_tenant_slug,fn_suspend_tenant,fn_update_role_permissions,has_permission,has_station_access,is_order_owner,is_platform_admin,is_platform_super_admin,is_tenant_admin',
+          'current_restaurant_id,current_role_id,current_station_ids,current_tenant_writable,current_user_id,fn_change_user_role,fn_create_staff_profile,fn_err,fn_get_open_day,fn_get_restaurant_settings,fn_get_session_context,fn_list_kiosks,fn_prepare_staff_creation,fn_provision_tenant,fn_reactivate_tenant,fn_register_kiosk,fn_reset_pin_lockout,fn_resolve_tenant_slug,fn_revoke_kiosk,fn_suspend_tenant,fn_update_role_permissions,has_permission,has_station_access,is_order_owner,is_platform_admin,is_platform_super_admin,is_tenant_admin',
           'authenticated executes exactly the reviewed RPC + RLS helper list (update this list consciously)');
 select is((select string_agg(name, ',' order by name) from _fn where has_function_privilege('authenticated', oid, 'execute') and has_function_privilege('anon', oid, 'execute')
            and name not in ('fn_resolve_tenant_slug')), null, 'nothing anon can run beyond the allowlist is also open to authenticated');
@@ -56,7 +56,7 @@ select is((select string_agg(name, ',' order by name) from _fn
           null, 'no client-callable definer function returns rows or table row types');
 select is((select string_agg(name, ',' order by name) from _fn
            where has_function_privilege('authenticated', oid, 'execute') and prorettype in ('jsonb'::regtype, 'json'::regtype, 'text'::regtype, 'record'::regtype)),
-          'fn_change_user_role,fn_create_staff_profile,fn_get_open_day,fn_get_restaurant_settings,fn_get_session_context,fn_prepare_staff_creation,fn_provision_tenant,fn_reactivate_tenant,fn_reset_pin_lockout,fn_resolve_tenant_slug,fn_suspend_tenant,fn_update_role_permissions',
+          'fn_change_user_role,fn_create_staff_profile,fn_get_open_day,fn_get_restaurant_settings,fn_get_session_context,fn_list_kiosks,fn_prepare_staff_creation,fn_provision_tenant,fn_reactivate_tenant,fn_register_kiosk,fn_reset_pin_lockout,fn_resolve_tenant_slug,fn_revoke_kiosk,fn_suspend_tenant,fn_update_role_permissions',
           'the set of client-callable functions returning free-form json/text is the reviewed one');
 select is((select string_agg(name, ',' order by name) from _fn where prorettype = 'public.profile_secrets'::regtype or proargnames @> array['pin_hash']
            or (name <> 'fn_audit_row' and prosrc ~* '''pin_hash''') or prosrc ~* 'returning\s+(ps\.)?pin_hash' or prosrc ~* 'to_jsonb\(\s*(ps|profile_secrets)'),
@@ -107,7 +107,7 @@ select is((select string_agg(t, ',') from tests.tenant_tables() t
 select is((select string_agg(t, ',') from tests.tenant_tables() t
            where exists (select 1 from pg_attribute a where a.attrelid = ('public.' || t)::regclass and a.attname = 'restaurant_id' and not a.attnotnull)),
           'admin_audit_log', 'restaurant_id is NOT NULL on every tenant table (admin_audit_log: platform jobs have none)');
-select is((select count(*)::int from pg_policies where schemaname = 'public'), 80, 'policy count matches docs/architecture/rls-matrix.md (update the doc when policies change)');
+select is((select count(*)::int from pg_policies where schemaname = 'public'), 81, 'policy count matches docs/architecture/rls-matrix.md (update the doc when policies change)');
 
 -- ═════════ views, materialized views, foreign tables ═════════
 select is((select string_agg(c.relname, ',') from pg_class c
@@ -130,7 +130,7 @@ select is((select string_agg(c.relname || '.' || a.attname, ',' order by c.relna
 select is((select string_agg(c.relname || '.' || a.attname, ',' order by c.relname)
            from pg_attribute a join pg_class c on c.oid = a.attrelid
            where c.relnamespace = 'public'::regnamespace and c.relkind = 'r' and a.attnum > 0 and not a.attisdropped and a.attname ~ '(hash|secret|token|password)'),
-          'customer_sessions.session_token_hash,idempotency_keys.request_hash,orders.public_token_hash,profile_secrets.pin_hash,qr_credentials.token_hash',
+          'customer_sessions.session_token_hash,idempotency_keys.request_hash,kiosk_devices.token_hash,orders.public_token_hash,profile_secrets.pin_hash,qr_credentials.token_hash',
           'inventory of secret-looking columns (a new one must be reviewed and kept off client grants)');
 
 create temp table _ctx on commit drop as

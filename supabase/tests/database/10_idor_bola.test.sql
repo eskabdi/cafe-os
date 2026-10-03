@@ -31,6 +31,7 @@ insert into public.stock_movements (restaurant_id, ingredient_id, station_id, qt
   select f.b, i.id, i.station_id, 5, 'opening', f.b_day from _f f join public.ingredients i on i.restaurant_id = f.b;
 insert into public.table_sessions (restaurant_id, table_id, day_session_id) select b, b_table, b_day from _f;
 insert into public.qr_credentials (restaurant_id, table_id, token_hash) select b, b_table, repeat('b', 64) from _f;
+insert into public.kiosk_devices (restaurant_id, name, token_hash, created_by) select b, 'B floor terminal', repeat('c', 64), b_admin from _f;
 insert into public.customer_sessions (restaurant_id, table_session_id, qr_credential_id, session_token_hash, expires_at)
   select f.b, ts.id, q.id, repeat('c', 64), now() + interval '1 hour'
   from _f f join public.table_sessions ts on ts.restaurant_id = f.b join public.qr_credentials q on q.restaurant_id = f.b;

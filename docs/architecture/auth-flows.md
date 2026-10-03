@@ -100,3 +100,22 @@ spots: `CASHIER_ROLE_NAME` / `pinLengthForRole()` in `supabase/functions/_shared
 - `fn_change_user_role` (and renaming a role into/out of Cashier) destroys secrets whose length no longer fits the role: no PIN login until a new PIN is issued
   (`pin_reset_required` in the RPC result).
 - Lock after 3 wrong attempts (15 min), 6 (1 h), 9 (24 h) applies to every role.
+
+## Shared floor terminal (registered kiosk) and tenant host
+Tenant is resolved from the host `<slug>.cafeos.et` (see tenant-routing.md; `/r/:slug` is the dev fallback). A registered kiosk device
+(kiosk-terminals.md) fetches tiles with `staff-roster` and signs staff in through the `pin-login` tile path:
+```mermaid
+sequenceDiagram
+    participant K as Kiosk page (acme.cafeos.et)
+    participant R as staff-roster
+    participant L as pin-login
+    participant DB as Postgres (service role RPCs)
+    K->>R: {slug from hostname, kiosk_token}
+    R->>DB: fn_kiosk_roster(sha256(token), slug)
+    DB-->>R: tiles (4-digit non-admin PIN staff only) | NULL
+    R-->>K: {staff:[{id,name,role,color,icon}]} | 401 invalid_kiosk
+    K->>L: {slug, kiosk_token, profile_id, pin(4)}
+    L->>DB: fn_kiosk_tile_eligible, then fn_verify_pin(profile, HMAC digest)
+    L-->>K: session | 401 invalid_credentials (identical for every cause)
+```
+The Cashier (6-digit PIN) and everyone else can use the username + PIN path on any device. Lockout 3/6/9 is shared by both paths.

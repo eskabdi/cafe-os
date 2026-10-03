@@ -30,3 +30,7 @@ brute-forced offline without the pepper. Rules:
 | function | purpose | secrets |
 |---|---|---|
 | `staff-create` | a `users.manage` caller creates a PIN-login staff member (Auth user + profile + PIN, rollback on failure) | service-role key, `PIN_PEPPER` |
+| `staff-roster` | PIN-staff tiles for a registered kiosk (token + `<slug>.cafeos.et`) | service-role key |
+
+`ALLOWED_ORIGINS` accepts exactly one wildcard form for tenant subdomains, e.g. `https://*.cafeos.et` (one valid non-reserved label; `platform.cafeos.et`
+must be listed explicitly). See `docs/architecture/tenant-routing.md`.

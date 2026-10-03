@@ -82,3 +82,6 @@ verify_jwt = true
 
 [functions.staff-create]
 verify_jwt = true
+
+[functions.staff-roster]
+verify_jwt = true

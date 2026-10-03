@@ -3,9 +3,10 @@
 // Never log or echo a PIN or token from here.
 
 import { PIN_RE } from '../_shared/pin.ts'
+import { KIOSK_TOKEN_RE } from '../_shared/kiosk.ts'
 export { computePinDigest, isWeakPin, DEMO_PEPPER, PIN_MIN_LENGTH, PIN_MAX_LENGTH } from '../_shared/pin.ts'
 
-export const MAX_BODY_BYTES = 1024
+export const MAX_BODY_BYTES = 1280
 export const MIN_RESPONSE_MS = 450
 export const RESPONSE_JITTER_MS = 100
 /** Synthetic, non-routable identity domain for PIN staff (enforced in the DB by a trigger). */
@@ -17,14 +18,30 @@ const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/
 const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{1,31}$/
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const ALLOWED_KEYS = ['restaurant_slug', 'username', 'pin'] as const
+const TILE_KEYS = ['restaurant_slug', 'kiosk_token', 'profile_id', 'pin'] as const
+/** Tile (registered kiosk) PINs are exactly 4 digits: the 6-digit Cashier never signs in from a tile. */
+const TILE_PIN_RE = /^[0-9]{4}$/
 
+/** Username path: any device, any PIN user (including the 6-digit Cashier). */
 export interface PinLoginInput {
   restaurant_slug: string
   username: string
   pin: string
 }
+/** Tile path: a registered kiosk (token) + the profile id from its roster. */
+export interface TileLoginInput {
+  restaurant_slug: string
+  kiosk_token: string
+  profile_id: string
+  pin: string
+}
+export type AnyLoginInput = PinLoginInput | TileLoginInput
 
-export type ParseResult = { ok: true; value: PinLoginInput } | { ok: false; error: 'invalid_request' }
+export function isTileLogin(i: AnyLoginInput): i is TileLoginInput {
+  return 'kiosk_token' in i
+}
+
+export type ParseResult = { ok: true; value: AnyLoginInput } | { ok: false; error: 'invalid_request' }
 
 /** Strict parse of the raw request text: exact key set, string types, normalized slug/username. */
 export function parsePinLoginBody(text: string): ParseResult {
@@ -39,6 +56,15 @@ export function parsePinLoginBody(text: string): ParseResult {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return fail
   const obj = raw as Record<string, unknown>
   const keys = Object.keys(obj)
+  if (keys.includes('kiosk_token') || keys.includes('profile_id')) {
+    // tile path: EXACTLY {restaurant_slug, kiosk_token, profile_id, pin}; no username may ride along
+    if (keys.length !== TILE_KEYS.length || !TILE_KEYS.every((k) => keys.includes(k))) return fail
+    const { restaurant_slug: rs, kiosk_token, profile_id, pin: tpin } = obj
+    if (typeof rs !== 'string' || typeof kiosk_token !== 'string' || typeof profile_id !== 'string' || typeof tpin !== 'string') return fail
+    const tslug = rs.trim().toLowerCase()
+    if (tslug.includes('--') || !SLUG_RE.test(tslug) || !KIOSK_TOKEN_RE.test(kiosk_token) || !UUID_RE.test(profile_id) || !TILE_PIN_RE.test(tpin)) return fail
+    return { ok: true, value: { restaurant_slug: tslug, kiosk_token, profile_id: profile_id.toLowerCase(), pin: tpin } }
+  }
   if (keys.length !== ALLOWED_KEYS.length || !ALLOWED_KEYS.every((k) => keys.includes(k))) return fail
   const { restaurant_slug, username, pin } = obj
   if (typeof restaurant_slug !== 'string' || typeof username !== 'string' || typeof pin !== 'string') return fail
@@ -105,10 +131,10 @@ export function createPinLoginLimiters(now: () => number = Date.now): PinLoginLi
 }
 
 /** Per-IP first, then per-(tenant, username). Keys are built from already-validated input. */
-export function checkRateLimits(l: PinLoginLimiters, ip: string, input: PinLoginInput): LimiterDecision {
+export function checkRateLimits(l: PinLoginLimiters, ip: string, input: AnyLoginInput): LimiterDecision {
   const a = l.ip.take(`ip:${ip}`)
   if (!a.allowed) return a
-  return l.user.take(`u:${input.restaurant_slug}:${input.username}`)
+  return l.user.take(isTileLogin(input) ? `t:${input.restaurant_slug}:${input.profile_id}` : `u:${input.restaurant_slug}:${input.username}`)
 }
 
 /** Best-effort client IP from proxy headers. Spoofable, hence only a throttling hint. */

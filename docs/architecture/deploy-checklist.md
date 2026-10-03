@@ -21,3 +21,8 @@ Do these BEFORE a hosted project takes real users. Items marked (manual) cannot 
    `customer_sessions` are not published. Not verified against a live Realtime server.
 8. **Resolver throttling (manual):** `fn_resolve_tenant_slug` is anon-callable; rate limit it at the edge/WAF.
 9. **Smoke after deploy:** a waiter cannot read `restaurants.tin`, `subscriptions`, `day_sessions`; a platform admin without aal2 sees no tenant.
+10. **Subdomain routing (manual):** wildcard DNS + wildcard certificate for `*.cafeos.et`, `platform.cafeos.et` as its own host, CSP per tenant host, Auth redirect
+    allow-list `https://*.cafeos.et/**` and `https://platform.cafeos.et/**`; set `ALLOWED_ORIGINS=https://*.cafeos.et,https://platform.cafeos.et` on the Edge Functions
+    (details: tenant-routing.md). Never use a cookie `Domain=.cafeos.et`.
+11. **Kiosks:** register devices only from the tenant host, treat the token like a password (shown once), revoke on theft or staff turnover, review `last_seen_at`
+    (kiosk-terminals.md). `staff-roster` and `pin-login` must run with `PIN_PEPPER` set (shared fail-closed env).

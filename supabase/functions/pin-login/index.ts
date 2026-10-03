@@ -25,6 +25,8 @@
 import { createClient } from '@supabase/supabase-js'
 import { corsHeaders, parseAllowedOrigins, resolveAllowedOrigin } from '../_shared/cors.ts'
 import { readPinLoginEnv } from '../_shared/env.ts'
+import { originSlugMatches } from '../_shared/host.ts'
+import { kioskTokenHash } from '../_shared/kiosk.ts'
 import {
   MAX_BODY_BYTES,
   checkRateLimits,
@@ -39,7 +41,8 @@ import {
   shapeFailure,
   shapeSuccess,
   type FailureKind,
-  type PinLoginInput,
+  type AnyLoginInput,
+  isTileLogin,
   type ShapedResponse,
 } from './logic.ts'
 
@@ -85,7 +88,7 @@ async function readLimitedBody(req: Request): Promise<string | null> {
 
 type Outcome = { ok: true; session: unknown } | { ok: false; kind: FailureKind }
 
-async function authenticate(input: PinLoginInput): Promise<Outcome> {
+async function authenticate(input: AnyLoginInput): Promise<Outcome> {
   if (!env) return { ok: false, kind: 'server_error' }
   const authOpts = { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } }
   const admin = createClient(env.supabaseUrl, env.serviceRoleKey, authOpts)
@@ -102,23 +105,39 @@ async function authenticate(input: PinLoginInput): Promise<Outcome> {
   const tenantId = (tenantRes.data as { id?: unknown } | null)?.id
   const tenant = typeof tenantId === 'string' ? tenantId : null
 
-  // 2. profile within that tenant
-  let profile: unknown = null
-  if (tenant) {
-    const p = await admin
-      .from('profiles')
-      .select('id, restaurant_id, auth_method, is_active')
-      .eq('restaurant_id', tenant)
-      .eq('username', input.username)
-      .maybeSingle()
-    if (p.error) return { ok: false, kind: 'server_error' }
-    profile = p.data
+  // 2. the candidate profile
+  //    username path: looked up by (tenant, username); any PIN user on any device (the 6-digit Cashier uses this path)
+  //    tile path:     a REGISTERED KIOSK (token hash + slug, validated by the DB: unknown / revoked / wrong tenant /
+  //                   suspended all answer false) and a profile that is an eligible 4-digit non-admin PIN tile of that tenant
+  let candidate: boolean
+  let profileId: string
+  if (isTileLogin(input)) {
+    const elig = await admin.rpc('fn_kiosk_tile_eligible', {
+      p_token_hash: await kioskTokenHash(input.kiosk_token),
+      p_slug: input.restaurant_slug,
+      p_profile_id: input.profile_id,
+    })
+    if (elig.error) return { ok: false, kind: 'server_error' }
+    candidate = tenant !== null && elig.data === true
+    profileId = candidate ? input.profile_id : crypto.randomUUID()
+  } else {
+    let profile: unknown = null
+    if (tenant) {
+      const p = await admin
+        .from('profiles')
+        .select('id, restaurant_id, auth_method, is_active')
+        .eq('restaurant_id', tenant)
+        .eq('username', input.username)
+        .maybeSingle()
+      if (p.error) return { ok: false, kind: 'server_error' }
+      profile = p.data
+    }
+    candidate = tenant !== null && isPinCandidate(profile, tenant)
+    profileId = candidate ? (profile as { id: string }).id : crypto.randomUUID()
   }
 
-  // 3. ALWAYS run fn_verify_pin so unknown tenant / unknown user / admin / inactive cost the same.
+  // 3. ALWAYS run fn_verify_pin so unknown tenant / unknown user / admin / inactive / bad kiosk cost the same.
   //    Non-candidates get a random id; the DB burns an equivalent bcrypt and answers 'invalid'.
-  const candidate = tenant !== null && isPinCandidate(profile, tenant)
-  const profileId = candidate ? (profile as { id: string }).id : crypto.randomUUID()
   //    The DB only ever receives HMAC-SHA256(pin, PIN_PEPPER); the raw PIN stays in this function.
   const digest = await computePinDigest(input.pin, env.pinPepper)
   const verify = await admin.rpc('fn_verify_pin', { p_profile_id: profileId, p_pin_digest: digest })
@@ -162,6 +181,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (text === null) return respond(shapeFailure('payload_too_large'), origin)
   const parsed = parsePinLoginBody(text)
   if (!parsed.ok) return respond(shapeFailure('invalid_request'), origin)
+  // a page served from <slug>.cafeos.et can only sign in to ITS tenant (same generic answer as a wrong PIN)
+  if (!originSlugMatches(originHeader, parsed.value.restaurant_slug)) return respond(shapeFailure('invalid_credentials'), origin)
 
   const limit = checkRateLimits(limiters, clientIp(req.headers), parsed.value)
   if (!limit.allowed) return respond(shapeFailure('rate_limited', limit.retryAfterSec), origin)

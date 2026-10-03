@@ -4,6 +4,14 @@ PIN sign-in for **non-admin staff only**. `tenant_admin` and `platform_super_adm
 Supabase Auth email + password (TOTP MFA capable). The PIN path answers admins exactly like a wrong PIN.
 
 ## Contract
+Two request shapes (exact key sets; mixing them is `invalid_request`):
+- **username path** (any device; the only path for the 6-digit Cashier): `{ restaurant_slug, username, pin }` with a 4 or 6 digit PIN.
+- **tile path** (registered kiosk): `{ restaurant_slug, kiosk_token, profile_id, pin }` with a 4-digit PIN. The kiosk token is validated by the
+  DB (`fn_kiosk_tile_eligible`: token hash, not revoked, tenant slug equal, tenant not suspended/cancelled) and the profile must be an eligible
+  4-digit non-admin PIN member of that tenant; otherwise the same work is done on a random id and the answer is the same 401. Lockout is shared
+  with the username path (3/6/9 failures).
+A page whose Origin is `<other-slug>.cafeos.et` cannot sign in to a different tenant (same generic 401).
+
 `POST /functions/v1/pin-login`, JSON body (max 1024 bytes, exactly these keys):
 
 ```json

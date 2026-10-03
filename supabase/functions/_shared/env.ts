@@ -27,3 +27,6 @@ export function readPinLoginEnv(): PinLoginEnv | null {
 
 /** Same variables, read by staff-create. */
 export const readStaffCreateEnv = readPinLoginEnv
+
+/** Same variables, read by staff-roster (it does not use the pepper but shares the fail-closed env). */
+export const readRosterEnv = readPinLoginEnv
