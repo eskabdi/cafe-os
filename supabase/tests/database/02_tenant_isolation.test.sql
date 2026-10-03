@@ -115,7 +115,7 @@ select tests.as_anon();
 select is((select public.fn_resolve_tenant_slug('second-cafe')), null::jsonb, 'suspended slug resolves like an unknown slug');
 select is((select public.fn_resolve_tenant_slug('does-not-exist')), null::jsonb, 'unknown slug -> null');
 select is((select public.fn_resolve_tenant_slug('central-cafe') ->> 'name'), 'Central Cafe', 'known slug resolves name');
-select ok(not ((select public.fn_resolve_tenant_slug('central-cafe')) ? 'status'), 'resolver leaks nothing beyond id/name/branding');
+select ok(not ((select public.fn_resolve_tenant_slug('central-cafe')) ?| array['status', 'id']), 'resolver leaks nothing beyond name/branding (no status, no tenant id)');
 select tests.clear_auth();
 
 select tests.authenticate_as('00000000-0000-4000-8000-0000000000c1');

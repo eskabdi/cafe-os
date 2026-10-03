@@ -25,7 +25,6 @@ async function callRpc(fn: string, args?: Record<string, unknown>): Promise<unkn
 
 const tenantSchema = z
   .object({
-    id: z.string().uuid(),
     name: z.string(),
     // mirrors restaurants_branding_check / restaurants_branding_shape_check: whitelisted keys, hex colours,
     // tenant-scoped storage path only

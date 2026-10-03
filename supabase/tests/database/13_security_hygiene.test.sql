@@ -3,7 +3,7 @@
 -- never reach a client (PIN hash, token hashes), Realtime publication, default privileges.
 -- A failure here after a new migration means the new object needs the same hardening (or a reviewed allowlist entry).
 begin;
-select plan(59);
+select plan(62);
 
 -- ═════════ SECURITY DEFINER / function hygiene ═════════
 create temp view _fn as
@@ -181,10 +181,16 @@ select is((select string_agg(pt.tablename, ',') from pg_publication_tables pt
 select is((select string_agg(pt.tablename || '.' || a, ',' order by pt.tablename)
            from pg_publication_tables pt, unnest(pt.attnames) a
            where pt.pubname = 'supabase_realtime' and a ~ '(hash|secret|token|password)'),
-          'orders.public_token_hash',
-          'Realtime streams no secret column except orders.public_token_hash (sha256 of a random tracking token; accepted, see rls-matrix.md)');
+          null,
+          'Realtime streams no secret-looking column at all (orders uses a column list)');
+select is((select string_agg(pt.tablename || '.' || a, ',' order by pt.tablename, a)
+           from pg_publication_tables pt, unnest(pt.attnames) a
+           where pt.pubname = 'supabase_realtime' and pt.tablename = 'orders' and a in ('public_token_hash', 'station_ids')),
+          null, 'orders: public_token_hash and the internal station_ids are not published');
 select is((select string_agg(c.relname, ',') from pg_publication_tables pt join pg_class c on c.relname = pt.tablename and c.relnamespace = 'public'::regnamespace
-           where pt.pubname = 'supabase_realtime' and c.relreplident <> 'f'), null, 'published tables use REPLICA IDENTITY FULL (restaurant_id present on UPDATE/DELETE)');
+           where pt.pubname = 'supabase_realtime' and c.relreplident <> 'f' and c.relname <> 'orders'), null, 'published tables use REPLICA IDENTITY FULL (restaurant_id present on UPDATE/DELETE)');
+select is((select c.relreplident::text from pg_class c where c.oid = 'public.orders'::regclass), 'i', 'orders (column-list publication) uses REPLICA IDENTITY USING INDEX');
+select is((select string_agg(a.attname, ',' order by a.attname) from pg_index i join pg_attribute a on a.attrelid = i.indrelid and a.attnum = any (i.indkey) where i.indrelid = 'public.orders'::regclass and i.indisreplident), 'id,restaurant_id', 'and that index is exactly (restaurant_id, id)');
 
 -- ═════════ default privileges ═════════
 select is((select count(*)::int from pg_default_acl d

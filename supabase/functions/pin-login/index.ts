@@ -91,7 +91,13 @@ async function authenticate(input: PinLoginInput): Promise<Outcome> {
   const admin = createClient(env.supabaseUrl, env.serviceRoleKey, authOpts)
 
   // 1. tenant by slug, server-side (never trusted from the client beyond this lookup)
-  const tenantRes = await admin.rpc('fn_resolve_tenant_slug', { p_slug: input.restaurant_slug })
+  //    (the anon resolver no longer returns the id, so the service role reads it; suspended/cancelled => null)
+  const tenantRes = await admin
+    .from('restaurants')
+    .select('id')
+    .eq('slug', input.restaurant_slug)
+    .not('status', 'in', '(suspended,cancelled)')
+    .maybeSingle()
   if (tenantRes.error) return { ok: false, kind: 'server_error' }
   const tenantId = (tenantRes.data as { id?: unknown } | null)?.id
   const tenant = typeof tenantId === 'string' ? tenantId : null

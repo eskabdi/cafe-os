@@ -121,8 +121,8 @@ grant execute on function public.fn_user_auth_method(uuid) to supabase_auth_admi
 grant execute on function public.fn_err(text, text) to authenticated, anon, service_role;
 
 -- ── Realtime ──
--- postgres_changes evaluates the subscriber's RLS policies. REPLICA IDENTITY FULL makes
--- restaurant_id available on UPDATE/DELETE events so tenant filters work for every event type.
+-- postgres_changes evaluates the subscriber's RLS policies. REPLICA IDENTITY FULL puts the whole old row in UPDATE/DELETE
+-- events so tenant filters on restaurant_id work. CAVEAT (see 0019 and deploy-checklist.md): Realtime cannot RLS-filter DELETE events (the row is gone), so a DELETE event reaches every subscriber of that table with the old row's primary key; that PK leak is an accepted residual. Secret columns are kept out of the stream with column lists (0019).
 do $$
 declare
   t text;
