@@ -13,4 +13,8 @@ if (!url || !anonKey) {
   )
 }
 
-export const supabase = createClient<Database>(url, anonKey)
+// Session persistence is Supabase's own (not domain data). URL session detection is off: no OAuth or
+// magic-link redirects exist, which removes a token-in-URL injection surface.
+export const supabase = createClient<Database>(url, anonKey, {
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+})
