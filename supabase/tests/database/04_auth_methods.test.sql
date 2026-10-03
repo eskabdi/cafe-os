@@ -1,6 +1,6 @@
 -- PIN login is for staff only; tenant_admin and platform admins use Supabase Auth email + password
 begin;
-select plan(53);
+select plan(55);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b;
