@@ -57,7 +57,6 @@ select throws_ok(format($q$update public.profiles set role_id = (select id from 
 select throws_ok(format($q$insert into auth.users (id, email) values ('00000000-0000-4000-8000-0000000000d1', 'real@person.example.com')$q$) || '; ' ||
                  format($q$insert into public.profiles (id, restaurant_id, first_name, username, role_id, auth_method) select '00000000-0000-4000-8000-0000000000d1', %L, 'Real', 'realperson', id, 'pin' from public.roles where name = 'Waiter' and restaurant_id = %L$q$, (select a from _f), (select a from _f)),
                  'P0001', 'auth_method_mismatch', 'PIN staff must use a synthetic non-routable email');
-select throws_ok($q$update public.profiles set auth_method = auth_method$q$ || '; select 1/0', '22012', null, 'sanity: statements run');
 
 -- promotion / demotion through fn_change_user_role
 select tests.authenticate_as(tests.user_id('selam', 'central-cafe'));

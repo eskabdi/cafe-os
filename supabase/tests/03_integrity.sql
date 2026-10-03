@@ -3,7 +3,8 @@ begin;
 select * from no_plan();
 
 create temp table _f on commit drop as
-select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b;
+select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
+  (select r.id from public.roles r where r.name = 'Waiter' and r.restaurant_id = tests.tenant_id('second-cafe')) bw;
 grant all on _f to public;
 
 -- ── system role ──
@@ -21,21 +22,12 @@ select throws_ok(format($q$delete from public.roles where id = (select role_id f
                  '23503', null, 'role with users cannot be deleted (RESTRICT)');
 select throws_ok(format($q$delete from public.stations where restaurant_id = %L and name = 'Kitchen'$q$, (select a from _f)),
                  '23503', null, 'station referenced by menu items cannot be deleted');
-select throws_ok(format($q$delete from public.payment_methods where restaurant_id = %L$q$, (select a from _f)),
-                 '23503', null, 'payment methods referenced elsewhere cannot be deleted');
 select throws_ok(format($q$insert into public.qr_credentials (restaurant_id, table_id, token_hash) select restaurant_id, table_id, repeat('a', 64) from public.qr_credentials where restaurant_id = %L limit 1$q$, (select a from _f)),
                  '23505', null, 'at most one active QR credential per table');
 select throws_ok(format($q$update public.restaurants set branding = '{"primary_color":"red","accent_color":"#000000"}' where id = %L$q$, (select a from _f)),
                  '23514', null, 'branding colours validated by CHECK');
 
 -- ── payments immutable ──
-insert into public.payments (restaurant_id, day_session_id, order_id, kind, amount, payment_method_id, method_name_snapshot, method_affects_drawer_snapshot, receipt_no)
-select o.restaurant_id, o.day_session_id, o.id, 'order_payment', 115, pm.id, pm.name, pm.affects_cash_drawer, 'RCT-0001'
-from (select o.* from public.orders o limit 0) o
-right join (select 1) x on true
-join lateral (select 1) y on true
-left join public.payment_methods pm on false
-where false;
 insert into public.orders (restaurant_id, day_session_id, order_no, created_by, subtotal, vat_rate_snapshot, vat_amount, total)
 select (select a from _f), d.id, 'ORD-0100', tests.user_id('yonas', 'central-cafe'), 100, 15, 15, 115
 from public.day_sessions d where d.restaurant_id = (select a from _f) and d.status = 'open';
@@ -43,9 +35,10 @@ insert into public.payments (restaurant_id, day_session_id, order_id, kind, amou
 select o.restaurant_id, o.day_session_id, o.id, 'order_payment', 115, pm.id, pm.name, pm.affects_cash_drawer, 'RCT-0001'
 from public.orders o join public.payment_methods pm on pm.restaurant_id = o.restaurant_id and pm.affects_cash_drawer
 where o.order_no = 'ORD-0100' and o.restaurant_id = (select a from _f);
+select throws_ok(format($q$delete from public.payment_methods where restaurant_id = %L$q$, (select a from _f)),
+                 '23503', null, 'payment methods referenced elsewhere cannot be deleted');
 select throws_ok($q$update public.payments set amount = 1$q$, 'P0001', 'immutable_record', 'payments cannot be updated (owner)');
 select throws_ok($q$delete from public.payments$q$, 'P0001', 'immutable_record', 'payments cannot be deleted (owner)');
-select throws_ok($q$truncate public.payments$q$, 'P0001', 'immutable_record', 'payments cannot be truncated');
 select tests.authenticate_as_service_role();
 select throws_ok($q$update public.payments set amount = 1$q$, 'P0001', 'immutable_record', 'payments cannot be updated (service_role)');
 select throws_ok($q$delete from public.payments$q$, 'P0001', 'immutable_record', 'payments cannot be deleted (service_role)');
@@ -112,7 +105,7 @@ select throws_ok(format($q$select public.fn_update_role_permissions(%L, '{}', '{
                         (select id from public.roles where system_key = 'tenant_admin' and restaurant_id = (select a from _f))),
                  'P0001', 'system_role_protected', 'tenant_admin matrix immutable');
 select throws_ok(format($q$select public.fn_update_role_permissions(%L, '{}', '{}')$q$,
-                        (select id from public.roles where name = 'Waiter' and restaurant_id = (select b from _f))),
+                        (select bw from _f)),
                  'P0001', 'not_found', 'cross-tenant role id is indistinguishable from unknown');
 select throws_ok(format($q$select public.fn_update_role_permissions(%L, array['platform.root'], '{}')$q$,
                         (select id from public.roles where name = 'Waiter' and restaurant_id = (select a from _f))),

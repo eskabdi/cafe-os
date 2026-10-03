@@ -43,9 +43,9 @@ end $$;
 
 -- convenience lookups used by the tests (superuser context)
 create or replace function tests.tenant_id(p_slug text) returns uuid
-language sql stable as $$ select id from public.restaurants where slug = p_slug $$;
+language sql stable security definer set search_path = '' as $$ select id from public.restaurants where slug = p_slug $$;
 create or replace function tests.user_id(p_username text, p_slug text) returns uuid
-language sql stable as $$
+language sql stable security definer set search_path = '' as $$
   select p.id from public.profiles p join public.restaurants r on r.id = p.restaurant_id
   where p.username = p_username and r.slug = p_slug $$;
 grant execute on all functions in schema tests to anon, authenticated, service_role;

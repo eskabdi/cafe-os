@@ -1,0 +1,81 @@
+# CafeOS entity-relationship diagram (Phase 1 schema)
+
+Source of truth: `supabase/migrations/*.sql`. Every tenant table carries `restaurant_id`; child tables reference
+parents through **composite foreign keys** `(restaurant_id, parent_id)` so a cross-tenant reference is impossible
+at the schema level. All business FKs are `ON DELETE RESTRICT` (soft-deactivate with `is_active`).
+
+## Platform and identity
+
+```mermaid
+erDiagram
+    restaurants ||--|| subscriptions : "has one"
+    plans ||--o{ subscriptions : "priced by"
+    restaurants ||--o{ platform_invoices : billed
+    subscriptions ||--o{ platform_invoices : generates
+    platform_admins ||--o{ admin_audit_log : performs
+    restaurants ||--o{ admin_audit_log : "subject of"
+    auth_users ||--o| platform_admins : "is (platform_super_admin | platform_support)"
+    auth_users ||--o| profiles : "is staff"
+    restaurants ||--o{ profiles : employs
+    roles ||--o{ profiles : "assigned (RESTRICT)"
+    profiles ||--o| profile_secrets : "PIN hash (staff only)"
+    restaurants ||--o{ roles : defines
+    roles ||--o{ role_permissions : grants
+    permissions ||--o{ role_permissions : "global catalog"
+    roles ||--o{ role_station_access : "may operate"
+    stations ||--o{ role_station_access : "operated by"
+    restaurants ||--o{ audit_logs : "append-only"
+    restaurants ||--o{ idempotency_keys : dedupes
+    restaurants ||--o{ tenant_counters : numbers
+    profiles { uuid id PK "= auth.users.id" text auth_method "password (tenant_admin) | pin (staff)" text first_name text middle_name text last_name text short_name "generated first+middle" }
+    roles { uuid id PK text system_key "null | tenant_admin" boolean is_system }
+    restaurants { uuid id PK text slug UK text status "trialing|active|past_due|suspended|cancelled" jsonb branding "CHECK hex colours + storage path" }
+```
+
+## Six dynamic domains and operations
+
+```mermaid
+erDiagram
+    restaurants ||--o{ stations : ""
+    restaurants ||--o{ categories : ""
+    restaurants ||--o{ payment_methods : ""
+    restaurants ||--o{ table_areas : ""
+    restaurants ||--o{ expense_categories : ""
+    categories ||--o{ menu_items : classifies
+    stations ||--o{ menu_items : "prepared at"
+    stations ||--o{ ingredients : "stocked at"
+    menu_items ||--o{ recipe_lines : uses
+    ingredients ||--o{ recipe_lines : "consumed by"
+    ingredients ||--o{ stock_movements : "ledger (append-only)"
+    table_areas ||--o{ tables : contains
+    tables ||--o{ table_sessions : hosts
+    tables ||--o{ qr_credentials : "one active (partial unique)"
+    qr_credentials ||--o{ customer_sessions : opens
+    table_sessions ||--o{ customer_sessions : ""
+    day_sessions ||--o{ orders : contains
+    tables ||--o{ orders : "optional"
+    orders ||--o{ order_items : contains
+    menu_items ||--o{ order_items : "snapshot of"
+    stations ||--o{ order_items : "routes to (+name snapshot)"
+    orders ||--o| vouchers : "financed by"
+    vouchers ||--o{ installments : schedules
+    orders ||--o{ payments : settles
+    vouchers ||--o{ payments : collects
+    payment_methods ||--o{ payments : "snapshot + FK"
+    payments ||--o| payments : "reversed_payment_id"
+    payments ||--o| installments : "payment_id"
+    expense_categories ||--o{ expenses : ""
+    payment_methods ||--o{ expenses : "paid with"
+    day_sessions ||--o{ expenses : "filled by trigger"
+    day_sessions ||--o{ payments : ""
+    payment_methods { boolean affects_cash_drawer "data flag, no name logic" boolean requires_reference }
+    day_sessions { text status "open|closed (closed rows immutable)" jsonb station_snapshot jsonb expense_snapshot jsonb payment_snapshot }
+    payments { text kind "order_payment|down_payment|installment_payment|reversal" text method_name_snapshot boolean method_affects_drawer_snapshot }
+    orders { text order_no "unique per tenant" text client_key "idempotency, unique per tenant" text source "staff|qr" }
+```
+
+Every table in the six-domain group has: `id, restaurant_id, name, normalized_name (generated), description, color, icon,
+sort_order, is_active, created_at, updated_at` and `unique (restaurant_id, normalized_name)`; roles add `is_system, system_key`.
+No PostgreSQL enums exist in `public`; workflow states are `text` + CHECK.
+
+Note: `auth_users` is Supabase's `auth.users`.

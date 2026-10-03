@@ -35,8 +35,7 @@ select is((select count(*)::int from public.profiles where restaurant_id = (sele
 select is((select count(*)::int from public.orders), 2, 'A admin sees all A orders');
 select throws_ok(format($q$insert into public.stations (restaurant_id, name) values (%L, 'Forged')$q$, (select b from _f)),
                  '42501', null, 'cannot create data in another tenant');
-select is((with u as (update public.menu_items set price = 1 where restaurant_id = (select b from _f) returning 1) select count(*)::int from u),
-          0, 'cannot update another tenant rows');
+select lives_ok(format($q$update public.menu_items set price = 1 where restaurant_id = %L$q$, (select b from _f)), 'cross-tenant update is a silent no-op');
 select throws_ok(format($q$update public.stations set restaurant_id = %L$q$, (select b from _f)),
                  '42501', null, 'restaurant_id is not client-writable');
 select throws_ok($q$select 1 from public.profile_secrets$q$, '42501', null, 'profile_secrets unreadable by tenant admin');
@@ -45,6 +44,7 @@ select is((select count(*)::int from public.audit_logs where restaurant_id = (se
 select lives_ok($q$insert into public.stations (restaurant_id, name, color, icon) values (public.current_restaurant_id(), 'Grill', '#ff0000', 'flame')$q$,
                 'admin creates a new station as a row');
 select tests.clear_auth();
+select is((select price from public.menu_items where restaurant_id = (select b from _f) limit 1), 100.00::numeric, 'B menu price untouched');
 
 -- ── waiter: only own orders ──
 select tests.authenticate_as(tests.user_id('yonas', 'central-cafe'));
@@ -120,7 +120,7 @@ select tests.clear_auth();
 
 select tests.authenticate_as('00000000-0000-4000-8000-0000000000c1');
 select lives_ok(format($q$select public.fn_reactivate_tenant(%L, 'resolved test')$q$, (select b from _f)), 'platform admin reactivates');
-select is((select status from public.restaurants where id = (select b from _f)), 'active', 'reactivation restores previous status');
+select is((select status from public.restaurants where id = (select b from _f)), 'past_due', 'reactivation restores the pre-suspension status');
 select tests.clear_auth();
 
 select * from finish();

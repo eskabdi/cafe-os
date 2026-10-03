@@ -190,7 +190,7 @@ declare
 begin
   select ro.system_key into v_key from public.roles ro
   where ro.id = new.role_id and ro.restaurant_id = new.restaurant_id;
-  if (v_key = 'tenant_admin') <> (new.auth_method = 'password') then
+  if coalesce(v_key = 'tenant_admin', false) <> (new.auth_method = 'password') then
     perform public.fn_err('auth_method_mismatch', 'tenant_admin uses password, staff uses pin');
   end if;
   if exists (select 1 from public.platform_admins a where a.id = new.id) then

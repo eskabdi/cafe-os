@@ -16,7 +16,7 @@ select is((select count(*)::int from pg_constraint c join pg_namespace n on n.oi
           0, 'no ON DELETE CASCADE foreign keys');
 select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.prosecdef
-             and not coalesce(p.proconfig @> array['search_path='], false)),
+             and not coalesce(p.proconfig @> array['search_path=""'], false)),
           0, 'every SECURITY DEFINER function pins search_path to empty');
 
 select is((select count(*)::int from public.restaurants), 2, 'two seeded tenants');
