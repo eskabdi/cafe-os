@@ -1,17 +1,42 @@
 #!/usr/bin/env bash
 # Throwaway-Postgres database test harness (no Docker / no Supabase stack needed).
 #   initdb temp cluster -> Supabase-compat shim -> migrations -> seed -> pgTAP (pg_prove) -> teardown
+#
 # Usage: scripts/db-test.sh [--keep] [--no-tests] [test-file ...]
 # Env:   PG_BIN (default: pg_config --bindir or /usr/lib/postgresql/16/bin), DB_TEST_PORT (default 54329)
-# Real stack equivalents: `supabase db reset` and `supabase test db` (same migrations/seed/tests).
+#
+# Real-stack equivalents (same migrations / seed / tests; this is what CI runs):
+#   supabase db reset   = migrations + supabase/seed.sql  (config.toml [db.seed] sql_paths = ["./seed.sql"])
+#   supabase test db    = pg_prove --ext .pg --ext .sql -r  over supabase/tests (cwd = supabase/tests)
+# This script invokes pg_prove the SAME way: recursive, both extensions, cwd = supabase/tests, sorted order,
+# one session per file. With no file arguments that is exactly the real-stack file set.
+#
+# Layout contract (checked below): EVERYTHING under supabase/tests must be a self-contained pgTAP file named
+# *.test.sql, because `supabase test db` executes every .sql/.pg file it finds. The plain-Postgres shim is in
+# scripts/db/shim (never under supabase/tests).
+#
+# The superuser of the throwaway cluster is `supabase_admin` (like Supabase). Migrations, seed and tests run
+# as the NON-superuser `postgres` the shim creates, so real-stack privilege differences surface here too.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PG_BIN="${PG_BIN:-$( (command -v pg_config >/dev/null && pg_config --bindir) || echo /usr/lib/postgresql/16/bin)}"
 PORT="${DB_TEST_PORT:-54329}"
+TESTS_DIR="$ROOT/supabase/tests"
 KEEP=0; RUN_TESTS=1; FILES=()
 for a in "$@"; do
   case "$a" in --keep) KEEP=1 ;; --no-tests) RUN_TESTS=0 ;; *) FILES+=("$a") ;; esac
+done
+
+# ── layout contract ──
+bad="$(find "$TESTS_DIR" -type f ! -name '*.test.sql' -print)"
+if [ -n "$bad" ]; then
+  echo "supabase/tests may only contain *.test.sql pgTAP files (supabase test db runs every .sql/.pg file):" >&2
+  echo "$bad" >&2
+  exit 1
+fi
+for f in $(find "$TESTS_DIR" -type f -name '*.test.sql' | sort); do
+  if ! grep -qE 'plan\(|no_plan\(' "$f"; then echo "pgTAP file without a plan: $f" >&2; exit 1; fi
 done
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/cafeos-dbtest.XXXXXX")"
@@ -30,28 +55,39 @@ cleanup() {
 trap cleanup EXIT
 
 echo "==> initdb ($TMP)"
-"${AS_PG[@]}" "$PG_BIN/initdb" -D "$PGDATA" -U postgres --auth=trust -E UTF8 --locale=C.UTF-8 >/dev/null
+"${AS_PG[@]}" "$PG_BIN/initdb" -D "$PGDATA" -U supabase_admin --auth=trust -E UTF8 --locale=C.UTF-8 >/dev/null
 "${AS_PG[@]}" "$PG_BIN/pg_ctl" -D "$PGDATA" -w -l "$TMP/server.log" \
   -o "-p $PORT -c listen_addresses='' -c unix_socket_directories='$SOCK' -c fsync=off -c synchronous_commit=off -c full_page_writes=off" start >/dev/null
 
+PSQL_ADMIN=("$PG_BIN/psql" -h "$SOCK" -p "$PORT" -U supabase_admin -d postgres -X -q -v ON_ERROR_STOP=1)
 PSQL=("$PG_BIN/psql" -h "$SOCK" -p "$PORT" -U postgres -d postgres -X -q -v ON_ERROR_STOP=1)
 
-echo "==> Supabase shim + pgTAP"
-"${PSQL[@]}" -f "$ROOT/supabase/tests/shim/00_supabase_shim.sql"
-"${PSQL[@]}" -c 'create extension if not exists pgtap with schema extensions'
+echo "==> Supabase shim (as supabase_admin)"
+"${PSQL_ADMIN[@]}" -f "$ROOT/scripts/db/shim/00_supabase_shim.sql"
 
-echo "==> migrations"
+echo "==> migrations (as postgres)"
 for f in "$ROOT"/supabase/migrations/*.sql; do
   echo "    $(basename "$f")"
   "${PSQL[@]}" --single-transaction -f "$f"
 done
 
-echo "==> seed"
+echo "==> seed (as postgres)"
 "${PSQL[@]}" -f "$ROOT/supabase/seed.sql"
 
 if [ "$RUN_TESTS" -eq 1 ]; then
   echo "==> pgTAP"
-  if [ "${#FILES[@]}" -eq 0 ]; then FILES=("$ROOT"/supabase/tests/*.sql); fi
-  pg_prove -h "$SOCK" -p "$PORT" -U postgres -d postgres --verbose "${FILES[@]}"
+  export PGHOST="$SOCK" PGPORT="$PORT" PGUSER=postgres PGDATABASE=postgres
+  cd "$TESTS_DIR"
+  if [ "${#FILES[@]}" -eq 0 ]; then
+    pg_prove --ext .pg --ext .sql -r --verbose .
+  else
+    # explicit subset: helpers (00_helpers.test.sql) always go first, then the requested files.
+    # (On the real stack a single-file run needs the helpers to be installed already.)
+    ARGS=(database/00_helpers.test.sql)
+    for f in "${FILES[@]}"; do
+      f="$(cd "$OLDPWD" && realpath "$f")"; ARGS+=("${f#"$TESTS_DIR"/}")
+    done
+    pg_prove --ext .pg --ext .sql -r --verbose "${ARGS[@]}"
+  fi
 fi
 echo "==> OK"

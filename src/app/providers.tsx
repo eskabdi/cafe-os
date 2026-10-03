@@ -10,7 +10,7 @@ function createQueryClient(): QueryClient {
   })
 }
 
-// Auth and TenantThemeProvider are added in later phases (Phase 1+).
+// AuthProvider lives under the router root (routes.tsx) so it can use navigation. TenantThemeProvider comes later.
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(createQueryClient)
   return (

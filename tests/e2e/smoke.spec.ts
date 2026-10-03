@@ -5,7 +5,7 @@ test('app loads', async ({ page }) => {
   await expect(page.getByRole('heading', { level: 1 })).toContainText('CafeOS')
 })
 
-test('tenant route skeleton resolves slug', async ({ page }) => {
+test('unauthenticated tenant route redirects to the slug login', async ({ page }) => {
   await page.goto('/r/demo-cafe')
-  await expect(page.getByTestId('tenant-slug')).toHaveText('demo-cafe')
+  await expect(page).toHaveURL(/\/r\/demo-cafe\/login$/)
 })

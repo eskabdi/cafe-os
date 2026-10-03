@@ -1,5 +1,13 @@
 import { lazy, Suspense } from 'react'
-import { createBrowserRouter, Outlet } from 'react-router-dom'
+import { createBrowserRouter, Outlet, useParams } from 'react-router-dom'
+import {
+  AuthProvider,
+  PlatformLoginPage,
+  RequireAuth,
+  RequirePlatformAdmin,
+  TenantAdminLoginPage,
+  TenantLoginPage,
+} from '@/features/auth'
 import { HomePage } from './HomePage'
 import { NotFoundPage } from './NotFoundPage'
 
@@ -16,22 +24,50 @@ function Loading() {
 
 function Root() {
   return (
-    <Suspense fallback={<Loading />}>
-      <Outlet />
-    </Suspense>
+    <AuthProvider>
+      <Suspense fallback={<Loading />}>
+        <Outlet />
+      </Suspense>
+    </AuthProvider>
+  )
+}
+
+// Guards are UX only; RLS and RPC checks are the actual authorization (security-controls.md).
+function TenantGuard() {
+  const { slug = '' } = useParams<{ slug: string }>()
+  return <RequireAuth loginPath={`/r/${slug}/login`} />
+}
+
+function PlatformGuard() {
+  return (
+    <RequireAuth loginPath="/platform/login">
+      <RequirePlatformAdmin />
+    </RequireAuth>
   )
 }
 
 // `/r/:slug/*` is only a pre-auth tenant resolver. Tenant identity always comes
 // from the authenticated session, never from the slug (CLAUDE.md, multi-tenancy).
-// Route guards (auth, RequireRole) arrive in Phase 1.
 export const router = createBrowserRouter([
   {
     element: <Root />,
     children: [
       { index: true, element: <HomePage /> },
-      { path: 'r/:slug/*', element: <TenantRoutes /> },
-      { path: 'platform/*', element: <PlatformRoutes /> },
+      {
+        path: 'r/:slug',
+        children: [
+          { path: 'login', element: <TenantLoginPage /> },
+          { path: 'admin-login', element: <TenantAdminLoginPage /> },
+          { element: <TenantGuard />, children: [{ path: '*', element: <TenantRoutes /> }] },
+        ],
+      },
+      {
+        path: 'platform',
+        children: [
+          { path: 'login', element: <PlatformLoginPage /> },
+          { element: <PlatformGuard />, children: [{ path: '*', element: <PlatformRoutes /> }] },
+        ],
+      },
       { path: '*', element: <NotFoundPage /> },
     ],
   },
