@@ -5,6 +5,8 @@
 # Usage: scripts/db-test.sh [--keep] [--no-tests] [--no-race] [--upto <migration-file-prefix>] [test-file ...]
 #   --upto 20261003001000   apply migrations only up to (and including) that one: lets a new test be run against the
 #                           PREVIOUS schema to prove it fails before the fix (the seed is skipped when it needs a later one)
+#   --race-only             migrations (+ --upto) then ONLY scripts/db/race-tests.sh: no seed, no pgTAP (proves the race
+#                           tests fail against an older schema)
 #   --no-race               skip scripts/db/race-tests.sh (real concurrent sessions; runs after both pgTAP passes)
 # Env:   PG_BIN (default: PostgreSQL 15 if installed, matching supabase/config.toml major_version = 15; else
 #        pg_config --bindir), DB_TEST_PORT (default 54329)
@@ -30,12 +32,13 @@ if [ -z "${PG_BIN:-}" ]; then
 fi
 PORT="${DB_TEST_PORT:-54329}"
 TESTS_DIR="$ROOT/supabase/tests"
-KEEP=0; RUN_TESTS=1; RUN_RACE=1; UPTO=""; FILES=()
+KEEP=0; RACE_ONLY=0; RUN_TESTS=1; RUN_RACE=1; UPTO=""; FILES=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --keep) KEEP=1 ;;
     --no-tests) RUN_TESTS=0 ;;
     --no-race) RUN_RACE=0 ;;
+    --race-only) RACE_ONLY=1 ;;
     --upto) UPTO="${2:?--upto needs a migration prefix}"; shift ;;
     *) FILES+=("$1") ;;
   esac
@@ -90,8 +93,22 @@ done
 
 # The demo seed refuses to run unless it recognises the local Supabase stack (default JWT secret) or is explicitly
 # opted in. This throwaway cluster has neither, so opt in for the seed session only.
+if [ "$RACE_ONLY" -eq 0 ]; then
+SEED="${SEED_FILE:-$ROOT/supabase/seed.sql}"
+echo "==> seed guard: seed.sql must REFUSE without the local-stack signal or the opt-in"
+if out="$("${PSQL[@]}" -f "$SEED" 2>&1)"; then echo "seed.sql ran without the guard signal" >&2; exit 1; fi
+case "$out" in *"seed.sql refused"*) ;; *) echo "seed refused for the wrong reason: $out" >&2; exit 1 ;; esac
+if out="$(PGOPTIONS="-c app.settings.jwt_secret=some-hosted-project-secret-0123456789abcdef" "${PSQL[@]}" -f "$SEED" 2>&1)"; then
+  echo "seed.sql ran with a non-default JWT secret" >&2; exit 1; fi
 echo "==> seed (as postgres, app.allow_demo_seed=on)"
-PGOPTIONS="-c app.allow_demo_seed=on" "${PSQL[@]}" -f "$ROOT/supabase/seed.sql"
+PGOPTIONS="-c app.allow_demo_seed=on" "${PSQL[@]}" -f "$SEED"
+echo "==> seed re-run with the CLI's default JWT secret signal instead of the opt-in (idempotent)"
+PGOPTIONS="-c app.settings.jwt_secret=super-secret-jwt-token-with-at-least-32-characters-long" "${PSQL[@]}" -f "$SEED" >/dev/null
+fi
+if [ "$RACE_ONLY" -eq 1 ]; then
+  PGHOST="$SOCK" PGPORT="$PORT" PGUSER=postgres PGDATABASE=postgres bash "$ROOT/scripts/db/race-tests.sh"
+  exit $?
+fi
 
 if [ "$RUN_TESTS" -eq 1 ]; then
   echo "==> pgTAP"

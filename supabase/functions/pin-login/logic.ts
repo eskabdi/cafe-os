@@ -2,6 +2,9 @@
 // No Deno-only imports and no I/O, so Vitest can import this file directly.
 // Never log or echo a PIN or token from here.
 
+import { PIN_RE } from '../_shared/pin.ts'
+export { computePinDigest, isWeakPin, DEMO_PEPPER, PIN_MIN_LENGTH, PIN_MAX_LENGTH } from '../_shared/pin.ts'
+
 export const MAX_BODY_BYTES = 1024
 export const MIN_RESPONSE_MS = 450
 export const RESPONSE_JITTER_MS = 100
@@ -9,10 +12,9 @@ export const RESPONSE_JITTER_MS = 100
 export const STAFF_EMAIL_SUFFIX = '.staff.cafeos.invalid'
 
 // ── validation ──────────────────────────────────────────────────────────────
-// Mirrors restaurants_slug_format, profiles.username check and the 4-6 digit PIN rule.
+// Mirrors restaurants_slug_format, profiles.username check and the 6-8 digit PIN rule (see _shared/pin.ts).
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/
 const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{1,31}$/
-const PIN_RE = /^[0-9]{4,6}$/
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const ALLOWED_KEYS = ['restaurant_slug', 'username', 'pin'] as const
 

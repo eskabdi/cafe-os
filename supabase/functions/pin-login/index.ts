@@ -15,6 +15,8 @@
 // it would create a reusable credential. The magic-link token is single-use and never leaves the function.
 // The service-role key stays inside this function's environment; it is never returned or logged.
 //
+// PEPPER: PINs are never sent to the database; see _shared/pin.ts and README (PIN_PEPPER).
+//
 // Authority: tenant/user/PIN checks and lockout live in the DB (fn_verify_pin, which also registers
 // failures itself, so this function must NOT call fn_register_pin_failure again: that would double count).
 // The in-memory throttling here is defense in depth only.
@@ -26,6 +28,7 @@ import { readPinLoginEnv } from '../_shared/env.ts'
 import {
   MAX_BODY_BYTES,
   checkRateLimits,
+  computePinDigest,
   clientIp,
   createPinLoginLimiters,
   interpretVerifyResult,
@@ -110,7 +113,9 @@ async function authenticate(input: PinLoginInput): Promise<Outcome> {
   //    Non-candidates get a random id; the DB burns an equivalent bcrypt and answers 'invalid'.
   const candidate = tenant !== null && isPinCandidate(profile, tenant)
   const profileId = candidate ? (profile as { id: string }).id : crypto.randomUUID()
-  const verify = await admin.rpc('fn_verify_pin', { p_profile_id: profileId, p_pin: input.pin })
+  //    The DB only ever receives HMAC-SHA256(pin, PIN_PEPPER); the raw PIN stays in this function.
+  const digest = await computePinDigest(input.pin, env.pinPepper)
+  const verify = await admin.rpc('fn_verify_pin', { p_profile_id: profileId, p_pin_digest: digest })
   if (verify.error) return { ok: false, kind: 'server_error' }
   if (!candidate || tenant === null) return { ok: false, kind: 'invalid_credentials' }
   const outcome = interpretVerifyResult(verify.data, { profileId, restaurantId: tenant })

@@ -18,6 +18,7 @@ check() { # check "name" "expected" "actual"
 }
 q() { "${PSQL[@]}" -c "$1"; }
 
+q "insert into public.plans (name, price_etb_monthly) values ('Growth', 2490) on conflict (name) do nothing" >/dev/null
 SVC="select set_config('request.jwt.claims', '{\"role\":\"service_role\"}', false);"
 new_user() { # id email [confirmed]
   q "insert into auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data, raw_user_meta_data, confirmation_token, recovery_token, email_change_token_new, email_change)
