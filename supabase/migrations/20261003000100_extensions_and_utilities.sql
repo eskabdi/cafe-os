@@ -17,6 +17,9 @@ language plpgsql
 set search_path = ''
 as $$
 begin
+  if p_detail is null then
+    raise exception using errcode = 'P0001', message = p_code;
+  end if;
   raise exception using errcode = 'P0001', message = p_code, detail = p_detail;
 end;
 $$;
