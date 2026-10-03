@@ -108,7 +108,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Export local Supabase public config
         run: |
-          supabase status -o env | grep -E '^(API_URL|ANON_KEY)=' | sed -e 's/^API_URL=/VITE_SUPABASE_URL=/' -e 's/^ANON_KEY=/VITE_SUPABASE_ANON_KEY=/' >> "$GITHUB_ENV"
+          supabase status -o env | grep -E '^(API_URL|ANON_KEY)=' | sed -e 's/^API_URL=/VITE_SUPABASE_URL=/' -e 's/^ANON_KEY=/VITE_SUPABASE_ANON_KEY=/' -e 's/="\(.*\)"$/=\1/' >> "$GITHUB_ENV"
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
       - if: always()
