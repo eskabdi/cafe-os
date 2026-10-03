@@ -2,7 +2,7 @@
 -- RPC that takes a UUID. Denial alone is not enough: the outcome must be identical to an id that exists
 -- nowhere (no existence oracle), and B's data must be byte-for-byte unchanged afterwards.
 begin;
-select plan(72);
+select * from no_plan();
 
 -- ── fixtures: make sure tenant B owns at least one row in EVERY tenant table ──
 create temp table _f on commit drop as
@@ -203,11 +203,13 @@ select is(tests.oracle(format($q$insert into public.menu_items (restaurant_id, n
 select is(tests.oracle(format($q$insert into public.tables (restaurant_id, table_area_id, label) values (%L, {id}, 'Q9')$q$, (select a from _f)), (select b_area from _f)),
           '23503|insert or update on table "tables" violates foreign key constraint "tables_area_fk"|Key is not present in table "table_areas".',
           'table cannot reference B''s area (no oracle)');
-select is(tests.oracle(format($q$insert into public.expenses (restaurant_id, expense_category_id, payment_method_id, amount) select %L, {id}, payment_method_id, 1 from public.expenses limit 1$q$, (select a from _f)), (select b_expcat from _f)),
-          'ok:0', 'expense: nothing to copy for A (control)');
 select is(tests.oracle(format($q$insert into public.expenses (restaurant_id, expense_category_id, payment_method_id, amount) values (%L, (select id from public.expense_categories where restaurant_id = %L limit 1), {id}, 1)$q$,
                               (select a from _f), (select a from _f)), (select b_method from _f)),
           'P0001|invalid_reference|payment_method_id', 'expense cannot reference B''s payment method (no oracle)');
+select is(tests.oracle(format($q$insert into public.expenses (restaurant_id, expense_category_id, payment_method_id, amount) values (%L, %L, {id}, 1)$q$,
+                              (select b from _f), (select b_expcat from _f)), (select b_method from _f)),
+          '42501|new row violates row-level security policy for table "expenses"|',
+          'expense naming B as tenant: real and unknown payment-method ids give the same RLS denial (no BEFORE-trigger oracle)');
 select is(tests.oracle(format($q$update public.menu_items set category_id = {id} where restaurant_id = %L$q$, (select a from _f)), (select b_category from _f)),
           '23503|insert or update on table "menu_items" violates foreign key constraint "menu_items_category_fk"|Key is not present in table "categories".',
           'UPDATE re-pointing A''s rows at B''s category: same error as unknown id');
