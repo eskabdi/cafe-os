@@ -55,10 +55,10 @@ begin
   loop
     update public.orders o
        set station_ids = coalesce((select array_agg(distinct oi.station_id order by oi.station_id)
-                                   from public.order_items oi where oi.order_id = o.id), '{}'::uuid[])
+                                   from public.order_items oi where oi.restaurant_id = o.restaurant_id and oi.order_id = o.id), '{}'::uuid[])
      where o.id = v_order
        and o.station_ids is distinct from coalesce((select array_agg(distinct oi.station_id order by oi.station_id)
-                                                    from public.order_items oi where oi.order_id = o.id), '{}'::uuid[]);
+                                                    from public.order_items oi where oi.restaurant_id = o.restaurant_id and oi.order_id = o.id), '{}'::uuid[]);
   end loop;
   return null;
 end;

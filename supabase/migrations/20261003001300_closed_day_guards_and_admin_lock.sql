@@ -54,10 +54,12 @@ begin
     from jsonb_each(v_new) k
     where k.key <> 'updated_at' and v_old -> k.key is distinct from k.value;
     if v_changed is not null and v_changed <@ v_allowed then
-      if tg_table_name = 'installments' and new.payment_id is not null then
-        select p.day_session_id into v_pay_day from public.payments p where p.id = new.payment_id;
-        if v_pay_day is not null and exists (select 1 from public.day_sessions d where d.id = v_pay_day and d.status = 'closed') then
-          perform public.fn_err('day_closed');
+      if tg_table_name = 'installments' then
+        if (v_new ->> 'payment_id') is not null then
+          select p.day_session_id into v_pay_day from public.payments p where p.id = (v_new ->> 'payment_id')::uuid;
+          if v_pay_day is not null and exists (select 1 from public.day_sessions d where d.id = v_pay_day and d.status = 'closed') then
+            perform public.fn_err('day_closed');
+          end if;
         end if;
       end if;
       return new;

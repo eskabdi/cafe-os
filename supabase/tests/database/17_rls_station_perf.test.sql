@@ -30,7 +30,7 @@ select o.restaurant_id, o.id, mi.id, mi.name, mi.price, 1, mi.station_id, 'x'
 from (select o.*, row_number() over (order by o.order_no) rn from public.orders o where o.restaurant_id = (select a from _f)) o
 join lateral (select m.* from public.menu_items m
               where m.id = case when o.rn % 2 = 0 then (select k[1 + (o.rn % 10)::int] from _m) else (select b[1 + (o.rn % 5)::int] from _m) end) mi on true;
-update public.orders o set station_ids = (select array_agg(distinct oi.station_id) from public.order_items oi where oi.order_id = o.id)
+update public.orders o set station_ids = (select array_agg(distinct oi.station_id) from public.order_items oi where oi.restaurant_id = o.restaurant_id and oi.order_id = o.id)
 where o.restaurant_id = (select a from _f);
 alter table public.orders enable trigger user;
 alter table public.order_items enable trigger user;
