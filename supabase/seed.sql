@@ -1,4 +1,15 @@
--- CafeOS demo seed (Central Cafe) — DEMO / DEV ONLY. Never run against production.
+-- CafeOS demo seed (Central Cafe) — LOCAL DEMO / CI ONLY. NEVER run against a hosted (production, staging, preview)
+-- project: it plants a platform super admin with a PUBLIC password and guessable QR tokens and PINs.
+--
+-- GUARD (SM2). The first statement below aborts unless this is the local Supabase stack or an explicit opt-in:
+--   * local stack: `supabase start` runs Postgres with app.settings.jwt_secret = the CLI's well-known default secret
+--     ('super-secret-jwt-token-with-at-least-32-characters-long'). A hosted project has its own random secret, so
+--     `supabase db reset --linked` (which would run this file against production) is refused.
+--   * CI / throwaway databases that do not have that setting: opt in per session with
+--       PGOPTIONS='-c app.allow_demo_seed=on' psql ... -f supabase/seed.sql      (scripts/db-test.sh does this)
+--     Never put that setting on a hosted database (`alter database ... set app.allow_demo_seed` is forbidden).
+--   supabase/config.toml keeps [db.seed] enabled = true for the LOCAL CLI only; hosted deployments use
+--   `supabase db push` (migrations only) and never run seed.sql.
 --
 -- DEMO CREDENTIALS
 --   Admin identities (Supabase Auth email + password; PIN login is NOT available to them):
@@ -9,11 +20,29 @@
 --   Staff (non-admin roles) sign in by PIN, verified server-side (profile_secrets + fn_verify_pin).
 --     Their auth.users rows use synthetic non-routable emails <username>@<slug>.staff.cafeos.invalid and
 --     random unusable passwords; profiles.auth_method = 'pin'.
---     central-cafe: hanna=3456 (cashier) yonas=4567 / meron=5678 (waiters) abebe=6789 (kitchen)
---                   sara=7890 (pastry) kalkidan=1111 (bar)
---     second-cafe:  waiter=2222   (exists for tenant-isolation tests)
+--     PINs are 6 digits and are stored as bcrypt(HMAC-SHA256(pin, pepper)), like production: the database never holds
+--     a raw PIN. The seed cannot know a production pepper, so it uses the DEMO PEPPER below, which is only valid
+--     because the guard above passed. For the pin-login Edge Function to accept these PINs locally, run it with
+--         PIN_PEPPER=cafeos-local-demo-pepper-v1
+--     central-cafe: hanna=480516 (cashier) yonas=739204 / meron=602841 (waiters) abebe=915370 (kitchen)
+--                   sara=264813 (pastry) kalkidan=851039 (bar)
+--     second-cafe:  waiter=397258   (exists for tenant-isolation tests)
 --   demo QR tokens (hash stored, raw value only here): `demo-<table label lowercase>`, e.g. demo-t01
 -- Names below are DATA: no application code depends on them. Safe to re-run (idempotent).
+
+
+-- ── GUARD: must be the first executable statement ──
+do $guard$
+begin
+  if coalesce(current_setting('app.allow_demo_seed', true), '') <> 'on'
+     and coalesce(current_setting('app.settings.jwt_secret', true), '')
+         <> 'super-secret-jwt-token-with-at-least-32-characters-long' then
+    raise exception using errcode = 'P0001',
+      message = 'seed.sql refused: this does not look like the local Supabase stack (default JWT secret not found) '
+                'and app.allow_demo_seed is not on. The demo seed must never run against a hosted project.';
+  end if;
+end
+$guard$;
 
 -- act as the service role for the duration of the seed (fn_provision_tenant / fn_set_user_pin require it)
 select set_config('request.jwt.claims', '{"role":"service_role"}', false);
@@ -64,7 +93,8 @@ begin
   end if;
 
   perform public.fn_provision_tenant('Central Cafe', 'central-cafe', '00000000-0000-4000-8000-0000000000a1',
-                                     'selam@centralcafe.example.com', 'Selam', 'Abate', 'Girma', v_plan, 'selam');
+                                     'selam@centralcafe.example.com', 'Selam', 'Abate', 'Girma', v_plan, 'selam',
+                                     false);  -- p_require_confirmed = false: demo owners are not mail-confirmed
   select id into v_rid from public.restaurants where slug = 'central-cafe';
   update public.restaurants set phone = '+251 11 467 2299', address = 'Bole Medhanialem, Addis Ababa',
          tin = '0032918475', vat_rate = 15, opening_float = 2500, auto_consume_stock = true,
@@ -88,11 +118,12 @@ begin
   ) s(id, first, middle, last, username, role_name)
   join public.roles r on r.restaurant_id = v_rid and r.name = s.role_name;
 
-  perform public.fn_set_user_pin(s.id, s.pin)
+  -- PINs go through the production path: fn_set_user_pin(profile, HMAC-SHA256(pin, pepper) as hex). DEMO pepper only.
+  perform public.fn_set_user_pin(s.id, encode(extensions.hmac(s.pin, 'cafeos-local-demo-pepper-v1', 'sha256'), 'hex'))
   from (values
-    ('00000000-0000-4000-8000-0000000000a3'::uuid, '3456'), ('00000000-0000-4000-8000-0000000000a4'::uuid, '4567'),
-    ('00000000-0000-4000-8000-0000000000a5'::uuid, '5678'), ('00000000-0000-4000-8000-0000000000a6'::uuid, '6789'),
-    ('00000000-0000-4000-8000-0000000000a7'::uuid, '7890'), ('00000000-0000-4000-8000-0000000000a8'::uuid, '1111')
+    ('00000000-0000-4000-8000-0000000000a3'::uuid, '480516'), ('00000000-0000-4000-8000-0000000000a4'::uuid, '739204'),
+    ('00000000-0000-4000-8000-0000000000a5'::uuid, '602841'), ('00000000-0000-4000-8000-0000000000a6'::uuid, '915370'),
+    ('00000000-0000-4000-8000-0000000000a7'::uuid, '264813'), ('00000000-0000-4000-8000-0000000000a8'::uuid, '851039')
   ) s(id, pin);
 
   -- prototype seedMenu / seedIng / seedRecipes (keys are local to this seed only)
@@ -212,7 +243,7 @@ begin
     return;
   end if;
   perform public.fn_provision_tenant('Second Cafe', 'second-cafe', '00000000-0000-4000-8000-0000000000b1',
-                                     'owner@secondcafe.example.com', 'Mulu', 'Alem', 'Negash', v_plan, 'owner');
+                                     'owner@secondcafe.example.com', 'Mulu', 'Alem', 'Negash', v_plan, 'owner', false);
   select id into v_rid from public.restaurants where slug = 'second-cafe';
   update public.restaurants set status = 'active' where id = v_rid;
   update public.subscriptions set status = 'active' where restaurant_id = v_rid;
@@ -221,7 +252,8 @@ begin
   select '00000000-0000-4000-8000-0000000000b2', v_rid, 'Tigist', 'Bekele', null, 'waiter', r.id, 'pin'
   from public.roles r where r.restaurant_id = v_rid and r.name = 'Waiter';
 
-  perform public.fn_set_user_pin('00000000-0000-4000-8000-0000000000b2', '2222');
+  perform public.fn_set_user_pin('00000000-0000-4000-8000-0000000000b2',
+    encode(extensions.hmac('397258', 'cafeos-local-demo-pepper-v1', 'sha256'), 'hex'));
 
   insert into public.menu_items (restaurant_id, name, category_id, station_id, price)
   select v_rid, 'Second Cafe Special', c.id, s.id, 100
