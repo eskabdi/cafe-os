@@ -147,6 +147,9 @@ create table public.profiles (
   username       text not null check (username ~ '^[a-z0-9][a-z0-9._-]{1,31}$'),
   role_id        uuid not null,
   is_active      boolean not null default true,
+  -- tenant_admin => 'password' (Supabase Auth email+password, MFA-capable); every other role => 'pin'.
+  -- Consistency with the role is enforced by trigger trg_guard_profile_auth_method.
+  auth_method    text not null check (auth_method in ('password','pin')),
   created_at     timestamptz not null default now(),
   updated_at     timestamptz not null default now(),
   constraint profiles_tenant_username_key unique (restaurant_id, username),

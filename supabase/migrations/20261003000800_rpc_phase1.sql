@@ -104,6 +104,7 @@ create or replace function public.fn_provision_tenant(
   p_name text,
   p_slug text,
   p_owner_user_id uuid,
+  p_owner_email text,
   p_owner_first_name text,
   p_owner_middle_name text,
   p_owner_last_name text,
@@ -141,8 +142,13 @@ begin
                                'owner'));
   if v_username !~ '^[a-z0-9][a-z0-9._-]{1,31}$' then perform public.fn_err('invalid_input', 'owner_username'); end if;
 
+  -- the owner (tenant_admin) signs in with Supabase Auth email + password: a REAL email identity
   if not exists (select 1 from auth.users u where u.id = p_owner_user_id) then
     perform public.fn_err('owner_not_found');
+  end if;
+  if p_owner_email is null or p_owner_email !~* '^[^@\s]+@[^@\s]+\.[a-z]{2,}$' or p_owner_email ~* '\.invalid$'
+     or not exists (select 1 from auth.users u where u.id = p_owner_user_id and lower(u.email) = lower(btrim(p_owner_email))) then
+    perform public.fn_err('owner_email_mismatch');
   end if;
   if exists (select 1 from public.profiles p where p.id = p_owner_user_id)
      or exists (select 1 from public.platform_admins a where a.id = p_owner_user_id) then
@@ -168,10 +174,11 @@ begin
 
   v_seed := public.fn_seed_tenant_defaults(v_rid);
 
-  insert into public.profiles (id, restaurant_id, first_name, middle_name, last_name, username, role_id)
+  -- owner profile: password auth, deliberately NO profile_secrets row
+  insert into public.profiles (id, restaurant_id, first_name, middle_name, last_name, username, role_id, auth_method)
   values (p_owner_user_id, v_rid, v_first,
           nullif(btrim(p_owner_middle_name), ''), nullif(btrim(p_owner_last_name), ''),
-          v_username, (v_seed ->> 'admin_role_id')::uuid);
+          v_username, (v_seed ->> 'admin_role_id')::uuid, 'password');
 
   insert into public.day_sessions (restaurant_id, day_no, status, opening_float, opened_by)
   values (v_rid, 1, 'open', v_float, p_owner_user_id)
@@ -299,6 +306,7 @@ declare
   v_target record;
   v_role public.roles%rowtype;
   v_is_admin boolean;
+  v_to_admin boolean;
 begin
   v_rid := public.fn_tenant_status_guard(true);
   if not public.has_permission('users.manage') then
@@ -348,11 +356,25 @@ begin
     perform public.fn_err('last_tenant_admin');
   end if;
 
-  update public.profiles set role_id = p_role_id where id = p_profile_id and restaurant_id = v_rid;
+  -- auth method follows the role: promotion => password login (PIN secret destroyed),
+  -- demotion => PIN login (a NEW PIN must be set; none exists until then)
+  v_to_admin := (v_role.system_key = 'tenant_admin');
+  if v_to_admin and exists (select 1 from auth.users u where u.id = p_profile_id and (u.email is null or u.email ~* '\.invalid$')) then
+    perform public.fn_err('admin_requires_email_identity');
+  end if;
+  if v_to_admin then
+    delete from public.profile_secrets where profile_id = p_profile_id and restaurant_id = v_rid;
+  end if;
+  update public.profiles
+     set role_id = p_role_id, auth_method = case when v_to_admin then 'password' else 'pin' end
+   where id = p_profile_id and restaurant_id = v_rid;
 
   perform public.fn_write_audit('user.role_changed', jsonb_build_object(
-    'profile_id', p_profile_id, 'from_role_id', v_target.role_id, 'to_role_id', p_role_id));
-  return jsonb_build_object('profile_id', p_profile_id, 'role_id', p_role_id, 'changed', true);
+    'profile_id', p_profile_id, 'from_role_id', v_target.role_id, 'to_role_id', p_role_id,
+    'auth_method', case when v_to_admin then 'password' else 'pin' end,
+    'pin_requires_reset', not v_to_admin and v_target.current_key = 'tenant_admin'));
+  return jsonb_build_object('profile_id', p_profile_id, 'role_id', p_role_id, 'changed', true,
+    'auth_method', case when v_to_admin then 'password' else 'pin' end);
 end;
 $$;
 
@@ -370,6 +392,8 @@ begin
   if p_pin is null or p_pin !~ '^[0-9]{4,8}$' then perform public.fn_err('invalid_pin'); end if;
   select p.restaurant_id into v_rid from public.profiles p where p.id = p_profile_id;
   if not found then perform public.fn_err('not_found'); end if;
+  -- tenant_admin and platform admins authenticate with email + password, never a PIN
+  if not public.fn_pin_eligible(p_profile_id) then perform public.fn_err('pin_not_allowed'); end if;
 
   insert into public.profile_secrets (profile_id, restaurant_id, pin_hash)
   values (p_profile_id, v_rid, extensions.crypt(p_pin, extensions.gen_salt('bf', 10)))
@@ -393,6 +417,9 @@ declare
   v_was_locked boolean;
 begin
   if not public.is_service_role() then perform public.fn_err('permission_denied'); end if;
+  if not public.fn_pin_eligible(p_profile_id) then
+    return jsonb_build_object('locked', false, 'failed_attempts', 0);  -- identical to "no such profile"
+  end if;
 
   update public.profile_secrets ps
      set failed_attempts = ps.failed_attempts + 1,
@@ -436,7 +463,7 @@ begin
   join public.restaurants r on r.id = p.restaurant_id
   where ps.profile_id = p_profile_id;
 
-  if not found or p_pin is null then
+  if not found or p_pin is null or not public.fn_pin_eligible(p_profile_id) then
     perform extensions.crypt(coalesce(p_pin, ''), extensions.gen_salt('bf', 10)); -- uniform cost
     return jsonb_build_object('status', 'invalid');
   end if;
@@ -642,4 +669,18 @@ declare
 begin
   update public.idempotency_keys set result = p_result where restaurant_id = v_rid and key = p_key;
 end;
+$$;
+
+-- Lets an Auth hook / Edge Function refuse password login for PIN-only staff accounts.
+create or replace function public.fn_user_auth_method(p_user_id uuid)
+returns text
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select case
+    when exists (select 1 from public.platform_admins a where a.id = p_user_id and a.is_active) then 'password'
+    else (select p.auth_method from public.profiles p where p.id = p_user_id)
+  end
 $$;

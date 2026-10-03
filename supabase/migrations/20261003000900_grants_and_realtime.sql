@@ -101,18 +101,20 @@ grant execute on function
   public.fn_get_session_context(),
   public.fn_update_role_permissions(uuid, text[], uuid[]),
   public.fn_change_user_role(uuid, uuid),
-  public.fn_provision_tenant(text, text, uuid, text, text, text, uuid, text),
+  public.fn_provision_tenant(text, text, uuid, text, text, text, text, uuid, text),
   public.fn_suspend_tenant(uuid, text),
   public.fn_reactivate_tenant(uuid, text)
 to authenticated;
 -- service-only surface (also re-checked inside each function)
 grant execute on function
-  public.fn_provision_tenant(text, text, uuid, text, text, text, uuid, text),
+  public.fn_provision_tenant(text, text, uuid, text, text, text, text, uuid, text),
   public.fn_set_user_pin(uuid, text),
   public.fn_verify_pin(uuid, text),
   public.fn_register_pin_failure(uuid),
-  public.fn_write_audit(text, jsonb, uuid, uuid)
+  public.fn_write_audit(text, jsonb, uuid, uuid),
+  public.fn_user_auth_method(uuid)
 to service_role;
+grant execute on function public.fn_user_auth_method(uuid) to supabase_auth_admin;
 -- Internal only (no client role): fn_seed_tenant_defaults, fn_next_number, fn_write_admin_audit,
 -- fn_tenant_status_guard, fn_idempotency_*, fn_err and all trigger functions. They are reached only
 -- through SECURITY DEFINER callers owned by the migration role.

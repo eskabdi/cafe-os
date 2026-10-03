@@ -36,9 +36,9 @@ echo "==> initdb ($TMP)"
 
 PSQL=("$PG_BIN/psql" -h "$SOCK" -p "$PORT" -U postgres -d postgres -X -q -v ON_ERROR_STOP=1)
 
-echo "==> pgTAP + Supabase shim"
-"${PSQL[@]}" -c 'create extension if not exists pgtap with schema extensions' 
+echo "==> Supabase shim + pgTAP"
 "${PSQL[@]}" -f "$ROOT/supabase/tests/shim/00_supabase_shim.sql"
+"${PSQL[@]}" -c 'create extension if not exists pgtap with schema extensions'
 
 echo "==> migrations"
 for f in "$ROOT"/supabase/migrations/*.sql; do

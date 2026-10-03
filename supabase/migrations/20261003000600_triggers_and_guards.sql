@@ -157,6 +157,79 @@ $$;
 create trigger trg_guard_last_admin before update on public.profiles
   for each row execute function public.fn_guard_last_admin();
 
+
+-- ── auth method: tenant_admin => password login, staff => PIN login ─────────
+-- PIN eligibility (single source of truth; also used by the PIN RPCs).
+create or replace function public.fn_pin_eligible(p_profile_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from public.profiles p
+    join public.roles ro on ro.id = p.role_id and ro.restaurant_id = p.restaurant_id
+    where p.id = p_profile_id
+      and p.auth_method = 'pin'
+      and ro.system_key is null
+      and not exists (select 1 from public.platform_admins a where a.id = p.id)
+  )
+$$;
+
+create or replace function public.fn_guard_profile_auth_method()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_key text;
+  v_email text;
+begin
+  select ro.system_key into v_key from public.roles ro
+  where ro.id = new.role_id and ro.restaurant_id = new.restaurant_id;
+  if (v_key = 'tenant_admin') <> (new.auth_method = 'password') then
+    perform public.fn_err('auth_method_mismatch', 'tenant_admin uses password, staff uses pin');
+  end if;
+  if exists (select 1 from public.platform_admins a where a.id = new.id) then
+    perform public.fn_err('auth_method_mismatch', 'platform admins cannot hold a tenant profile');
+  end if;
+  select u.email into v_email from auth.users u where u.id = new.id;
+  if new.auth_method = 'password'
+     and (tg_op = 'INSERT' or old.auth_method is distinct from new.auth_method) then
+    if v_email is null or v_email ~* '\.invalid$' then
+      perform public.fn_err('admin_requires_email_identity');
+    end if;
+  elsif new.auth_method = 'pin' and tg_op = 'INSERT' then
+    if v_email is null or v_email !~* '^[a-z0-9._-]+@[a-z0-9-]+\.staff\.cafeos\.invalid$' then
+      perform public.fn_err('auth_method_mismatch', 'staff accounts use a synthetic non-routable email');
+    end if;
+  end if;
+  return new;
+end;
+$$;
+create trigger trg_guard_profile_auth_method before insert or update on public.profiles
+  for each row execute function public.fn_guard_profile_auth_method();
+
+-- profile_secrets rows can only exist for PIN-eligible (non-admin, auth_method='pin') profiles
+create or replace function public.fn_guard_profile_secret()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not public.fn_pin_eligible(new.profile_id) then
+    perform public.fn_err('pin_not_allowed');
+  end if;
+  return new;
+end;
+$$;
+create trigger trg_guard_profile_secret before insert or update on public.profile_secrets
+  for each row execute function public.fn_guard_profile_secret();
+
 -- ── expenses: server-filled context + closed-day freeze ─────────────────────
 create or replace function public.fn_expense_context()
 returns trigger
