@@ -13,7 +13,9 @@ async function toPinStep(user: ReturnType<typeof userEvent.setup>, username = 'A
 }
 
 describe('StaffLogin', () => {
-  beforeEach(() => pinLogin.mockReset())
+  beforeEach(() => {
+    pinLogin.mockReset()
+  })
 
   it('rejects an invalid username locally without calling the server', async () => {
     const user = userEvent.setup()
@@ -62,10 +64,9 @@ describe('StaffLogin', () => {
 
   it('maps a thrown error to the generic server message', async () => {
     const user = userEvent.setup()
-    // a bare thenable (no native promise) so the spy layer does not track a rejected promise
-    pinLogin.mockImplementation(() => ({
-      then: (_ok: unknown, fail: (e: unknown) => void) => fail(new Error('boom: secret detail')),
-    }))
+    pinLogin.mockImplementation(async () => {
+      throw new Error('boom: secret detail')
+    })
     render(<StaffLogin slug="demo-cafe" />)
     await toPinStep(user)
     await user.keyboard('1234{Enter}')
