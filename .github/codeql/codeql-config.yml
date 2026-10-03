@@ -1,0 +1,5 @@
+name: CafeOS CodeQL config
+# docs/prototype is the archived single-file HTML prototype: functional reference only, never built or shipped.
+# Its demo-only Math.random() ids are not a security context in production (server-side token generation is used).
+paths-ignore:
+  - docs/prototype
