@@ -57,7 +57,7 @@ Env: client gets only `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. `SUPABAS
 
 ## Review gate and subagents
 
-Specialised subagents live in `.claude/agents/`. **Before merging any task, dispatch in order: `code-reviewer` (via `code-review` skill), `security-auditor` (via `security-review` skill), `rls-tester` when schema/RLS/RPC changed, then `verifier` (typecheck, lint, tests, build, pgTAP, E2E).** Do not merge on red.
+Specialised subagents live in `.claude/agents/`. **Before merging any task, dispatch in order: `code-reviewer` (via `code-review` skill), `security-auditor` (via `security-review` skill), `rls-tester` and `tenant-isolation-review` when schema/RLS/RPC/auth/data access changed, then `verifier` (typecheck, lint, tests, build, pgTAP, E2E).** Do not merge on red.
 
 ## Context management
 
