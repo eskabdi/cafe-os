@@ -1,7 +1,7 @@
 -- Documented exception (user decision 2026-10-03): the 'Cashier' role uses a 6-digit PIN, all others exactly 4.
 -- The DB never sees the PIN; it checks the Edge Function's length CLAIM against the role and keeps the stored length.
 begin;
-select plan(27);
+select plan(24);
 
 create temp table _f on commit drop as
 select tests.user_id('hanna', 'central-cafe') cashier, tests.user_id('yonas', 'central-cafe') waiter,

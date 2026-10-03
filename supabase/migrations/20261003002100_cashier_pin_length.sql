@@ -176,7 +176,7 @@ begin
 
   -- auth method follows the role: promotion => password login (PIN secret destroyed),
   -- demotion => PIN login, but only once the identity has been rotated to the synthetic staff email
-  v_to_admin := (v_role.system_key = 'tenant_admin');
+  v_to_admin := coalesce(v_role.system_key = 'tenant_admin', false);   -- system_key is NULL for ordinary roles
   select u.email into v_email from auth.users u where u.id = p_profile_id;
   if v_to_admin and (v_email is null or v_email ~* '\.invalid$') then
     perform public.fn_err('admin_requires_email_identity');

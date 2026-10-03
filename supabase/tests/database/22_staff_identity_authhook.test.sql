@@ -27,7 +27,7 @@ end $$;
 
 -- ═════════ fn_prepare_staff_creation ═════════
 select tests.authenticate_as((select admin from _f));
-select is(public.fn_prepare_staff_creation(' NewBie ', (select r_waiter from _f))::text, '{"slug": "central-cafe", "username": "newbie"}', 'prepare: normalises the username and returns the tenant slug');
+select is(public.fn_prepare_staff_creation(' NewBie ', (select r_waiter from _f))::text, '{"slug": "central-cafe", "username": "newbie", "role_name": "Waiter"}', 'prepare: normalises the username, returns the tenant slug and the role NAME looked up server-side (for the PIN length rule)');
 select is(tests.run(format($q$select public.fn_prepare_staff_creation('x1', %L)$q$, (select r_admin from _f))), 'P0001|invalid_role|', 'prepare: the tenant_admin role cannot be assigned to staff');
 select is(tests.run(format($q$select public.fn_prepare_staff_creation('x1', %L)$q$, (select b_r_waiter from _f))), 'P0001|invalid_role|', 'prepare: another tenant''s role is just invalid_role');
 select is(tests.run($q$select public.fn_prepare_staff_creation('x1', gen_random_uuid())$q$), 'P0001|invalid_role|', 'prepare: unknown role: same answer');

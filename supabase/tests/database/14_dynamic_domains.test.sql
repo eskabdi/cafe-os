@@ -3,7 +3,7 @@
 -- deletes with soft deactivation, renames that keep ids, and a DB-level generalisation proof with names this
 -- codebase has never seen (Grill, Runner, Amole, ...).
 begin;
-select plan(82);
+select plan(83);
 
 -- ═════════ schema contains no knowledge of domain names ═════════
 select is((select count(*)::int from pg_type t join pg_namespace n on n.oid = t.typnamespace
@@ -20,9 +20,12 @@ select is((select string_agg(c.conrelid::regclass || '.' || c.conname, ',') from
              and pg_get_constraintdef(c.oid) ~* '''[^'']*\y(kitchen|bar|pastry|grill|juice|barista|cash|telebirr|cbe birr|card|amole|breakfast|lunch|beverages|desserts|main hall|terrace|vip|purchases|utilities|rent|salaries|waiter|cashier|runner|administrator)\y[^'']*'''),
           null, 'no CHECK constraint spells out a station / category / method / area / expense category / role name');
 select is((select string_agg(p.proname, ',' order by p.proname) from pg_proc p
-           where p.pronamespace = 'public'::regnamespace and p.proname <> 'fn_seed_tenant_defaults'
+           where p.pronamespace = 'public'::regnamespace and p.proname not in ('fn_seed_tenant_defaults', 'fn_pin_length_for_role_name')
              and p.prosrc ~* '''(kitchen|bar|pastry|grill|juice|barista|cash|telebirr|cbe birr|card|amole|breakfast|lunch|beverages|desserts|main hall|terrace|vip|purchases|utilities|rent|salaries|waiter|cashier|runner|administrator)'''),
-          null, 'no function branches on a domain name (only the data seeder mentions them)');
+          null, 'no function branches on a domain name (only the data seeder, and the ONE documented user-decided exception fn_pin_length_for_role_name = Cashier PIN length, mention them)');
+select is((select string_agg(p.proname, ',' order by p.proname) from pg_proc p
+           where p.pronamespace = 'public'::regnamespace and p.prosrc ~* '''cashier'''),
+          'fn_pin_length_for_role_name,fn_seed_tenant_defaults', 'the Cashier literal appears in exactly two functions: the seeder and the exception');
 select is((select string_agg(tablename || '.' || policyname, ',') from pg_policies
            where schemaname = 'public' and coalesce(qual, '') || coalesce(with_check, '') ~* '''(kitchen|bar|pastry|grill|cash|waiter|cashier|administrator)'''),
           null, 'no RLS policy names a domain value');
