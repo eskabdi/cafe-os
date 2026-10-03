@@ -19,6 +19,10 @@ export function parseAllowedOrigins(raw: string | undefined | null): string[] {
       // a bare "*" or any other wildcard shape is still ignored
       const wild = /^(https?):\/\/\*\.([a-z0-9]+(?:[a-z0-9.-]*[a-z0-9])?)(:\d{1,5})?$/i.exec(entry)
       if (wild) {
+        // the base must be a real domain (>= 2 labels, so "https://*.com" is refused); plain http only for localhost dev
+        const base = (wild[2] as string).toLowerCase()
+        if (base.split('.').length < 2 && base !== 'localhost') continue
+        if ((wild[1] as string).toLowerCase() === 'http' && base !== 'localhost' && !base.endsWith('.localhost')) continue
         out.push(`${(wild[1] as string).toLowerCase()}://*.${(wild[2] as string).toLowerCase()}${wild[3] ?? ''}`)
         continue
       }

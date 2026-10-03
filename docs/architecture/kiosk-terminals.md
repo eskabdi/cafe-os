@@ -34,3 +34,13 @@ Tiles never carry username, email, secrets or permissions. A tenant that gives a
 | Tile for the wrong person (shoulder surfing) | inherent to shared terminals; PIN entry is display-only (dots), lockout limits guessing |
 
 Rotation: registering a new kiosk and revoking the old one is the rotation procedure (there is no "reveal token" operation by design).
+
+## Review-gate hardening (post-review)
+
+- `fn_register_kiosk` requires step-up (`fn_require_step_up()`, aal2 when the admin has MFA or the tenant requires it); revoking never does.
+- `fn_revoke_kiosk` is allowed for a `past_due` tenant (it only reduces access); suspended/cancelled tenants are still blocked. A second revoke is a no-op and writes no second audit event.
+- `kiosk_devices.revoked_at` is one-way (`trg_revocation_final`): a revoked kiosk is re-registered, never revived.
+- Registration is serialized per tenant (advisory lock) so the 25-active-kiosk cap holds under concurrency.
+- The migration refuses to run if a tenant already holds the newly reserved slug `status` (rename it first).
+- CORS wildcard origins need a base of at least two labels (`https://*.cafeos.et`, never `https://*.com`); plain `http` wildcards are accepted only for `localhost`.
+- Known residuals: Edge Function rate limits are per isolate and keyed on forwarded-IP headers (enforce at the platform edge); the roster's `pin_length = 4` filter means a future 6-digit role would not appear as a tile.

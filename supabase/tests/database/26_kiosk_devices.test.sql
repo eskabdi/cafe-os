@@ -1,7 +1,7 @@
 -- Registered kiosk devices: registration / revocation RPCs, token handling, service-only roster + tile eligibility,
 -- reserved subdomains.
 begin;
-select plan(51);
+select plan(57);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -133,14 +133,29 @@ select tests.clear_auth();
 update public.restaurants set status = 'active' where id = (select a from _f);
 select tests.authenticate_as((select admin from _f));
 select is(tests.run($q$select public.fn_register_kiosk('x')$q$) , 'ok:1', 'active again: registration works');
+create temp table _r3 on commit drop as select public.fn_register_kiosk('Throwaway') r;
+grant all on _r3 to public;
 select tests.clear_auth();
 update public.restaurants set status = 'past_due' where id = (select a from _f);
 select tests.authenticate_as((select admin from _f));
 select is(tests.run($q$select public.fn_register_kiosk('x')$q$), 'P0001|tenant_read_only|', 'past_due: registration is write-blocked');
-select is(tests.run(format($q$select public.fn_revoke_kiosk(%L)$q$, (select (r ->> 'id')::uuid from _r2))), 'P0001|tenant_read_only|', 'and revocation');
+select is(tests.run(format($q$select public.fn_revoke_kiosk(%L)$q$, (select (r ->> 'id')::uuid from _r3))), 'ok:1', 'but revocation still works (it only reduces access)');
+select is(tests.run(format($q$select public.fn_revoke_kiosk(%L)$q$, (select (r ->> 'id')::uuid from _r3))), 'ok:1', 'revoking again is a harmless no-op');
 select tests.clear_auth();
+select is((select count(*)::int from public.audit_logs where event = 'kiosk.revoked' and new_data ->> 'kiosk_id' = (select r ->> 'id' from _r3)), 1, 'and it is audited exactly once');
+select throws_ok(format($q$update public.kiosk_devices set revoked_at = null where id = %L$q$, (select (r ->> 'id')::uuid from _r3)), 'P0001', 'kiosk_revocation_final', 'revoked_at cannot be cleared');
+select throws_ok(format($q$update public.kiosk_devices set revoked_at = now() + interval '1 day' where id = %L$q$, (select (r ->> 'id')::uuid from _r3)), 'P0001', 'kiosk_revocation_final', 'nor moved');
 update public.restaurants set status = 'suspended', suspended_at = now(), suspension_reason = 'test', status_before_suspension = 'active' where id = (select a from _f);
 update public.restaurants set status = 'active', suspended_at = null, suspension_reason = null, status_before_suspension = null where id = (select a from _f);
+
+-- step-up: registering needs aal2 when the admin has MFA / the tenant requires it; revoking never does
+update public.restaurants set status = 'active' where id = (select a from _f);
+select tests.authenticate_as((select admin from _f));
+select set_config('app.tenant_admin_mfa_required', 'on', true);
+select is(tests.run($q$select public.fn_register_kiosk('NoStepUp')$q$), 'P0001|mfa_required|', 'registration without aal2 is refused when MFA is required');
+select is(tests.run(format($q$select public.fn_revoke_kiosk(%L)$q$, (select (r ->> 'id')::uuid from _r3))), 'ok:1', 'revocation does not need step-up');
+select set_config('app.tenant_admin_mfa_required', 'off', true);
+select tests.clear_auth();
 
 -- ═════════ tile eligibility ═════════
 select tests.authenticate_as_service_role();

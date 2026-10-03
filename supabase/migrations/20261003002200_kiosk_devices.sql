@@ -11,13 +11,20 @@
 --                                                      are indistinguishable). touch = refresh last_seen_at (throttled to 1/min)
 --    fn_kiosk_roster(token_hash, slug)              -> NULL (invalid kiosk) | jsonb array of tiles
 --                                                      ONLY active staff, auth_method 'pin', non-admin, PIN-eligible, with a 4-DIGIT
---                                                      PIN on record (profile_secrets.pin_length = 4: the 6-digit Cashier and admins
+--                                                      PIN on record (NOTE: any future 6-digit role would vanish from tiles; profile_secrets.pin_length = 4: the 6-digit Cashier and admins
 --                                                      never appear; no role-name literal), as {id, name (first+middle), role, color, icon}
 --    fn_kiosk_tile_eligible(token_hash, slug, id)   -> boolean: kiosk valid AND the profile is exactly such a tile of that tenant
 --  Reserved subdomains: 'status' joins the reserved slug list (CHECK + fn_slug_is_reserved); the TypeScript twin is
 --  supabase/functions/_shared/host.ts (RESERVED_SUBDOMAINS), kept equal by tests on both sides.
 
 -- ── reserved slugs ──────────────────────────────────────────────────────────
+-- refuse (rather than half-apply) when a tenant already holds a newly reserved slug: it would lose its subdomain, so a human renames it first
+do $$
+begin
+  if exists (select 1 from public.restaurants where slug = 'status') then
+    raise exception 'kiosk_devices migration: restaurant slug "status" is now reserved; rename that tenant before deploying';
+  end if;
+end $$;
 alter table public.restaurants drop constraint restaurants_slug_format;
 alter table public.restaurants add constraint restaurants_slug_format check (
   slug ~ '^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$'
@@ -57,6 +64,19 @@ alter table public.kiosk_devices enable row level security;
 alter table public.kiosk_devices force row level security;
 create trigger trg_set_updated_at before update on public.kiosk_devices for each row execute function public.fn_set_updated_at();
 create trigger trg_lock_restaurant_id before update on public.kiosk_devices for each row execute function public.fn_lock_restaurant_id();
+-- revocation is one-way history: revoked_at can never go back to NULL or move (the raw token is gone, so a revoked kiosk is re-registered)
+create or replace function public.fn_kiosk_revocation_is_final()
+returns trigger
+language plpgsql set search_path = ''
+as $$
+begin
+  if old.revoked_at is not null and new.revoked_at is distinct from old.revoked_at then
+    raise exception 'kiosk_revocation_final' using errcode = 'P0001';
+  end if;
+  return new;
+end;
+$$;
+create trigger trg_revocation_final before update on public.kiosk_devices for each row execute function public.fn_kiosk_revocation_is_final();
 -- last_seen_at refreshes are deliberately NOT audited (fn_audit_row strips token_hash from every row it records)
 create trigger trg_audit after insert or delete or update of name, revoked_at on public.kiosk_devices
   for each row execute function public.fn_audit_row('');
@@ -82,6 +102,10 @@ declare
 begin
   if not public.has_permission('kiosks.manage') then perform public.fn_err('permission_denied'); end if;
   if char_length(v_name) not between 1 and 60 then perform public.fn_err('invalid_input', 'name'); end if;
+  -- minting a credential that exposes the staff roster needs the same step-up as role/permission changes
+  perform public.fn_require_step_up();
+  -- serialize per tenant so concurrent registrations cannot exceed the cap
+  perform pg_advisory_xact_lock(hashtextextended('kiosk_register:' || v_rid::text, 0));
   if (select count(*) from public.kiosk_devices k where k.restaurant_id = v_rid and k.revoked_at is null) >= 25 then
     perform public.fn_err('kiosk_limit_reached');
   end if;
@@ -102,14 +126,17 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_rid uuid := public.fn_tenant_status_guard(true);
+  -- write=false on purpose: revoking only REDUCES access, so a past_due (read-only) tenant must still be able to cut off a lost terminal
+  v_rid uuid := public.fn_tenant_status_guard(false);
 begin
   if not public.has_permission('kiosks.manage') then perform public.fn_err('permission_denied'); end if;
   if p_kiosk_id is null then perform public.fn_err('invalid_input'); end if;
   perform 1 from public.kiosk_devices k where k.id = p_kiosk_id and k.restaurant_id = v_rid for update;
   if not found then perform public.fn_err('not_found'); end if;   -- same answer for foreign and unknown ids
   update public.kiosk_devices set revoked_at = now() where id = p_kiosk_id and restaurant_id = v_rid and revoked_at is null;
-  perform public.fn_write_audit('kiosk.revoked', jsonb_build_object('kiosk_id', p_kiosk_id));
+  if found then   -- an already-revoked kiosk is a no-op: no second "revoked" audit event
+    perform public.fn_write_audit('kiosk.revoked', jsonb_build_object('kiosk_id', p_kiosk_id));
+  end if;
   return jsonb_build_object('id', p_kiosk_id, 'revoked', true);
 end;
 $$;

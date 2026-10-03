@@ -147,4 +147,8 @@ describe('CORS tenant-subdomain wildcard', () => {
     expect(resolveAllowedOrigin('http://acme.localhost:5173', dev)).toBe('http://acme.localhost:5173')
     expect(resolveAllowedOrigin('http://acme.localhost:3000', dev)).toBeNull()
   })
+  it('refuses a wildcard whose base is a bare TLD, and plain http outside localhost', () => {
+    expect(parseAllowedOrigins('https://*.com,https://*.localhost')).toEqual(['https://*.localhost'])
+    expect(parseAllowedOrigins('http://*.cafeos.et')).toEqual([])
+  })
 })
