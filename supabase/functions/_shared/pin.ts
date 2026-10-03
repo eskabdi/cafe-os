@@ -10,7 +10,7 @@ export const PIN_MAX_LENGTH = 8
 export const PIN_RE = /^[0-9]{6,8}$/
 export const MIN_PEPPER_LENGTH = 32
 /** The pepper seed.sql uses for the demo PINs. Valid only where the seed guard passed (local stack / CI). */
-export const DEMO_PEPPER = 'cafeos-local-demo-pepper-v1'
+export const DEMO_PEPPER = 'cafeos-local-demo-pepper-do-not-use-v1'
 
 const COMMON_WEAK = new Set(['123321', '112233', '159357', '147258', '258369', '123123', '321123', '010203', '102030'])
 

@@ -23,7 +23,7 @@
 --     PINs are 6 digits and are stored as bcrypt(HMAC-SHA256(pin, pepper)), like production: the database never holds
 --     a raw PIN. The seed cannot know a production pepper, so it uses the DEMO PEPPER below, which is only valid
 --     because the guard above passed. For the pin-login Edge Function to accept these PINs locally, run it with
---         PIN_PEPPER=cafeos-local-demo-pepper-v1
+--         PIN_PEPPER=cafeos-local-demo-pepper-do-not-use-v1
 --     central-cafe: hanna=480516 (cashier) yonas=739204 / meron=602841 (waiters) abebe=915370 (kitchen)
 --                   sara=264813 (pastry) kalkidan=851039 (bar)
 --     second-cafe:  waiter=397258   (exists for tenant-isolation tests)
@@ -119,7 +119,7 @@ begin
   join public.roles r on r.restaurant_id = v_rid and r.name = s.role_name;
 
   -- PINs go through the production path: fn_set_user_pin(profile, HMAC-SHA256(pin, pepper) as hex). DEMO pepper only.
-  perform public.fn_set_user_pin(s.id, encode(extensions.hmac(s.pin, 'cafeos-local-demo-pepper-v1', 'sha256'), 'hex'))
+  perform public.fn_set_user_pin(s.id, encode(extensions.hmac(s.pin, 'cafeos-local-demo-pepper-do-not-use-v1', 'sha256'), 'hex'))
   from (values
     ('00000000-0000-4000-8000-0000000000a3'::uuid, '480516'), ('00000000-0000-4000-8000-0000000000a4'::uuid, '739204'),
     ('00000000-0000-4000-8000-0000000000a5'::uuid, '602841'), ('00000000-0000-4000-8000-0000000000a6'::uuid, '915370'),
@@ -253,7 +253,7 @@ begin
   from public.roles r where r.restaurant_id = v_rid and r.name = 'Waiter';
 
   perform public.fn_set_user_pin('00000000-0000-4000-8000-0000000000b2',
-    encode(extensions.hmac('397258', 'cafeos-local-demo-pepper-v1', 'sha256'), 'hex'));
+    encode(extensions.hmac('397258', 'cafeos-local-demo-pepper-do-not-use-v1', 'sha256'), 'hex'));
 
   insert into public.menu_items (restaurant_id, name, category_id, station_id, price)
   select v_rid, 'Second Cafe Special', c.id, s.id, 100

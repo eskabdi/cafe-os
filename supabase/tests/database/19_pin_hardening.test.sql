@@ -11,7 +11,7 @@ select tests.user_id('hanna', 'central-cafe') hanna, tests.user_id('yonas', 'cen
 grant all on _f to public;
 
 -- ── pepper contract ──
-select is(tests.pin_digest('480516'), 'd4de579ed5e91dc8a519f2c9bd1fdb7df062d1172e6c4ae1828f8408abe0fee0',
+select is(tests.pin_digest('480516'), '4f633837f6f2abccc01eab0a980ee22939c23ae3759d067cbd0641a9eb82d0cb',
           'SQL HMAC-SHA256(pin, demo pepper) equals the Node/Web-Crypto vector used by tests/unit/pin-login-logic.test.ts');
 select tests.authenticate_as_service_role();
 select is((select public.fn_verify_pin((select hanna from _f), tests.pin_digest('480516')) ->> 'status'), 'ok', 'the seeded demo PIN verifies through the peppered digest');

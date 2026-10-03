@@ -31,10 +31,10 @@ describe('StaffLogin', () => {
     const onSignedIn = vi.fn()
     render(<StaffLogin slug="demo-cafe" onSignedIn={onSignedIn} />)
     await toPinStep(user)
-    await user.keyboard('1234')
+    await user.keyboard('482916')
     await user.click(screen.getByRole('button', { name: 'Sign in' }))
     await waitFor(() => expect(onSignedIn).toHaveBeenCalled())
-    expect(pinLogin).toHaveBeenCalledWith({ restaurant_slug: 'demo-cafe', username: 'abebe', pin: '1234' })
+    expect(pinLogin).toHaveBeenCalledWith({ restaurant_slug: 'demo-cafe', username: 'abebe', pin: '482916' })
   })
 
   it.each([
@@ -49,9 +49,9 @@ describe('StaffLogin', () => {
     const onSignedIn = vi.fn()
     render(<StaffLogin slug="demo-cafe" onSignedIn={onSignedIn} />)
     await toPinStep(user)
-    await user.keyboard('1234{Enter}')
+    await user.keyboard('482916{Enter}')
     expect(await screen.findByRole('alert')).toHaveTextContent(PIN_LOGIN_MESSAGES[reason])
-    expect(screen.getByRole('status')).toHaveTextContent('0 of 6')
+    expect(screen.getByRole('status')).toHaveTextContent('0 of 8')
     expect(onSignedIn).not.toHaveBeenCalled()
   })
 
@@ -69,18 +69,18 @@ describe('StaffLogin', () => {
     })
     render(<StaffLogin slug="demo-cafe" />)
     await toPinStep(user)
-    await user.keyboard('1234{Enter}')
+    await user.keyboard('482916{Enter}')
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(PIN_LOGIN_MESSAGES.server_error)
     expect(alert.textContent).not.toContain('secret')
   })
 
-  it('keeps the Sign in button disabled until 4 digits are entered', async () => {
+  it('keeps the Sign in button disabled until 6 digits are entered', async () => {
     const user = userEvent.setup()
     render(<StaffLogin slug="demo-cafe" />)
     await toPinStep(user)
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeDisabled()
-    await user.keyboard('1234')
+    await user.keyboard('482916')
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeEnabled()
   })
 })

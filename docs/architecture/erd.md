@@ -11,7 +11,7 @@ erDiagram
     restaurants ||--|| subscriptions : "has one"
     plans ||--o{ subscriptions : "priced by"
     restaurants ||--o{ platform_invoices : billed
-    subscriptions ||--o{ platform_invoices : generates
+    subscriptions ||--o{ platform_invoices : "generates (composite FK restaurant_id+subscription_id)"
     platform_admins ||--o{ admin_audit_log : performs
     restaurants ||--o{ admin_audit_log : "subject of"
     auth_users ||--o| platform_admins : "is (platform_super_admin | platform_support)"
@@ -27,7 +27,7 @@ erDiagram
     restaurants ||--o{ audit_logs : "append-only"
     restaurants ||--o{ idempotency_keys : dedupes
     restaurants ||--o{ tenant_counters : numbers
-    profiles { uuid id PK "= auth.users.id" text auth_method "password (tenant_admin) | pin (staff)" text first_name text middle_name text last_name text short_name "generated first+middle" }
+    profiles { uuid id PK "= auth.users.id" text auth_method "password (tenant_admin) | pin (staff)" text first_name text middle_name text last_name text short_name "generated first+middle" bool identity_rotation_pending "demoted admin awaiting synthetic identity" }
     roles { uuid id PK text system_key "null | tenant_admin" boolean is_system }
     restaurants { uuid id PK text slug UK text status "trialing|active|past_due|suspended|cancelled" jsonb branding "CHECK hex colours + storage path" }
 ```
@@ -79,3 +79,9 @@ sort_order, is_active, created_at, updated_at` and `unique (restaurant_id, norma
 No PostgreSQL enums exist in `public`; workflow states are `text` + CHECK.
 
 Note: `auth_users` is Supabase's `auth.users`.
+
+Additions in migrations 0011-0018: `orders.station_ids uuid[]` (trigger-maintained from order_items, used by RLS), `expenses.category_name_snapshot`,
+`profiles.identity_rotation_pending`, `subscriptions` unique `(restaurant_id, id)` (target of the composite invoice FK), `idempotency_keys` unique
+`(restaurant_id, key, command)`, `expenses.expense_date` derived (no default), indexes on `stock_movements.day_session_id`, `orders.table_session_id`,
+`orders.customer_session_id`, `table_sessions.day_session_id`, `installments.payment_id`, `vouchers.down_payment_method_id`. FK-index rule and its reviewed
+exceptions (tenant-root and actor FKs): `21_validation_invariants`.

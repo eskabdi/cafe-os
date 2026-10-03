@@ -7,14 +7,14 @@ Supabase Auth email + password (TOTP MFA capable). The PIN path answers admins e
 `POST /functions/v1/pin-login`, JSON body (max 1024 bytes, exactly these keys):
 
 ```json
-{ "restaurant_slug": "demo-cafe", "username": "abebe", "pin": "1234" }
+{ "restaurant_slug": "demo-cafe", "username": "abebe", "pin": "482916" }
 ```
 
 | result | status | body |
 |---|---|---|
 | success | 200 | `{ "access_token", "refresh_token", "expires_in" }` (nothing else) |
 | unknown tenant / unknown user / inactive / locked / admin / wrong PIN | 401 | `{ "error": "invalid_credentials" }` (identical) |
-| bad shape (slug, username, 4-6 digit PIN) | 400 / 413 | `{ "error": "invalid_request" }` |
+| bad shape (slug, username, 6-8 digit PIN) | 400 / 413 | `{ "error": "invalid_request" }` |
 | throttled | 429 | `{ "error": "try_later" }` + `Retry-After` |
 | infrastructure failure | 503 | `{ "error": "server_error" }` |
 
@@ -31,7 +31,7 @@ The client then calls `supabase.auth.setSession({ access_token, refresh_token })
 Set with `supabase secrets set ALLOWED_ORIGINS=...`.
 
 ## Security notes
-- Verification and lockout (5 failures, 15 min) are in `fn_verify_pin`, which registers failures itself. Do not also call
+- Verification and lockout (escalating: 5th failure 15 min, 10th 1 h, 15th 24 h; counter resets only on success or admin reset) are in `fn_verify_pin`, which registers failures itself. Do not also call
   `fn_register_pin_failure` from here (double count).
 - Same DB work (and a response-time floor of about 450 ms plus jitter) for every outcome.
 - In-memory token buckets (per IP, per tenant+username) are per isolate and best effort; the DB lockout is authoritative.
@@ -46,3 +46,6 @@ pnpm dlx supabase functions serve pin-login --env-file supabase/functions/.env.l
 ```
 Status: written without a Deno runtime available; **not executed against a real Supabase stack**. Pure logic is covered by
 `tests/unit/pin-login-logic.test.ts`.
+
+## Pepper
+Also needs `PIN_PEPPER` (see ../README.md): the function sends the database only `HMAC-SHA256(pin, PIN_PEPPER)`.

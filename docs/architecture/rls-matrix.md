@@ -1,7 +1,7 @@
 # RLS matrix (migrations 0007 + 0010; 80 policies; RLS enabled AND forced on every public table)
 
 Helpers (SECURITY DEFINER, empty search_path, identity from `profiles` via `auth.uid()`, never from JWT claims):
-`current_restaurant_id()`, `current_user_id()`, `current_role_id()`, `has_permission(key)`, `has_station_access(station_id)`,
+`current_restaurant_id()`, `current_user_id()`, `current_role_id()`, `has_permission(key)`, `has_station_access(station_id)` (RPC use), `current_station_ids()` (policies; one InitPlan per statement),
 `is_platform_admin()`, `is_platform_super_admin()`, `is_tenant_admin()`, `current_tenant_writable()`.
 Suspended/cancelled tenants resolve to NULL (no access); `past_due` is read-only (writes need `current_tenant_writable()`).
 "T" = same tenant. "W" = tenant writable (trialing/active). Column grants further narrow UPDATE/INSERT (noted).
@@ -12,7 +12,7 @@ Suspended/cancelled tenants resolve to NULL (no access); `past_due` is read-only
 | restaurants | own row; platform admins all | none (fn_provision_tenant) | `settings.manage` + W, columns: name, phone, address, tin, vat_rate, opening_float, auto_consume_stock, timezone, branding; platform super admin | none |
 | subscriptions | own; platform admins | platform super admin | platform super admin | platform super admin |
 | platform_admins | self; platform admins | platform super admin | platform super admin | none (deactivate) |
-| platform_invoices | own with `settings.manage`; platform admins | super admin | super admin | super admin |
+| platform_invoices | own with `settings.manage`; platform admins (aal2) | super admin | super admin | super admin (all platform writes audited in `admin_audit_log`) |
 | admin_audit_log | platform admins | none (definer fns) | trigger-blocked | trigger-blocked |
 | audit_logs | T + `audit.view` | none (definer fns) | trigger-blocked for all roles | trigger-blocked for all roles |
 | permissions | any active member | none | none | none |
@@ -27,9 +27,9 @@ Suspended/cancelled tenants resolve to NULL (no access); `past_due` is read-only
 | tables | T + (`tables.view`/`tables.manage`/`orders.create`) | T + `tables.manage` + W | same | same |
 | table_sessions, customer_sessions | T + `tables.view`/`orders.view_all` (session token hash column not granted) | none (RPC) | none | none |
 | qr_credentials | T + `qr.manage`/`tables.manage` (token_hash column not granted) | none (fn_manage_qr_credential later) | none | none |
-| day_sessions | T + (`reports.view`/`day_close.execute`/`day.open`, or open day for POS/cashier/dashboard) | none (RPC) | none; closed rows trigger-frozen | none; trigger-blocked |
-| orders | T + `orders.view` + (`orders.view_all` or own or station item) | none (fn_submit_order later) | none | none |
-| order_items | T + `orders.view` + (`orders.view_all` or station access or own order) | none | none | none |
+| day_sessions | T + (`reports.view`/`day_close.execute`/`day.open`); operational staff use `fn_get_open_day()` | none (RPC) | none; closed rows trigger-frozen | none; trigger-blocked |
+| orders | T + `orders.view` + (`orders.view_all` or own or `station_ids && current_station_ids()`) | none (fn_submit_order later) | none | none |
+| order_items | T + `orders.view` + (`orders.view_all` or `station_id = any(current_station_ids())` or own order) | none | none | none |
 | payments | T + `payments.view` | none (fn_confirm_payment later) | trigger-blocked for all roles | trigger-blocked for all roles |
 | vouchers, installments | T + `vouchers.view` | none | none | none |
 | expenses | T + `expenses.view`/`expenses.manage` | T + `expenses.manage` + W (actor, day, method snapshot set by trigger; **requires an open business day**, else `day_closed`; a foreign `restaurant_id` is refused with the RLS 42501 before any lookup) | same; frozen once its day is closed | same; frozen once its day is closed |
@@ -51,9 +51,16 @@ profile_secrets, tenant_counters, idempotency_keys: 0 (deny all).
 - `fn_expense_context` refuses a foreign `restaurant_id` first and requires an open day.
 
 ## Hygiene invariants asserted from the catalogs (`13_security_hygiene`)
-Every function in `public` pins `search_path`; EXECUTE for PUBLIC = none, anon = `fn_err`, `fn_resolve_tenant_slug`, authenticated = the reviewed list
+Every function in `public` pins `search_path`; EXECUTE for PUBLIC = none, anon = `fn_resolve_tenant_slug`, authenticated = the reviewed list
 (adding a client-callable function fails the test until the list is updated consciously); no view, materialized view or foreign table without
 `security_invoker` (none exist); deny-all tables (`profile_secrets`, `tenant_counters`, `idempotency_keys`) carry no client privilege; no client
 privilege on any `*hash*/*secret*/*token*/*password*` column; no `USING (true)` / FOR ALL policy; the total policy count (80) is pinned to this document.
 **Every new migration that adds a function must `revoke all on function ... from public, anon, authenticated` explicitly** (Postgres grants PUBLIC
-execute by default and a schema-level default privilege cannot undo it).
+execute by default and a role-global default privilege now prevents it for FUTURE functions, still revoke explicitly).
+
+## Migrations 0011-0018
+- Policies unchanged in number (80). `subscriptions_select` now needs `settings.manage`; `day_sessions_select` dropped the open-day clause; `orders/order_items/ingredients/stock_movements`
+  station predicates use `current_station_ids()`. `order_has_station_access` was dropped.
+- Column grants: `restaurants` SELECT excludes `tin`, `opening_float` (use `fn_get_restaurant_settings()`); `platform_admins` UPDATE = `full_name, role, is_active`, INSERT = `id, full_name, role`.
+- Platform helpers require `aal2` (see auth-flows.md). service_role: no TRUNCATE/REFERENCES/TRIGGER anywhere, no writes on the audit tables.
+- `seed.sql` is local-only (guarded); see `supabase/seed.sql` header.

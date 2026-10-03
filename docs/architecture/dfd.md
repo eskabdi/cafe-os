@@ -18,7 +18,7 @@ flowchart LR
     admin -->|email + password (+MFA)| api
     pa -->|email + password (+MFA)| api
     guest -->|QR token via RPC| api
-    staff -->|profile + PIN| edge
+    staff -->|profile + PIN| edge  %% edge hashes PIN with PIN_PEPPER; DB only gets the digest
     api -->|role: authenticated / anon| db
     edge -->|role: service_role, never in browser| db
 ```
@@ -38,7 +38,7 @@ flowchart TD
     end
     subgraph DB["PostgreSQL"]
         R["fn_resolve_tenant_slug (anon): id, name, branding"]
-        V["fn_verify_pin: bcrypt, lockout, refuses admins"]
+        V["fn_verify_pin: bcrypt(HMAC digest), row-locked, escalating lockout, refuses admins"]
         S[("profile_secrets: no client access")]
         PR[("profiles: auth_method")]
         H["identity helpers: tenant, role, permissions derived from profiles"]

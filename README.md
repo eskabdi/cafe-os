@@ -12,6 +12,7 @@ Requires Node 22+ (`.nvmrc`), pnpm 10 and Docker (for local Supabase).
 pnpm install
 pnpm dlx supabase start        # local Postgres, Auth, Realtime, Storage, Studio
 pnpm dlx supabase db reset     # applies supabase/migrations/*.sql + supabase/seed.sql
+# NOTE: seed.sql is LOCAL/CI ONLY (demo super admin with a public password). It aborts unless it sees the local stack or app.allow_demo_seed=on; never run `db reset --linked` against a hosted project.
 cp .env.example .env.local     # fill VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY from `supabase start`
 pnpm dlx supabase gen types typescript --local > src/lib/supabase/types.ts   # rerun after every migration
 pnpm dev                       # http://localhost:5173

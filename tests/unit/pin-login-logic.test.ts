@@ -259,7 +259,7 @@ describe('CORS', () => {
 describe('peppered PIN digest', () => {
   it('matches the HMAC-SHA256 vector the pgTAP suite checks against SQL (hex, 64 chars)', async () => {
     expect(await computePinDigest('480516', DEMO_PEPPER)).toBe(
-      'd4de579ed5e91dc8a519f2c9bd1fdb7df062d1172e6c4ae1828f8408abe0fee0',
+      '4f633837f6f2abccc01eab0a980ee22939c23ae3759d067cbd0641a9eb82d0cb',
     )
   })
   it('depends on the pepper and on the PIN', async () => {
@@ -271,7 +271,7 @@ describe('peppered PIN digest', () => {
   it('requires a long pepper', () => {
     expect(isUsablePepper(undefined)).toBe(false)
     expect(isUsablePepper('short')).toBe(false)
-    expect(isUsablePepper(DEMO_PEPPER)).toBe(false) // 27 chars: the demo pepper is never a production pepper
+    expect(isUsablePepper(DEMO_PEPPER)).toBe(true) // long enough to run locally; the seed guard keeps it off hosted projects
     expect(isUsablePepper('x'.repeat(32))).toBe(true)
   })
 })

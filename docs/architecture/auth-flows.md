@@ -40,8 +40,9 @@ sequenceDiagram
     UI->>EF: {restaurant_slug, username, pin}
     EF->>EF: size cap, strict validation, per-IP and per-user throttle
     EF->>DB: fn_resolve_tenant_slug, profile lookup
-    EF->>DB: fn_verify_pin (random id if unknown/admin/inactive)
-    DB-->>EF: status ok | invalid | locked | inactive (lockout in DB)
+    EF->>EF: digest = HMAC-SHA256(pin, PIN_PEPPER)
+    EF->>DB: fn_verify_pin(profile, digest) (random id if unknown/admin/inactive)
+    DB-->>EF: status ok | invalid (locked/inactive/unknown/wrong are identical; lockout in DB)
     alt not ok
         EF-->>UI: 401 invalid_credentials (identical for every cause) after a timing floor
     else ok
@@ -57,7 +58,7 @@ sequenceDiagram
 ## Threat notes
 | threat | control |
 |---|---|
-| PIN brute force | bcrypt, 5 failures then 15 min lock in `fn_verify_pin` (authoritative); in-memory per-IP and per-user buckets (best effort, per isolate); 4-6 digit PIN |
+| PIN brute force | 6-8 digit PIN, weak PINs refused at set time; peppered digest + bcrypt (offline DB leak is not brute-forceable without `PIN_PEPPER`); `fn_verify_pin` serialises attempts (row lock), escalating non-decaying lock 15 min / 1 h / 24 h; locked attempts are not evaluated; per-IP/user buckets best effort |
 | User / tenant enumeration | one 401 body for unknown tenant/user, inactive, locked, admin, wrong PIN; same DB work and a response-time floor; slug resolver returns null for unknown and suspended; staff are typed by username, never listed |
 | Admin via PIN | profile must be `auth_method='pin'`; DB eligibility check; minted identity must have `fn_user_auth_method='pin'` and a `*.staff.cafeos.invalid` email |
 | Service-role exposure | key only in function env; response whitelist of three fields; no logging of PINs/tokens; `src/` is scanned for service-role strings |
@@ -65,4 +66,26 @@ sequenceDiagram
 | CORS | exact origins from `ALLOWED_ORIGINS`, no wildcard |
 | Client-side bypass | guards are UX only; tenant/role/permissions come from `fn_get_session_context` and RLS, never JWT claims or the URL slug |
 | Targeted lockout (DoS) | an attacker can lock a known username (inherent to lockout); mitigate with per-IP limits and admin unlock |
-| Password login of PIN staff | staff identities need no password; wire the Auth hook to `fn_user_auth_method` (not yet done) |
+| Password login of PIN staff | Auth hook `password_verification_attempt` -> `fn_auth_password_verification_hook` rejects every `auth_method='pin'` profile (wired in `config.toml`; **not exercised against real GoTrue**, SQL unit-tested only) |
+| Demoted admin keeps a password identity | `identity_rotation_pending`: not PIN-eligible, hook rejects its password, until `fn_complete_identity_rotation` (the Edge Function that rewrites the auth user is a follow-up) |
+
+## Staff creation (`staff-create` Edge Function)
+```mermaid
+sequenceDiagram
+    actor M as Manager (users.manage)
+    participant EF as staff-create
+    participant DB as Postgres
+    participant GT as Supabase Auth admin API
+    M->>EF: {username, names, role_id, pin} + user JWT
+    EF->>GT: getUser(jwt)
+    EF->>DB: fn_prepare_staff_creation (as caller) -> slug
+    EF->>GT: createUser(synthetic email, random password, app_metadata.staff)
+    EF->>DB: fn_create_staff_profile (as caller)
+    EF->>DB: fn_set_user_pin(profile, peppered digest) (service role)
+    Note over EF,GT: any failure -> delete profile + auth user
+    EF-->>M: {profile_id}
+```
+
+## Platform admins
+`is_platform_admin()` / `is_platform_super_admin()` additionally require `aal2` (TOTP verified this session) unless `app.platform_mfa_required = 'off'` and the
+user has no verified factor. Production default = required. Local/CI opt out per session; the pgTAP helpers do it per transaction.
