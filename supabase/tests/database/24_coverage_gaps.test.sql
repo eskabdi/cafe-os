@@ -97,6 +97,7 @@ insert into public.table_sessions (restaurant_id, table_id, day_session_id, open
 insert into public.qr_credentials (restaurant_id, table_id, token_hash)
   select b, (select id from public.tables where restaurant_id = f.b limit 1), repeat('b', 64) from _f f;
 insert into public.kiosk_devices (restaurant_id, name, token_hash, created_by) select b, 'B terminal', repeat('c', 64), b_admin from _f;
+insert into public.user_notifications (restaurant_id, recipient_id, kind, payload) select b, b_waiter, 'security.concurrent_login_blocked', '{}'::jsonb from _f;
 insert into public.qr_credentials (restaurant_id, table_id, token_hash, status, revoked_at, revoked_by, version)
   select b, (select id from public.tables where restaurant_id = f.b limit 1), repeat('d', 64), 'revoked', now(), b_admin, 2 from _f f;
 insert into public.customer_sessions (restaurant_id, table_session_id, qr_credential_id, session_token_hash, expires_at)

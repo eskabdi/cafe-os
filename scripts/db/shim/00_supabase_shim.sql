@@ -75,6 +75,25 @@ create table auth.mfa_factors (
 );
 alter table auth.mfa_factors enable row level security;
 
+-- sessions exactly as GoTrue defines the columns we read (single-session rule, migration 0023): refreshed_at is
+-- timestamp WITHOUT time zone (UTC), the others timestamptz. Sign-out deletes the row.
+create type auth.aal_level as enum ('aal1', 'aal2', 'aal3');
+create table auth.sessions (
+  id uuid primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz,
+  updated_at timestamptz,
+  factor_id uuid,
+  aal auth.aal_level,
+  not_after timestamptz,
+  refreshed_at timestamp,
+  user_agent text,
+  ip inet,
+  tag text
+);
+create index sessions_user_id_idx on auth.sessions (user_id);
+alter table auth.sessions enable row level security;
+
 -- exactly as GoTrue defines them: read the PostgREST-provided request GUCs
 create function auth.uid() returns uuid language sql stable as $$
   select coalesce(
