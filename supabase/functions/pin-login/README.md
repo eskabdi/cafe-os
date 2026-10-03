@@ -14,7 +14,7 @@ Supabase Auth email + password (TOTP MFA capable). The PIN path answers admins e
 |---|---|---|
 | success | 200 | `{ "access_token", "refresh_token", "expires_in" }` (nothing else) |
 | unknown tenant / unknown user / inactive / locked / admin / wrong PIN | 401 | `{ "error": "invalid_credentials" }` (identical) |
-| bad shape (slug, username, 6-8 digit PIN) | 400 / 413 | `{ "error": "invalid_request" }` |
+| bad shape (slug, username, 4-6 digit PIN) | 400 / 413 | `{ "error": "invalid_request" }` |
 | throttled | 429 | `{ "error": "try_later" }` + `Retry-After` |
 | infrastructure failure | 503 | `{ "error": "server_error" }` |
 

@@ -58,7 +58,7 @@ sequenceDiagram
 ## Threat notes
 | threat | control |
 |---|---|
-| PIN brute force | 6-8 digit PIN, weak PINs refused at set time; peppered digest + bcrypt (offline DB leak is not brute-forceable without `PIN_PEPPER`); `fn_verify_pin` serialises attempts (row lock), escalating non-decaying lock 15 min / 1 h / 24 h; locked attempts are not evaluated; per-IP/user buckets best effort |
+| PIN brute force | 4-6 digit PIN, weak PINs refused at set time; peppered digest + bcrypt (offline DB leak is not brute-forceable without `PIN_PEPPER`); `fn_verify_pin` serialises attempts (row lock), escalating non-decaying lock 15 min / 1 h / 24 h; locked attempts are not evaluated; per-IP/user buckets best effort |
 | User / tenant enumeration | one 401 body for unknown tenant/user, inactive, locked, admin, wrong PIN; same DB work and a response-time floor; slug resolver returns null for unknown and suspended; staff are typed by username, never listed |
 | Admin via PIN | profile must be `auth_method='pin'`; DB eligibility check; minted identity must have `fn_user_auth_method='pin'` and a `*.staff.cafeos.invalid` email |
 | Service-role exposure | key only in function env; response whitelist of three fields; no logging of PINs/tokens; `src/` is scanned for service-role strings |

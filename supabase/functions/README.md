@@ -25,7 +25,7 @@ brute-forced offline without the pepper. Rules:
 - **rotating it invalidates every PIN** (all staff must get new PINs); keep it stable;
 - local development only: `PIN_PEPPER=cafeos-local-demo-pepper-do-not-use-v1` (the `DEMO_PEPPER` constant) is what
   `supabase/seed.sql` uses for the demo PINs; never set it on a hosted project (the seed is refused there);
-- PIN policy (6-8 digits, no repeated/sequential PINs) is enforced in the functions, because only they see the raw PIN.
+- PIN policy (4-6 digits, no repeated/sequential PINs) is enforced in the functions, because only they see the raw PIN.
 
 | function | purpose | secrets |
 |---|---|---|

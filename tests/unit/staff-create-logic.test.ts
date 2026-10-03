@@ -58,7 +58,7 @@ describe('parseStaffCreateBody', () => {
     ['blank first name', { ...valid, first_name: '  ' }],
     ['long name', { ...valid, first_name: 'x'.repeat(61) }],
     ['numeric pin', { ...valid, pin: 482916 }],
-    ['short pin', { ...valid, pin: '48291' }],
+    ['short pin', { ...valid, pin: '482' }],
     ['non-string middle name', { ...valid, middle_name: 5 }],
   ])('rejects %s', (_n, input) => {
     expect(parseStaffCreateBody(body(input))).toEqual({ ok: false, error: 'invalid_request' })

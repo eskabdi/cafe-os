@@ -51,7 +51,7 @@ describe('StaffLogin', () => {
     await toPinStep(user)
     await user.keyboard('482916{Enter}')
     expect(await screen.findByRole('alert')).toHaveTextContent(PIN_LOGIN_MESSAGES[reason])
-    expect(screen.getByRole('status')).toHaveTextContent('0 of 8')
+    expect(screen.getByRole('status')).toHaveTextContent('0 of 6')
     expect(onSignedIn).not.toHaveBeenCalled()
   })
 
@@ -75,7 +75,7 @@ describe('StaffLogin', () => {
     expect(alert.textContent).not.toContain('secret')
   })
 
-  it('keeps the Sign in button disabled until 6 digits are entered', async () => {
+  it('keeps the Sign in button disabled until 4 digits are entered', async () => {
     const user = userEvent.setup()
     render(<StaffLogin slug="demo-cafe" />)
     await toPinStep(user)

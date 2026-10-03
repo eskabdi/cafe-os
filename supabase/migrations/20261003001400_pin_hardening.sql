@@ -5,7 +5,7 @@
 --    pass the 64-hex digest to fn_set_user_pin / fn_verify_pin, which bcrypt (cost 10) that digest. A leaked database
 --    (backup, replica, SQL injection) therefore cannot be brute-forced offline without the pepper: the PIN space is
 --    only 10^6 for six digits, which bcrypt alone would not protect.
---    Consequence: the weak-PIN policy (length >= 6, no repeated / sequential PINs) is enforced where the raw PIN is
+--    Consequence: the weak-PIN policy (4-6 digits, no repeated / sequential PINs) is enforced where the raw PIN is
 --    visible, in the Edge Functions (supabase/functions/_shared/pin.ts). SQL can only insist on the digest format
 --    (a raw 4-8 digit PIN, or anything else, is refused with invalid_pin).
 --    Pre-existing hashes were bcrypt(raw PIN) and no longer verify: PINs must be set again (seed does so).

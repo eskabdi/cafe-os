@@ -44,8 +44,7 @@ describe('parsePinLoginBody', () => {
 
   it.each([
     ['3 digits', { ...valid, pin: '123' }],
-    ['4 digits (minimum is 6)', { ...valid, pin: '1234' }],
-    ['5 digits', { ...valid, pin: '48291' }],
+    ['7 digits (maximum is 6)', { ...valid, pin: '4829160' }],
     ['9 digits', { ...valid, pin: '482916037' }],
     ['letters in pin', { ...valid, pin: '12a4' }],
     ['numeric pin', { ...valid, pin: 1234 }],
@@ -294,7 +293,7 @@ describe('isWeakPin', () => {
     'abcdef',
     '12345678',
   ])('rejects %s', (p) => expect(isWeakPin(p)).toBe(true))
-  it.each(['482916', '739204', '602841', '915370', '48291603'])('accepts %s', (p) =>
+  it.each(['4829', '48291', '482916', '739204', '602841', '915370'])('accepts %s', (p) =>
     expect(isWeakPin(p)).toBe(false),
   )
 })

@@ -27,30 +27,30 @@ describe('PinPad', () => {
     expect(container.querySelector('input')).toBeNull() // nothing to echo into
     await user.click(screen.getByRole('button', { name: 'Digit 1' }))
     await user.keyboard('23')
-    expect(screen.getByRole('status')).toHaveTextContent('3 of 8 digits entered')
+    expect(screen.getByRole('status')).toHaveTextContent('3 of 6 digits entered')
     expect(screen.getByRole('status').textContent).not.toMatch(/[123]{3}/)
     await user.keyboard('{Backspace}')
-    expect(screen.getByRole('status')).toHaveTextContent('2 of 8 digits entered')
+    expect(screen.getByRole('status')).toHaveTextContent('2 of 6 digits entered')
     await user.keyboard('{Escape}')
-    expect(screen.getByRole('status')).toHaveTextContent('0 of 8 digits entered')
+    expect(screen.getByRole('status')).toHaveTextContent('0 of 6 digits entered')
   })
 
-  it('clears with the CLR button and caps at 8 digits', async () => {
+  it('clears with the CLR button and caps at 6 digits', async () => {
     const user = userEvent.setup()
     render(<Harness />)
     await user.keyboard('123456789')
-    expect(screen.getByRole('status')).toHaveTextContent('8 of 8')
+    expect(screen.getByRole('status')).toHaveTextContent('6 of 6')
     await user.click(screen.getByRole('button', { name: 'Clear PIN' }))
-    expect(screen.getByRole('status')).toHaveTextContent('0 of 8')
+    expect(screen.getByRole('status')).toHaveTextContent('0 of 6')
   })
 
-  it('ignores non-digits, submits on Enter only with 6+ digits', async () => {
+  it('ignores non-digits, submits on Enter only with 4+ digits', async () => {
     const user = userEvent.setup()
     const onSubmit = vi.fn()
     render(<Harness onSubmit={onSubmit} />)
     await user.keyboard('ab12{Enter}')
     expect(onSubmit).not.toHaveBeenCalled()
-    await user.keyboard('3456{Enter}')
+    await user.keyboard('34{Enter}')
     expect(onSubmit).toHaveBeenCalledTimes(1)
   })
 
@@ -59,6 +59,6 @@ describe('PinPad', () => {
     render(<Harness disabled />)
     expect(screen.getByRole('button', { name: 'Digit 1' })).toBeDisabled()
     await user.keyboard('1234')
-    expect(screen.getByRole('status')).toHaveTextContent('0 of 8')
+    expect(screen.getByRole('status')).toHaveTextContent('0 of 6')
   })
 })
