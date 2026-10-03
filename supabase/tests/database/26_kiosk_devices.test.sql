@@ -1,7 +1,7 @@
 -- Registered kiosk devices: registration / revocation RPCs, token handling, service-only roster + tile eligibility,
 -- reserved subdomains.
 begin;
-select plan(57);
+select plan(69);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -174,6 +174,42 @@ select tests.clear_auth();
 select is((select string_agg(s, ',' order by s) from unnest(array['www','app','api','admin','platform','auth','static','cdn','mail','support','status','assets','login','r']) s where not public.fn_slug_is_reserved(s)), null, 'every reserved subdomain (spec list + legacy list) is reserved in SQL');
 select is((select string_agg(s, ',' order by s) from unnest(array['www','app','api','admin','platform','auth','static','cdn','mail','support','status','assets','login','r']) s
            where tests.run(format($q$update public.restaurants set slug = %L where id = %L$q$, s, (select a from _f))) !~ '^23514\|'), null, 'and every one is refused by the restaurants_slug_format CHECK');
+
+-- ═════════ review additions (rls-tester gate): tenant denial per verb, delegate escalation, restrict FKs, Realtime ═════════
+select tests.authenticate_as((select admin from _f));
+select is((select count(*)::int from public.kiosk_devices where restaurant_id = (select b from _f)), 0, 'tenant A admin selects none of tenant B''s kiosks');
+select tests.clear_auth();
+select tests.authenticate_as((select b_admin from _f));
+select is((select count(*)::int from public.kiosk_devices where restaurant_id = (select a from _f)), 0, 'tenant B admin selects none of tenant A''s kiosks');
+select is((select count(*)::int from public.kiosk_devices), 1, 'and sees exactly its own one');
+select tests.clear_auth();
+
+-- a delegate holding ONLY kiosks.manage (Waiter role) gains nothing beyond kiosks
+insert into public.role_permissions (role_id, permission_id, restaurant_id) select (select r_waiter from _f), id, (select a from _f) from public.permissions where key = 'kiosks.manage';
+select tests.authenticate_as((select waiter from _f));
+select is(tests.run(format($q$select public.fn_change_user_role(%L, %L)$q$, (select waiter from _f), (select id from public.roles where restaurant_id = (select a from _f) and system_key = 'tenant_admin'))),
+          'P0001|permission_denied|', 'kiosks.manage holder cannot promote itself to tenant_admin');
+select is(tests.run(format($q$select public.fn_update_role_permissions(%L, array['kiosks.manage','settings.manage'], '{}')$q$, (select r_waiter from _f))),
+          'P0001|permission_denied|', 'nor widen its own role permissions');
+select ok(tests.run(format($q$update public.profiles set role_id = %L where id = %L$q$, (select id from public.roles where restaurant_id = (select a from _f) and system_key = 'tenant_admin'), (select waiter from _f))) ~ '^42501\|',
+          'nor update profiles.role_id directly');
+select is(tests.oracle($q$select public.fn_revoke_kiosk({id})$q$, (select b_kiosk from _k)), 'P0001|not_found|', 'delegate revoking tenant B''s kiosk: identical not_found');
+select is((select count(*)::int from public.kiosk_devices where restaurant_id = (select b from _f)), 0, 'delegate cannot see tenant B kiosks');
+select tests.clear_auth();
+select is((select count(*)::int from public.kiosk_devices where restaurant_id = (select b from _f) and revoked_at is not null), 0, 'tenant B''s kiosk is still not revoked');
+-- forced PIN change takes the delegated permission away too (must_change_pin ceiling)
+update public.profile_secrets set must_change_pin = true where profile_id = (select waiter from _f);
+select tests.authenticate_as((select waiter from _f));
+select is(tests.run($q$select public.fn_list_kiosks()$q$), 'P0001|permission_denied|', 'a delegate with a pending PIN change loses kiosks.manage');
+select tests.clear_auth();
+update public.profile_secrets set must_change_pin = false where profile_id = (select waiter from _f);
+delete from public.role_permissions where role_id = (select r_waiter from _f) and permission_id = (select id from public.permissions where key = 'kiosks.manage');
+
+-- deletes are RESTRICT (no cascade from tenant / creator to kiosks or notifications)
+select is((select string_agg(conname, ',' order by conname) from pg_constraint
+           where contype = 'f' and confdeltype <> 'r' and conrelid in ('public.kiosk_devices'::regclass, 'public.user_notifications'::regclass)), null, 'every FK on kiosk_devices / user_notifications is ON DELETE RESTRICT');
+-- token_hash must never reach Realtime
+select ok(not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'kiosk_devices'), 'kiosk_devices is not in the Realtime publication');
 
 select * from finish();
 rollback;
