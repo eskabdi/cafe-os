@@ -96,8 +96,12 @@ done
 if [ "$RACE_ONLY" -eq 0 ]; then
 SEED="${SEED_FILE:-$ROOT/supabase/seed.sql}"
 echo "==> seed guard: seed.sql must REFUSE without the local-stack signal or the opt-in"
-if out="$("${PSQL[@]}" -f "$SEED" 2>&1)"; then echo "seed.sql ran without the guard signal" >&2; exit 1; fi
+# plain `psql -f` WITHOUT ON_ERROR_STOP: the guard must still abort everything (seed.sql is one transaction)
+PSQL_LAX=("$PG_BIN/psql" -h "$SOCK" -p "$PORT" -U postgres -d postgres -X -q)
+out="$("${PSQL_LAX[@]}" -f "$SEED" 2>&1 || true)"
 case "$out" in *"seed.sql refused"*) ;; *) echo "seed refused for the wrong reason: $out" >&2; exit 1 ;; esac
+left="$("${PSQL_LAX[@]}" -t -A -c "select (select count(*) from public.plans) + (select count(*) from auth.users) + (select count(*) from public.restaurants)")"
+if [ "$left" != "0" ]; then echo "refused seed left $left rows behind (not atomic)" >&2; exit 1; fi
 if out="$(PGOPTIONS="-c app.settings.jwt_secret=some-hosted-project-secret-0123456789abcdef" "${PSQL[@]}" -f "$SEED" 2>&1)"; then
   echo "seed.sql ran with a non-default JWT secret" >&2; exit 1; fi
 echo "==> seed (as postgres, app.allow_demo_seed=on)"

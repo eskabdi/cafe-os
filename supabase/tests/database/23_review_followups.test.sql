@@ -1,7 +1,7 @@
 -- Review/audit follow-ups: branding shape, installment compensating path, no_open_day, identity-guard narrowing,
 -- rename guard, column-grant oracle (M1), username grant (L4), resolver (L3), foreign-row UPDATE/DELETE matrix (M3).
 begin;
-select plan(46);
+select plan(33);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -32,6 +32,7 @@ select matches(tests.run(format($q$update public.restaurants set branding = '[]'
 insert into public.orders (restaurant_id, day_session_id, order_no, created_by, subtotal, vat_rate_snapshot, vat_amount, total) select a, day1, 'ORD-0001', waiter, 100, 15, 15, 115 from _f;
 create temp table _c (order_id uuid, voucher_id uuid, pay1 uuid, pay2 uuid, i1 uuid, i2 uuid, i3 uuid) on commit drop;
 grant all on _c to public;
+insert into _c default values;
 update _c set order_id = (select id from public.orders where order_no = 'ORD-0001' and restaurant_id = (select a from _f));
 insert into public.vouchers (restaurant_id, voucher_no, order_id, customer_name, total, installment_count, interval_days) select f.a, 'VCH-0001', c.order_id, 'C', 115, 3, 30 from _f f, _c c;
 update _c set voucher_id = (select id from public.vouchers where voucher_no = 'VCH-0001' and restaurant_id = (select a from _f));
@@ -161,6 +162,16 @@ select tests.authenticate_as((select b_admin from _f));
 select is(tests.foreign_write_matrix((select a from _f)), '', 'tenant B admin changes NO row of tenant A through any client UPDATE/DELETE privilege');
 select tests.clear_auth();
 select is(tests.snapshot((select a from _f)), (select a from _snap), 'tenant A is byte-for-byte unchanged');
+
+-- Structural complement: RLS masks a missing tenant predicate on a DELETE/UPDATE policy behind the SELECT policy
+-- (the WHERE clause reads columns), so behaviour alone cannot see it. Every write policy must carry the tenant (or
+-- platform) predicate in its USING and, where it has one, its WITH CHECK clause on its own.
+select is((select string_agg(p.tablename || '.' || p.policyname || '(' || p.cmd || ')', ',' order by p.tablename, p.policyname)
+           from pg_policies p
+           where p.schemaname = 'public' and p.cmd in ('UPDATE', 'DELETE', 'INSERT')
+             and ((p.cmd in ('UPDATE', 'DELETE') and coalesce(p.qual, '') !~ '(current_restaurant_id|is_platform_admin|is_platform_super_admin|auth\.uid|auth_uid|current_user_id)')
+                  or (p.cmd in ('UPDATE', 'INSERT') and coalesce(p.with_check, '') !~ '(current_restaurant_id|is_platform_admin|is_platform_super_admin|auth\.uid|auth_uid|current_user_id)'))),
+          null, 'every INSERT/UPDATE/DELETE policy states the tenant/platform predicate in USING and WITH CHECK individually');
 
 select * from finish();
 rollback;

@@ -19,6 +19,8 @@ import {
 } from '../../supabase/functions/pin-login/logic'
 import {
   computePinDigest,
+  isLocalSupabaseUrl,
+  isPepperAllowedFor,
   isUsablePepper,
   isWeakPin,
   DEMO_PEPPER,
@@ -294,4 +296,25 @@ describe('isWeakPin', () => {
   it.each(['4829', '4805', '7392', '6028', '9153', '8510'])('accepts %s', (p) =>
     expect(isWeakPin(p)).toBe(false),
   )
+})
+
+describe('demo pepper is local-only', () => {
+  it.each([
+    'http://127.0.0.1:54321',
+    'http://localhost:54321',
+    'http://kong:8000',
+    'http://host.docker.internal:54321',
+  ])('local: %s', (u) => {
+    expect(isLocalSupabaseUrl(u)).toBe(true)
+    expect(isPepperAllowedFor(DEMO_PEPPER, u)).toBe(true)
+  })
+  it.each(['https://abcd.supabase.co', 'https://localhost.evil.com', 'not a url', '', undefined])(
+    'hosted/unknown: %s',
+    (u) => {
+      expect(isPepperAllowedFor(DEMO_PEPPER, u)).toBe(false)
+    },
+  )
+  it('any other pepper is fine anywhere', () => {
+    expect(isPepperAllowedFor('x'.repeat(40), 'https://abcd.supabase.co')).toBe(true)
+  })
 })

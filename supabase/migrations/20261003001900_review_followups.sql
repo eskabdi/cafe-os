@@ -20,8 +20,9 @@ alter table public.restaurants add constraint restaurants_branding_shape_check c
   pg_column_size(branding) < 4096
   and jsonb_typeof(branding) = 'object'
   and (branding - 'logo_path' - 'primary_color' - 'accent_color') = '{}'::jsonb   -- key whitelist
-  and (branding ->> 'primary_color') ~ '^#[0-9a-fA-F]{6}$'
-  and (branding ->> 'accent_color') ~ '^#[0-9a-fA-F]{6}$'
+  -- coalesce: a JSON null (or missing key) yields SQL NULL, which a bare CHECK would let through
+  and coalesce((branding ->> 'primary_color') ~ '^#[0-9a-fA-F]{6}$', false)
+  and coalesce((branding ->> 'accent_color') ~ '^#[0-9a-fA-F]{6}$', false)
 );
 
 -- ── guards (full replacements) ──────────────────────────────────────────────
