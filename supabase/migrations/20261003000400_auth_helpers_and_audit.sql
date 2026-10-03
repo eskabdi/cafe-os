@@ -144,6 +144,24 @@ as $$
   )
 $$;
 
+-- true when the caller's role is the tenant_admin system role (and the tenant is accessible)
+create or replace function public.is_tenant_admin()
+returns boolean
+language sql stable security definer set search_path = ''
+as $$
+  select exists (
+    select 1
+    from public.profiles p
+    join public.restaurants r on r.id = p.restaurant_id
+    join public.roles ro on ro.id = p.role_id and ro.restaurant_id = p.restaurant_id
+    where p.id = (select auth.uid())
+      and p.is_active
+      and ro.is_active
+      and ro.system_key = 'tenant_admin'
+      and r.status not in ('suspended', 'cancelled')
+  )
+$$;
+
 -- ── tenant status guard for mutating RPCs ───────────────────────────────────
 -- Returns the caller's restaurant_id. Raises:
 --   not_authenticated  no JWT subject
