@@ -29,9 +29,9 @@ create or replace function public.fn_pin_lock_duration(p_failed integer)
 returns interval
 language sql immutable set search_path = ''
 as $$
-  select case when p_failed >= 15 then interval '24 hours'
-              when p_failed >= 10 then interval '1 hour'
-              when p_failed >= 5  then interval '15 minutes'
+  select case when p_failed >= 9 then interval '24 hours'
+              when p_failed >= 6 then interval '1 hour'
+              when p_failed >= 3  then interval '15 minutes'
               else null end
 $$;
 revoke all on function public.fn_pin_lock_duration(integer) from public, anon, authenticated;

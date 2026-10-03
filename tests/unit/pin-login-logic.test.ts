@@ -29,23 +29,21 @@ import { PIN_PATTERN, USERNAME_PATTERN } from '../../src/lib/supabase/pin-login-
 const TENANT = '11111111-1111-4111-8111-111111111111'
 const PROFILE = '22222222-2222-4222-8222-222222222222'
 const body = (o: unknown) => JSON.stringify(o)
-const valid = { restaurant_slug: 'demo-cafe', username: 'abebe', pin: '482916' }
+const valid = { restaurant_slug: 'demo-cafe', username: 'abebe', pin: '4829' }
 
 describe('parsePinLoginBody', () => {
   it('accepts a valid body and normalizes slug/username', () => {
-    const r = parsePinLoginBody(
-      body({ restaurant_slug: ' Demo-Cafe ', username: ' Abebe.K ', pin: '482916' }),
-    )
+    const r = parsePinLoginBody(body({ restaurant_slug: ' Demo-Cafe ', username: ' Abebe.K ', pin: '4829' }))
     expect(r).toEqual({
       ok: true,
-      value: { restaurant_slug: 'demo-cafe', username: 'abebe.k', pin: '482916' },
+      value: { restaurant_slug: 'demo-cafe', username: 'abebe.k', pin: '4829' },
     })
   })
 
   it.each([
     ['3 digits', { ...valid, pin: '123' }],
-    ['7 digits (maximum is 6)', { ...valid, pin: '4829160' }],
-    ['9 digits', { ...valid, pin: '482916037' }],
+    ['7 digits (maximum is 6)', { ...valid, pin: '48290' }],
+    ['9 digits', { ...valid, pin: '4829037' }],
     ['letters in pin', { ...valid, pin: '12a4' }],
     ['numeric pin', { ...valid, pin: 1234 }],
     ['Arabic-Indic digits', { ...valid, pin: '١٢٣٤' }],
@@ -74,7 +72,7 @@ describe('parsePinLoginBody', () => {
       expect(USERNAME_PATTERN.test(u.trim().toLowerCase())).toBe(server)
     }
     // the client pattern may be looser (UX only) but must never reject what the server accepts
-    for (const p of ['1234', '123456', '482916', '123', 'abcd', '12 4']) {
+    for (const p of ['1234', '4829', '12345', '123', 'abcd', '12 4']) {
       if (parsePinLoginBody(body({ ...valid, pin: p })).ok) expect(PIN_PATTERN.test(p)).toBe(true)
     }
   })
@@ -257,15 +255,15 @@ describe('CORS', () => {
 
 describe('peppered PIN digest', () => {
   it('matches the HMAC-SHA256 vector the pgTAP suite checks against SQL (hex, 64 chars)', async () => {
-    expect(await computePinDigest('480516', DEMO_PEPPER)).toBe(
-      '4f633837f6f2abccc01eab0a980ee22939c23ae3759d067cbd0641a9eb82d0cb',
+    expect(await computePinDigest('4805', DEMO_PEPPER)).toBe(
+      'c322f575dc02e97fa786764ad638da86d57e28a251a7589d8d1f4057721bfb62',
     )
   })
   it('depends on the pepper and on the PIN', async () => {
-    const a = await computePinDigest('482916', DEMO_PEPPER)
+    const a = await computePinDigest('4829', DEMO_PEPPER)
     expect(a).toMatch(/^[0-9a-f]{64}$/)
-    expect(await computePinDigest('482916', DEMO_PEPPER + 'x')).not.toBe(a)
-    expect(await computePinDigest('482917', DEMO_PEPPER)).not.toBe(a)
+    expect(await computePinDigest('4829', DEMO_PEPPER + 'x')).not.toBe(a)
+    expect(await computePinDigest('4830', DEMO_PEPPER)).not.toBe(a)
   })
   it('requires a long pepper', () => {
     expect(isUsablePepper(undefined)).toBe(false)
@@ -277,23 +275,23 @@ describe('peppered PIN digest', () => {
 
 describe('isWeakPin', () => {
   it.each([
-    '000000',
-    '111111',
-    '123456',
-    '654321',
-    '121212',
-    '123123',
-    '112233',
-    '789012',
-    '135791',
-    '12121212',
-    '1231231',
+    '0000',
+    '1111',
+    '1234',
+    '4321',
+    '1212',
+    '1122',
+    '2580',
+    '0123',
+    '6789',
+    '9876',
+    '2468',
+    '123',
     '12345',
-    '1234567890',
-    'abcdef',
-    '12345678',
+    'abcd',
+    '123456',
   ])('rejects %s', (p) => expect(isWeakPin(p)).toBe(true))
-  it.each(['4829', '48291', '482916', '739204', '602841', '915370'])('accepts %s', (p) =>
+  it.each(['4829', '4805', '7392', '6028', '9153', '8510'])('accepts %s', (p) =>
     expect(isWeakPin(p)).toBe(false),
   )
 })

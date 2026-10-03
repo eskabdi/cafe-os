@@ -2,17 +2,17 @@
 //
 // The database never sees a raw PIN: Edge Functions send digest = hex(HMAC-SHA256(pin, PIN_PEPPER)) to
 // fn_verify_pin / fn_set_user_pin, which bcrypt it. PIN_PEPPER lives only in the Edge Function environment, so a
-// leaked database cannot be brute-forced offline (a 6-digit PIN has only 10^6 candidates). The weak-PIN policy is
+// leaked database cannot be brute-forced offline (a 4-digit PIN has only 10^4 candidates; the lockout is what limits online guessing). The weak-PIN policy is
 // enforced HERE because only here is the raw PIN visible. Never log a PIN, a digest or the pepper.
 
 export const PIN_MIN_LENGTH = 4
-export const PIN_MAX_LENGTH = 6
-export const PIN_RE = /^[0-9]{4,6}$/
+export const PIN_MAX_LENGTH = 4
+export const PIN_RE = /^[0-9]{4}$/
 export const MIN_PEPPER_LENGTH = 32
 /** The pepper seed.sql uses for the demo PINs. Valid only where the seed guard passed (local stack / CI). */
 export const DEMO_PEPPER = 'cafeos-local-demo-pepper-do-not-use-v1'
 
-const COMMON_WEAK = new Set(['123321', '112233', '159357', '147258', '258369', '123123', '321123', '010203', '102030'])
+const COMMON_WEAK = new Set(['1122', '2211', '1212', '2580', '0852', '1004', '2000', '1357', '2468', '1379', '1313', '6969', '1998', '2001'])
 
 /** True for PINs that must not be accepted when SETTING a PIN. */
 export function isWeakPin(pin: string): boolean {

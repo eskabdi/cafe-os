@@ -8,28 +8,26 @@ grant all on _f to public;
 
 select tests.authenticate_as_service_role();
 -- staff PIN flow (the DB only ever sees the peppered digest)
-select is((select public.fn_verify_pin(tests.user_id('hanna', 'central-cafe'), tests.pin_digest('480516')) ->> 'status'), 'ok', 'staff PIN (peppered digest) verifies');
-select ok(not ((select public.fn_verify_pin(tests.user_id('hanna', 'central-cafe'), tests.pin_digest('480516')))::text like '%pin_hash%'), 'pin_hash never returned');
+select is((select public.fn_verify_pin(tests.user_id('hanna', 'central-cafe'), tests.pin_digest('4805')) ->> 'status'), 'ok', 'staff PIN (peppered digest) verifies');
+select ok(not ((select public.fn_verify_pin(tests.user_id('hanna', 'central-cafe'), tests.pin_digest('4805')))::text like '%pin_hash%'), 'pin_hash never returned');
 select is((select public.fn_verify_pin(tests.user_id('hanna', 'central-cafe'), tests.pin_digest('000000')))::text, '{"status": "invalid"}', 'wrong PIN: bare invalid (no attempts_left oracle)');
 select public.fn_verify_pin(tests.user_id('hanna', 'central-cafe'), tests.pin_digest('000000'));
-select public.fn_verify_pin(tests.user_id('hanna', 'central-cafe'), tests.pin_digest('000000'));
-select public.fn_verify_pin(tests.user_id('hanna', 'central-cafe'), tests.pin_digest('000000'));
-select is((select public.fn_verify_pin(tests.user_id('hanna', 'central-cafe'), tests.pin_digest('000000')))::text, '{"status": "invalid"}', '5th failure: still the same bare answer');
-select is((select public.fn_verify_pin(tests.user_id('hanna', 'central-cafe'), tests.pin_digest('480516')) ->> 'status'), 'invalid', 'correct PIN refused while locked, answer identical to a wrong PIN (no state oracle)');
-select is(public.fn_verify_pin(tests.user_id('hanna', 'central-cafe'), '480516') ->> 'status', 'invalid', 'a raw PIN (not a 64-hex digest) is never accepted');
+select is((select public.fn_verify_pin(tests.user_id('hanna', 'central-cafe'), tests.pin_digest('000000')))::text, '{"status": "invalid"}', '3rd failure: still the same bare answer');
+select is((select public.fn_verify_pin(tests.user_id('hanna', 'central-cafe'), tests.pin_digest('4805')) ->> 'status'), 'invalid', 'correct PIN refused while locked, answer identical to a wrong PIN (no state oracle)');
+select is(public.fn_verify_pin(tests.user_id('hanna', 'central-cafe'), '4805') ->> 'status', 'invalid', 'a raw PIN (not a 64-hex digest) is never accepted');
 select tests.clear_auth();
 select ok((select locked_until > now() + interval '14 minutes' from public.profile_secrets where profile_id = tests.user_id('hanna', 'central-cafe')),
           'lock lasts ~15 minutes');
-select is((select failed_attempts from public.profile_secrets where profile_id = tests.user_id('hanna', 'central-cafe')), 5, 'exactly five failures counted (the locked attempt was not evaluated)');
+select is((select failed_attempts from public.profile_secrets where profile_id = tests.user_id('hanna', 'central-cafe')), 3, 'exactly three failures counted (the locked attempt was not evaluated)');
 update public.profile_secrets set locked_until = now() - interval '1 second' where profile_id = tests.user_id('hanna', 'central-cafe');
 select tests.authenticate_as_service_role();
 select is((select public.fn_verify_pin(tests.user_id('hanna', 'central-cafe'), tests.pin_digest('000000')) ->> 'status'), 'invalid', 'after lock expiry a wrong PIN counts on top of the old counter');
 select tests.clear_auth();
-select is((select failed_attempts from public.profile_secrets where profile_id = tests.user_id('hanna', 'central-cafe')), 6, 'lock expiry does NOT reset the counter');
-select ok((select locked_until > now() + interval '14 minutes' from public.profile_secrets where profile_id = tests.user_id('hanna', 'central-cafe')), 'from the 5th failure on every further failure re-locks');
+select is((select failed_attempts from public.profile_secrets where profile_id = tests.user_id('hanna', 'central-cafe')), 4, 'lock expiry does NOT reset the counter');
+select ok((select locked_until > now() + interval '14 minutes' from public.profile_secrets where profile_id = tests.user_id('hanna', 'central-cafe')), 'from the 3rd failure on every further failure re-locks');
 update public.profile_secrets set locked_until = now() - interval '1 second' where profile_id = tests.user_id('hanna', 'central-cafe');
 select tests.authenticate_as_service_role();
-select is((select public.fn_verify_pin(tests.user_id('hanna', 'central-cafe'), tests.pin_digest('480516')) ->> 'status'), 'ok', 'after expiry the right PIN works');
+select is((select public.fn_verify_pin(tests.user_id('hanna', 'central-cafe'), tests.pin_digest('4805')) ->> 'status'), 'ok', 'after expiry the right PIN works');
 select tests.clear_auth();
 select is((select failed_attempts from public.profile_secrets where profile_id = tests.user_id('hanna', 'central-cafe')), 0, 'only a successful verify resets the counter');
 
@@ -89,7 +87,7 @@ select tests.clear_auth();
 select is((select auth_method from public.profiles where id = tests.user_id('hanna', 'central-cafe')), 'pin', 'demotion switches to pin auth');
 select ok((select identity_rotation_pending from public.profiles where id = tests.user_id('hanna', 'central-cafe')), 'demotion of an account with a real email marks identity_rotation_pending');
 select tests.authenticate_as_service_role();
-select is((select public.fn_verify_pin(tests.user_id('hanna', 'central-cafe'), tests.pin_digest('480516')) ->> 'status'), 'invalid', 'old PIN does not survive demotion');
+select is((select public.fn_verify_pin(tests.user_id('hanna', 'central-cafe'), tests.pin_digest('4805')) ->> 'status'), 'invalid', 'old PIN does not survive demotion');
 select throws_ok(format($q$select public.fn_set_user_pin(%L, tests.pin_digest('654123'))$q$, tests.user_id('hanna', 'central-cafe')), 'P0001', 'pin_not_allowed', 'no PIN can be set while the identity rotation is pending');
 select throws_ok(format($q$select public.fn_complete_identity_rotation(%L)$q$, tests.user_id('hanna', 'central-cafe')), 'P0001', 'identity_not_rotated', 'rotation cannot be completed while the auth identity still has the real email');
 select tests.clear_auth();

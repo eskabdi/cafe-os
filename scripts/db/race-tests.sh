@@ -5,7 +5,7 @@
 #   * same race through fn_change_user_role (demotion)                                  (H2)
 #   * last platform_super_admin: two super admins deactivate each other                 (SM6)
 #   * closed-day guard vs fn_close_day-style UPDATE, both orders of arrival             (H3)
-#   * 60 concurrent wrong PIN guesses against one account                               (SM3) -> failed_attempts stays 5
+#   * 60 concurrent wrong PIN guesses against one account                               (SM3) -> failed_attempts stays 3
 # Needs PGHOST / PGPORT / PGUSER=postgres / PGDATABASE in the environment (db-test.sh exports them) and the seeded
 # schema. NEVER run it against a real project: it provisions throwaway tenants (race-*) and leaves them behind.
 set -uo pipefail
@@ -121,10 +121,10 @@ for i in $(seq 1 60); do
   ( printf "begin; select set_config('request.jwt.claims', '{\"role\":\"service_role\"}', true); set local role service_role; select public.fn_verify_pin('%s', '%s'); commit;\n" "$P" "$WRONG" | "${PSQL[@]}" >/dev/null 2>&1 ) &
 done
 wait
-check "failed_attempts after 60 concurrent wrong guesses" 5 "$(q "select failed_attempts from public.profile_secrets where profile_id = '$P'")"
+check "failed_attempts after 60 concurrent wrong guesses" 3 "$(q "select failed_attempts from public.profile_secrets where profile_id = '$P'")"
 check "account is locked" t "$(q "select (locked_until > now()) from public.profile_secrets where profile_id = '$P'")"
 check "the right PIN is refused while locked" invalid "$(q "$SVC select public.fn_verify_pin('$P', '$GOOD') ->> 'status'" | tail -1)"
-check "and the lock did not move the counter" 5 "$(q "select failed_attempts from public.profile_secrets where profile_id = '$P'")"
+check "and the lock did not move the counter" 3 "$(q "select failed_attempts from public.profile_secrets where profile_id = '$P'")"
 
 rm -f /tmp/race.$$.*
 if [ "$FAILS" -ne 0 ]; then echo "race tests: $FAILS failure(s)"; exit 1; fi

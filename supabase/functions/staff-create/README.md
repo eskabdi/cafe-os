@@ -4,7 +4,7 @@ Creates a PIN-login staff member. Caller: a signed-in user holding `users.manage
 
 `POST /functions/v1/staff-create`, header `Authorization: Bearer <user access token>`, JSON body (max 2048 bytes):
 ```json
-{ "username": "abebe", "first_name": "Abebe", "middle_name": "Worku", "last_name": "Mekonnen", "role_id": "<uuid>", "pin": "482916" }
+{ "username": "abebe", "first_name": "Abebe", "middle_name": "Worku", "last_name": "Mekonnen", "role_id": "<uuid>", "pin": "4829" }
 ```
 `middle_name` / `last_name` optional. No tenant id, no email: the tenant comes from the caller's identity.
 
@@ -12,7 +12,7 @@ Creates a PIN-login staff member. Caller: a signed-in user holding `users.manage
 |---|---|---|
 | created | 201 | `{ "profile_id" }` (nothing else) |
 | bad shape / invalid role / escalation | 400 | `{ "error": "invalid_request" }` |
-| weak PIN (repeated, sequential, < 6 digits) | 400 | `{ "error": "weak_pin" }` |
+| weak PIN (repeated, sequential, not exactly 4 digits) | 400 | `{ "error": "weak_pin" }` |
 | no / invalid JWT | 401 | `{ "error": "unauthorized" }` |
 | no `users.manage`, suspended / read-only tenant, MFA step-up missing | 403 | `{ "error": "forbidden" }` |
 | username taken / plan staff limit | 409 | `{ "error": "username_taken" }` / `{ "error": "staff_limit_reached" }` |

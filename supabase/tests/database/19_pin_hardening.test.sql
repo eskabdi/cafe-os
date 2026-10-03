@@ -11,12 +11,12 @@ select tests.user_id('hanna', 'central-cafe') hanna, tests.user_id('yonas', 'cen
 grant all on _f to public;
 
 -- ── pepper contract ──
-select is(tests.pin_digest('480516'), '4f633837f6f2abccc01eab0a980ee22939c23ae3759d067cbd0641a9eb82d0cb',
+select is(tests.pin_digest('4805'), 'c322f575dc02e97fa786764ad638da86d57e28a251a7589d8d1f4057721bfb62',
           'SQL HMAC-SHA256(pin, demo pepper) equals the Node/Web-Crypto vector used by tests/unit/pin-login-logic.test.ts');
 select tests.authenticate_as_service_role();
-select is((select public.fn_verify_pin((select hanna from _f), tests.pin_digest('480516')) ->> 'status'), 'ok', 'the seeded demo PIN verifies through the peppered digest');
-select is((select public.fn_verify_pin((select hanna from _f), '480516') ->> 'status'), 'invalid', 'the raw PIN does not verify (DB only knows digests)');
-select throws_ok(format($q$select public.fn_set_user_pin(%L, '482916')$q$, (select yonas from _f)), 'P0001', 'invalid_pin', 'fn_set_user_pin refuses a raw PIN');
+select is((select public.fn_verify_pin((select hanna from _f), tests.pin_digest('4805')) ->> 'status'), 'ok', 'the seeded demo PIN verifies through the peppered digest');
+select is((select public.fn_verify_pin((select hanna from _f), '4805') ->> 'status'), 'invalid', 'the raw PIN does not verify (DB only knows digests)');
+select throws_ok(format($q$select public.fn_set_user_pin(%L, '4829')$q$, (select yonas from _f)), 'P0001', 'invalid_pin', 'fn_set_user_pin refuses a raw PIN');
 select throws_ok(format($q$select public.fn_set_user_pin(%L, repeat('A', 64))$q$, (select yonas from _f)), 'P0001', 'invalid_pin', 'fn_set_user_pin refuses a non-lowercase-hex digest');
 select throws_ok(format($q$select public.fn_set_user_pin(%L, null)$q$, (select yonas from _f)), 'P0001', 'invalid_pin', 'fn_set_user_pin refuses null');
 select tests.clear_auth();
@@ -31,11 +31,11 @@ insert into _ans values ('wrong', public.fn_verify_pin((select abebe from _f), t
 select tests.clear_auth();
 update public.profiles set is_active = false where id = (select yonas from _f);
 select tests.authenticate_as_service_role();
-insert into _ans values ('inactive_right', public.fn_verify_pin((select yonas from _f), tests.pin_digest('739204')));
+insert into _ans values ('inactive_right', public.fn_verify_pin((select yonas from _f), tests.pin_digest('7392')));
 select tests.clear_auth();
 update public.restaurants set status = 'suspended', suspended_at = now(), suspension_reason = 'test', status_before_suspension = 'active' where id = (select b from _f);
 select tests.authenticate_as_service_role();
-insert into _ans values ('suspended_right', public.fn_verify_pin((select b_waiter from _f), tests.pin_digest('397258')));
+insert into _ans values ('suspended_right', public.fn_verify_pin((select b_waiter from _f), tests.pin_digest('3972')));
 select tests.clear_auth();
 select is((select count(distinct v::text)::int from _ans), 1, 'unknown / wrong / inactive / suspended-tenant all answer exactly the same');
 select is((select v::text from _ans limit 1), '{"status": "invalid"}', 'and that answer carries no attempts_left / locked_until');
@@ -46,24 +46,24 @@ update public.profiles set is_active = true where id = (select yonas from _f);
 select tests.authenticate_as_service_role();
 select public.fn_verify_pin((select abebe from _f), tests.pin_digest('000000'));  -- 1 failure so far on abebe
 select tests.clear_auth();
-update public.profile_secrets set failed_attempts = 9, locked_until = null where profile_id = (select abebe from _f);
+update public.profile_secrets set failed_attempts = 5, locked_until = null where profile_id = (select abebe from _f);
 select tests.authenticate_as_service_role();
-select public.fn_verify_pin((select abebe from _f), tests.pin_digest('000000'));  -- 10th failure
+select public.fn_verify_pin((select abebe from _f), tests.pin_digest('000000'));  -- 6th failure
 select tests.clear_auth();
-select ok((select locked_until > now() + interval '59 minutes' and locked_until < now() + interval '61 minutes' from public.profile_secrets where profile_id = (select abebe from _f)), '10th failure: 1 hour lock');
-update public.profile_secrets set failed_attempts = 14, locked_until = null where profile_id = (select abebe from _f);
+select ok((select locked_until > now() + interval '59 minutes' and locked_until < now() + interval '61 minutes' from public.profile_secrets where profile_id = (select abebe from _f)), '6th failure: 1 hour lock');
+update public.profile_secrets set failed_attempts = 8, locked_until = null where profile_id = (select abebe from _f);
 select tests.authenticate_as_service_role();
-select public.fn_verify_pin((select abebe from _f), tests.pin_digest('000000'));  -- 15th failure
+select public.fn_verify_pin((select abebe from _f), tests.pin_digest('000000'));  -- 9th failure
 select tests.clear_auth();
-select ok((select locked_until > now() + interval '23 hours' from public.profile_secrets where profile_id = (select abebe from _f)), '15th failure: 24 hour lock');
-select is(public.fn_pin_lock_duration(4), null, 'no lock below 5 failures');
-select is(public.fn_pin_lock_duration(5), interval '15 minutes', '5th: 15 minutes');
-select is(public.fn_pin_lock_duration(9), interval '15 minutes', '9th: still 15 minutes (every failure re-locks)');
-select is(public.fn_pin_lock_duration(10), interval '1 hour', '10th: 1 hour');
-select is(public.fn_pin_lock_duration(15), interval '24 hours', '15th: 24 hours');
+select ok((select locked_until > now() + interval '23 hours' from public.profile_secrets where profile_id = (select abebe from _f)), '9th failure: 24 hour lock');
+select is(public.fn_pin_lock_duration(2), null, 'no lock below 3 failures');
+select is(public.fn_pin_lock_duration(3), interval '15 minutes', '3rd: 15 minutes');
+select is(public.fn_pin_lock_duration(5), interval '15 minutes', '5th: still 15 minutes (every failure re-locks)');
+select is(public.fn_pin_lock_duration(6), interval '1 hour', '6th: 1 hour');
+select is(public.fn_pin_lock_duration(9), interval '24 hours', '9th: 24 hours');
 update public.profile_secrets set locked_until = now() - interval '1 second' where profile_id = (select abebe from _f);
 select tests.authenticate_as_service_role();
-select is((select public.fn_verify_pin((select abebe from _f), tests.pin_digest('915370')) ->> 'status'), 'ok', 'after the lock expires the right PIN works again');
+select is((select public.fn_verify_pin((select abebe from _f), tests.pin_digest('9153')) ->> 'status'), 'ok', 'after the lock expires the right PIN works again');
 select tests.clear_auth();
 select is((select failed_attempts from public.profile_secrets where profile_id = (select abebe from _f)), 0, 'and only then does the counter return to 0');
 

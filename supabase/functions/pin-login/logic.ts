@@ -12,7 +12,7 @@ export const RESPONSE_JITTER_MS = 100
 export const STAFF_EMAIL_SUFFIX = '.staff.cafeos.invalid'
 
 // ── validation ──────────────────────────────────────────────────────────────
-// Mirrors restaurants_slug_format, profiles.username check and the 4-6 digit PIN rule (see _shared/pin.ts).
+// Mirrors restaurants_slug_format, profiles.username check and the 4-digit PIN rule (see _shared/pin.ts).
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/
 const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{1,31}$/
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i

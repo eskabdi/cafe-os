@@ -60,7 +60,7 @@ select is(tests.run(format($q$select public.fn_change_user_role(%L, %L)$q$, (sel
 select tests.clear_auth();
 select is(tests.snapshot((select b from _f)), (select b_snap from _snap), 'past_due: nothing changed');
 select tests.authenticate_as_service_role();
-select is((select public.fn_verify_pin((select b_waiter from _f), tests.pin_digest('397258')) ->> 'status'), 'ok', 'past_due: PIN login still works (read-only mode)');
+select is((select public.fn_verify_pin((select b_waiter from _f), tests.pin_digest('3972')) ->> 'status'), 'ok', 'past_due: PIN login still works (read-only mode)');
 select tests.clear_auth();
 
 -- ═════════ suspended: no access at all ═════════
@@ -89,7 +89,7 @@ select tests.authenticate_as((select b_waiter from _f));
 select is(tests.visible_total(), 0::bigint, 'suspended: staff can read nothing either');
 select tests.clear_auth();
 select tests.authenticate_as_service_role();
-select is((select public.fn_verify_pin((select b_waiter from _f), tests.pin_digest('397258')) ->> 'status'), 'invalid', 'suspended: even the correct PIN is refused (bare invalid)');
+select is((select public.fn_verify_pin((select b_waiter from _f), tests.pin_digest('3972')) ->> 'status'), 'invalid', 'suspended: even the correct PIN is refused (bare invalid)');
 select tests.clear_auth();
 select tests.as_anon();
 select is((select public.fn_resolve_tenant_slug('second-cafe')), null::jsonb, 'suspended: the slug resolver answers exactly like an unknown slug');
@@ -117,7 +117,7 @@ select is(tests.run(format($q$select public.fn_update_role_permissions(%L, array
 select is(tests.run(format($q$insert into public.stations (restaurant_id, name) values (%L, 'Ghost')$q$, (select b from _f))), '42501|new row violates row-level security policy for table "stations"|', 'cancelled: INSERT refused');
 select tests.clear_auth();
 select tests.authenticate_as_service_role();
-select is((select public.fn_verify_pin((select b_waiter from _f), tests.pin_digest('397258')) ->> 'status'), 'invalid', 'cancelled: PIN refused');
+select is((select public.fn_verify_pin((select b_waiter from _f), tests.pin_digest('3972')) ->> 'status'), 'invalid', 'cancelled: PIN refused');
 select tests.clear_auth();
 select tests.as_anon();
 select is((select public.fn_resolve_tenant_slug('second-cafe')), null::jsonb, 'cancelled: slug resolves like an unknown slug');

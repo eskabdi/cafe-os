@@ -12,7 +12,7 @@ import {
 } from '../../supabase/functions/staff-create/logic'
 
 const ROLE = '33333333-3333-4333-8333-333333333333'
-const valid = { username: 'abebe', first_name: 'Abebe', role_id: ROLE, pin: '482916' }
+const valid = { username: 'abebe', first_name: 'Abebe', role_id: ROLE, pin: '4829' }
 const body = (o: unknown) => JSON.stringify(o)
 
 describe('parseStaffCreateBody', () => {
@@ -25,7 +25,7 @@ describe('parseStaffCreateBody', () => {
         middle_name: null,
         last_name: null,
         role_id: ROLE,
-        pin: '482916',
+        pin: '4829',
       },
     })
     const r = parseStaffCreateBody(
@@ -45,7 +45,7 @@ describe('parseStaffCreateBody', () => {
         middle_name: 'Worku',
         last_name: null,
         role_id: ROLE,
-        pin: '482916',
+        pin: '4829',
       },
     })
   })
@@ -57,13 +57,13 @@ describe('parseStaffCreateBody', () => {
     ['bad role id', { ...valid, role_id: 'nope' }],
     ['blank first name', { ...valid, first_name: '  ' }],
     ['long name', { ...valid, first_name: 'x'.repeat(61) }],
-    ['numeric pin', { ...valid, pin: 482916 }],
+    ['numeric pin', { ...valid, pin: 4829 }],
     ['short pin', { ...valid, pin: '482' }],
     ['non-string middle name', { ...valid, middle_name: 5 }],
   ])('rejects %s', (_n, input) => {
     expect(parseStaffCreateBody(body(input))).toEqual({ ok: false, error: 'invalid_request' })
   })
-  it.each(['000000', '123456', '121212', '654321'])('reports weak_pin for %s', (pin) => {
+  it.each(['0000', '1234', '1212', '4321'])('reports weak_pin for %s', (pin) => {
     expect(parseStaffCreateBody(body({ ...valid, pin }))).toEqual({ ok: false, error: 'weak_pin' })
   })
   it('rejects empty, malformed, non-object and oversized input', () => {
