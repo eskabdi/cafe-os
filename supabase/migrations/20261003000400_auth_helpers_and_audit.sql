@@ -181,31 +181,6 @@ begin
 end;
 $$;
 
--- ── RLS support helpers that must bypass RLS to avoid orders<->order_items recursion ──
-create or replace function public.is_order_owner(p_order_id uuid)
-returns boolean
-language sql stable security definer set search_path = ''
-as $$
-  select exists (
-    select 1 from public.orders o
-    where o.id = p_order_id
-      and o.restaurant_id = (select public.current_restaurant_id())
-      and o.created_by = (select public.current_user_id())
-  )
-$$;
-
-create or replace function public.order_has_station_access(p_order_id uuid)
-returns boolean
-language sql stable security definer set search_path = ''
-as $$
-  select exists (
-    select 1 from public.order_items oi
-    where oi.order_id = p_order_id
-      and oi.restaurant_id = (select public.current_restaurant_id())
-      and public.has_station_access(oi.station_id)
-  )
-$$;
-
 -- ── audit writers ───────────────────────────────────────────────────────────
 -- fn_write_audit: event row. Actor is ALWAYS auth.uid() (or null for service jobs).
 -- Not executable by clients (migration 0009); only definer RPCs call it, so the explicit
