@@ -18,6 +18,10 @@ create temp table _m on commit drop as
 select array_agg(id order by name) filter (where station_id = (select id from public.stations where restaurant_id = tests.tenant_id('central-cafe') and name = 'Kitchen')) k,
        array_agg(id order by name) filter (where station_id = (select id from public.stations where restaurant_id = tests.tenant_id('central-cafe') and name = 'Bar')) b
 from public.menu_items where restaurant_id = tests.tenant_id('central-cafe');
+-- bulk fixture: skip the per-row user triggers (guards/sync cost ~2 ms per item); station_ids is filled by hand below
+-- and the trigger itself is covered in 21_validation_invariants.test.sql
+alter table public.orders disable trigger user;
+alter table public.order_items disable trigger user;
 insert into public.orders (restaurant_id, day_session_id, order_no, created_by, subtotal, vat_rate_snapshot, vat_amount, total)
 select (select a from _f), (select day1 from _f), 'ORD-' || lpad(g::text, 6, '0'), (select waiter from _f), 100, 15, 15, 115
 from generate_series(1, 20000) g;
@@ -26,6 +30,10 @@ select o.restaurant_id, o.id, mi.id, mi.name, mi.price, 1, mi.station_id, 'x'
 from (select o.*, row_number() over (order by o.order_no) rn from public.orders o where o.restaurant_id = (select a from _f)) o
 join lateral (select m.* from public.menu_items m
               where m.id = case when o.rn % 2 = 0 then (select k[1 + (o.rn % 10)::int] from _m) else (select b[1 + (o.rn % 5)::int] from _m) end) mi on true;
+update public.orders o set station_ids = (select array_agg(distinct oi.station_id) from public.order_items oi where oi.order_id = o.id)
+where o.restaurant_id = (select a from _f);
+alter table public.orders enable trigger user;
+alter table public.order_items enable trigger user;
 analyze public.orders; analyze public.order_items;
 
 create function tests.timed_ms(p_sql text) returns numeric language plpgsql as $$
@@ -38,7 +46,7 @@ create function tests.count_of(p_sql text) returns bigint language plpgsql as $$
 declare r bigint; begin execute p_sql into r; return r; end $$;
 grant execute on function tests.timed_ms(text), tests.count_of(text) to public;
 
-select is((select count(*)::int from public.orders where station_ids <> '{}'), 20000, 'orders.station_ids is maintained by the order_items trigger');
+select is((select count(*)::int from public.orders where station_ids <> '{}'), 20000, 'fixture: every order carries its stations (denormalised array)');
 
 select tests.authenticate_as((select kitchen from _f));
 select ok(tests.timed_ms('select count(*) from public.orders') < 500, 'kitchen user: count(*) over 20k orders < 500 ms (' || tests.timed_ms('select count(*) from public.orders') || ' ms)');
