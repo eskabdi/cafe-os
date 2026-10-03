@@ -3,6 +3,7 @@ import {
   MAX_BODY_BYTES,
   extractBearer,
   interpretPrepare,
+  pinLengthMatchesRole,
   mapRpcError,
   parseStaffCreateBody,
   randomPassword,
@@ -63,6 +64,13 @@ describe('parseStaffCreateBody', () => {
   ])('rejects %s', (_n, input) => {
     expect(parseStaffCreateBody(body(input))).toEqual({ ok: false, error: 'invalid_request' })
   })
+  it('accepts a 6-digit PIN at parse time (the length vs role check happens after the server-side role lookup)', () => {
+    expect(parseStaffCreateBody(body({ ...valid, pin: '480516' })).ok).toBe(true)
+    expect(parseStaffCreateBody(body({ ...valid, pin: '48291' })).ok).toBe(false)
+  })
+  it.each(['000000', '123456', '121212', '654321'])('reports weak_pin for the 6-digit %s', (pin) => {
+    expect(parseStaffCreateBody(body({ ...valid, pin }))).toEqual({ ok: false, error: 'weak_pin' })
+  })
   it.each(['0000', '1234', '1212', '4321'])('reports weak_pin for %s', (pin) => {
     expect(parseStaffCreateBody(body({ ...valid, pin }))).toEqual({ ok: false, error: 'weak_pin' })
   })
@@ -106,13 +114,30 @@ describe('extractBearer', () => {
 
 describe('interpretPrepare', () => {
   it('accepts the exact shape', () =>
-    expect(interpretPrepare({ slug: 'central-cafe', username: 'abebe' }, 'abebe')).toEqual({
+    expect(
+      interpretPrepare({ slug: 'central-cafe', username: 'abebe', role_name: 'Waiter' }, 'abebe'),
+    ).toEqual({
       slug: 'central-cafe',
+      roleName: 'Waiter',
     }))
-  it.each([null, 'x', {}, { slug: 'A B', username: 'abebe' }, { slug: 'central-cafe', username: 'other' }])(
-    'rejects %j',
-    (d) => expect(interpretPrepare(d, 'abebe')).toBeNull(),
-  )
+  it.each([
+    null,
+    'x',
+    {},
+    { slug: 'A B', username: 'abebe', role_name: 'W' },
+    { slug: 'central-cafe', username: 'other', role_name: 'W' },
+    { slug: 'central-cafe', username: 'abebe' },
+    { slug: 'central-cafe', username: 'abebe', role_name: '' },
+  ])('rejects %j', (d) => expect(interpretPrepare(d, 'abebe')).toBeNull())
+})
+
+describe('pinLengthMatchesRole', () => {
+  it('Cashier: 6 digits; others: 4', () => {
+    expect(pinLengthMatchesRole('480516', 'Cashier')).toBe(true)
+    expect(pinLengthMatchesRole('4829', 'Cashier')).toBe(false)
+    expect(pinLengthMatchesRole('4829', 'Waiter')).toBe(true)
+    expect(pinLengthMatchesRole('480516', 'Waiter')).toBe(false)
+  })
 })
 
 describe('mapRpcError / shaping', () => {
@@ -129,6 +154,10 @@ describe('mapRpcError / shaping', () => {
   it('has one fixed body per failure and a Retry-After for throttling', () => {
     expect(shapeFailure('unauthorized')).toMatchObject({ status: 401, body: { error: 'unauthorized' } })
     expect(shapeFailure('weak_pin').body).toEqual({ error: 'weak_pin' })
+    expect(shapeFailure('invalid_pin_length')).toMatchObject({
+      status: 400,
+      body: { error: 'invalid_pin_length' },
+    })
     const r = shapeFailure('rate_limited', 12.7)
     expect(r.status).toBe(429)
     expect(r.headers['Retry-After']).toBe('12')

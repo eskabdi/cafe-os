@@ -51,7 +51,7 @@ describe('StaffLogin', () => {
     await toPinStep(user)
     await user.keyboard('4829{Enter}')
     expect(await screen.findByRole('alert')).toHaveTextContent(PIN_LOGIN_MESSAGES[reason])
-    expect(screen.getByRole('status')).toHaveTextContent('0 of 4')
+    expect(screen.getByRole('status')).toHaveTextContent('0 of 6')
     expect(onSignedIn).not.toHaveBeenCalled()
   })
 
@@ -73,6 +73,17 @@ describe('StaffLogin', () => {
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(PIN_LOGIN_MESSAGES.server_error)
     expect(alert.textContent).not.toContain('secret')
+  })
+
+  it('lets a Cashier sign in with a 6-digit PIN', async () => {
+    const user = userEvent.setup()
+    pinLogin.mockResolvedValue({ ok: true })
+    render(<StaffLogin slug="demo-cafe" onSignedIn={vi.fn()} />)
+    await toPinStep(user)
+    await user.keyboard('480516')
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    await waitFor(() => expect(pinLogin).toHaveBeenCalled())
+    expect(pinLogin).toHaveBeenCalledWith({ restaurant_slug: 'demo-cafe', username: 'abebe', pin: '480516' })
   })
 
   it('keeps the Sign in button disabled until 4 digits are entered', async () => {

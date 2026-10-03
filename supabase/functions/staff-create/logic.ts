@@ -1,7 +1,7 @@
 // Pure logic for the staff-create Edge Function: input validation, synthetic identity, bearer parsing,
 // error mapping and response shaping. No Deno-only imports and no I/O, so Vitest can import this file.
 // Never log or echo a PIN, a digest, the pepper, a token or the generated password from here.
-import { PIN_RE, isWeakPin } from '../_shared/pin.ts'
+import { PIN_RE, isWeakPin, pinLengthForRole } from '../_shared/pin.ts'
 
 export const MAX_BODY_BYTES = 2048
 export const STAFF_EMAIL_SUFFIX = '.staff.cafeos.invalid'
@@ -81,15 +81,24 @@ export function extractBearer(header: string | null | undefined): string | null 
 }
 
 /** Validates the {slug, username} object returned by fn_prepare_staff_creation. */
-export function interpretPrepare(data: unknown, username: string): { slug: string } | null {
+export function interpretPrepare(data: unknown, username: string): { slug: string; roleName: string } | null {
   if (typeof data !== 'object' || data === null) return null
-  const d = data as { slug?: unknown; username?: unknown }
+  const d = data as { slug?: unknown; username?: unknown; role_name?: unknown }
   if (typeof d.slug !== 'string' || !SLUG_RE.test(d.slug) || d.username !== username) return null
-  return { slug: d.slug }
+  if (typeof d.role_name !== 'string' || d.role_name.length === 0 || d.role_name.length > 60) return null
+  return { slug: d.slug, roleName: d.role_name }
+}
+
+/**
+ * The PIN length rule needs the target role's NAME, which only the database knows (fn_prepare_staff_creation looks it
+ * up from role_id): 6 digits for the Cashier role, otherwise 4. The request's own claims are never used for this.
+ */
+export function pinLengthMatchesRole(pin: string, roleName: string): boolean {
+  return pin.length === pinLengthForRole(roleName)
 }
 
 export type FailureKind =
-  | 'invalid_request' | 'weak_pin' | 'unauthorized' | 'forbidden' | 'username_taken' | 'staff_limit_reached'
+  | 'invalid_request' | 'weak_pin' | 'invalid_pin_length' | 'unauthorized' | 'forbidden' | 'username_taken' | 'staff_limit_reached'
   | 'rate_limited' | 'payload_too_large' | 'method_not_allowed' | 'forbidden_origin' | 'server_error'
 
 /**
@@ -128,6 +137,8 @@ export function shapeFailure(kind: FailureKind, retryAfterSec?: number): ShapedR
   switch (kind) {
     case 'invalid_request':
       return { status: 400, body: { error: 'invalid_request' }, headers: { ...NO_STORE } }
+    case 'invalid_pin_length':
+      return { status: 400, body: { error: 'invalid_pin_length' }, headers: { ...NO_STORE } }
     case 'weak_pin':
       return { status: 400, body: { error: 'weak_pin' }, headers: { ...NO_STORE } }
     case 'unauthorized':

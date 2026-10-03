@@ -87,8 +87,11 @@ select tests.clear_auth();
 -- ═════════ S3: delete restriction sweep over every FK ═════════
 -- fixtures: make sure tenant B owns at least one row in EVERY tenant table (same shape as 10_idor_bola)
 insert into public.ingredients (restaurant_id, name, station_id, unit, stock) select b, 'Flour B', b_station, 'kg', 5 from _f;
+-- a menu item that ONLY the recipe uses (no order items), so recipe_lines_menu_fk is the single constraint in the way of deleting it
+insert into public.menu_items (restaurant_id, name, category_id, station_id, price)
+  select f.b, 'Recipe-only B', (select id from public.categories where restaurant_id = f.b limit 1), f.b_station, 5 from _f f;
 insert into public.recipe_lines (restaurant_id, menu_item_id, ingredient_id, qty_per_serving)
-  select f.b, (select id from public.menu_items where restaurant_id = f.b limit 1), i.id, 1 from _f f join public.ingredients i on i.restaurant_id = f.b;
+  select f.b, (select id from public.menu_items where restaurant_id = f.b and name = 'Recipe-only B'), i.id, 1 from _f f join public.ingredients i on i.restaurant_id = f.b;
 insert into public.table_sessions (restaurant_id, table_id, day_session_id, opened_by)
   select b, (select id from public.tables where restaurant_id = f.b limit 1), (select id from public.day_sessions where restaurant_id = f.b and status = 'open'), b_waiter from _f f;
 insert into public.qr_credentials (restaurant_id, table_id, token_hash)
@@ -111,7 +114,7 @@ insert into public.stock_movements (restaurant_id, ingredient_id, station_id, qt
 insert into public.stock_movements (restaurant_id, ingredient_id, station_id, qty_delta, reason, day_session_id, reverses_movement_id)
   select m.restaurant_id, m.ingredient_id, m.station_id, -5, 'reversal', m.day_session_id, m.id from public.stock_movements m where m.restaurant_id = (select b from _f);
 insert into public.order_items (restaurant_id, order_id, menu_item_id, name_snapshot, price_snapshot, qty, station_id, station_name_snapshot)
-  select f.b, o.id, (select id from public.menu_items where restaurant_id = f.b limit 1), 'Special', 100, 1, f.b_station, 'Kitchen'
+  select f.b, o.id, (select id from public.menu_items where restaurant_id = f.b and name <> 'Recipe-only B' order by id limit 1), 'Special', 100, 1, f.b_station, 'Kitchen'
   from _f f join public.orders o on o.restaurant_id = f.b and o.order_no = 'ORD-0001';
 insert into public.vouchers (restaurant_id, voucher_no, order_id, customer_name, total, installment_count, interval_days, created_by, down_payment_method_id)
   select f.b, 'VCH-0001', o.id, 'Cust', 115, 2, 30, f.b_admin, (select id from public.payment_methods where restaurant_id = f.b and name = 'Cash')

@@ -24,7 +24,7 @@
 --     a raw PIN. The seed cannot know a production pepper, so it uses the DEMO PEPPER below, which is only valid
 --     because the guard above passed. For the pin-login Edge Function to accept these PINs locally, run it with
 --         PIN_PEPPER=cafeos-local-demo-pepper-do-not-use-v1
---     central-cafe: hanna=4805 (cashier) yonas=7392 / meron=6028 (waiters) abebe=9153 (kitchen)
+--     central-cafe: hanna=480516 (cashier, 6 digits) yonas=7392 / meron=6028 (waiters) abebe=9153 (kitchen)
 --                   sara=2648 (pastry) kalkidan=8510 (bar)
 --     second-cafe:  waiter=3972   (exists for tenant-isolation tests)
 --   demo QR tokens (hash stored, raw value only here): `demo-<table label lowercase>`, e.g. demo-t01
@@ -137,7 +137,7 @@ begin
   -- PINs go through the production path: fn_set_user_pin(profile, HMAC-SHA256(pin, pepper) as hex). DEMO pepper only.
   perform public.fn_set_user_pin(s.id, encode(extensions.hmac(s.pin, 'cafeos-local-demo-pepper-do-not-use-v1', 'sha256'), 'hex'))
   from (values
-    ('00000000-0000-4000-8000-0000000000a3'::uuid, '4805'), ('00000000-0000-4000-8000-0000000000a4'::uuid, '7392'),
+    ('00000000-0000-4000-8000-0000000000a3'::uuid, '480516'), ('00000000-0000-4000-8000-0000000000a4'::uuid, '7392'),
     ('00000000-0000-4000-8000-0000000000a5'::uuid, '6028'), ('00000000-0000-4000-8000-0000000000a6'::uuid, '9153'),
     ('00000000-0000-4000-8000-0000000000a7'::uuid, '2648'), ('00000000-0000-4000-8000-0000000000a8'::uuid, '8510')
   ) s(id, pin);

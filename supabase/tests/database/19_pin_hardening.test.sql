@@ -11,11 +11,11 @@ select tests.user_id('hanna', 'central-cafe') hanna, tests.user_id('yonas', 'cen
 grant all on _f to public;
 
 -- ── pepper contract ──
-select is(tests.pin_digest('4805'), 'c322f575dc02e97fa786764ad638da86d57e28a251a7589d8d1f4057721bfb62',
+select is(tests.pin_digest('480516'), '4f633837f6f2abccc01eab0a980ee22939c23ae3759d067cbd0641a9eb82d0cb',
           'SQL HMAC-SHA256(pin, demo pepper) equals the Node/Web-Crypto vector used by tests/unit/pin-login-logic.test.ts');
 select tests.authenticate_as_service_role();
-select is((select public.fn_verify_pin((select hanna from _f), tests.pin_digest('4805')) ->> 'status'), 'ok', 'the seeded demo PIN verifies through the peppered digest');
-select is((select public.fn_verify_pin((select hanna from _f), '4805') ->> 'status'), 'invalid', 'the raw PIN does not verify (DB only knows digests)');
+select is((select public.fn_verify_pin((select hanna from _f), tests.pin_digest('480516')) ->> 'status'), 'ok', 'the seeded demo PIN verifies through the peppered digest');
+select is((select public.fn_verify_pin((select hanna from _f), '480516') ->> 'status'), 'invalid', 'the raw PIN does not verify (DB only knows digests)');
 select throws_ok(format($q$select public.fn_set_user_pin(%L, '4829')$q$, (select yonas from _f)), 'P0001', 'invalid_pin', 'fn_set_user_pin refuses a raw PIN');
 select throws_ok(format($q$select public.fn_set_user_pin(%L, repeat('A', 64))$q$, (select yonas from _f)), 'P0001', 'invalid_pin', 'fn_set_user_pin refuses a non-lowercase-hex digest');
 select throws_ok(format($q$select public.fn_set_user_pin(%L, null)$q$, (select yonas from _f)), 'P0001', 'invalid_pin', 'fn_set_user_pin refuses null');

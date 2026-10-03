@@ -122,6 +122,7 @@ declare
   v_email text;
   v_rotation boolean := false;
   v_pin_reset boolean := false;
+  v_pin_rows bigint;
 begin
   v_rid := public.fn_tenant_status_guard(true);
   if not public.has_permission('users.manage') then
@@ -192,9 +193,10 @@ begin
   -- PIN length follows the role (Cashier = 6 digits, others 4): a stored secret of the wrong length is destroyed,
   -- so the user cannot sign in until a PIN of the right length is issued
   if not v_to_admin and not v_rotation then
-    with d as (delete from public.profile_secrets
-    where profile_id = p_profile_id and restaurant_id = v_rid and pin_length <> public.fn_pin_length_for_role(p_role_id) returning 1)
-    select exists (select 1 from d) into v_pin_reset;
+    delete from public.profile_secrets
+    where profile_id = p_profile_id and restaurant_id = v_rid and pin_length <> public.fn_pin_length_for_role(p_role_id);
+    get diagnostics v_pin_rows = row_count;
+    v_pin_reset := v_pin_rows > 0;
   end if;
   update public.profiles
      set role_id = p_role_id,

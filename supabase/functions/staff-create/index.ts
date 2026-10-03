@@ -7,7 +7,7 @@
 //   3. create the Auth user with the SERVICE ROLE: synthetic email <username>@<slug>.staff.cafeos.invalid, random
 //      32-byte password nobody knows, email_confirm = true, app_metadata.staff = true (not user-writable);
 //   4. fn_create_staff_profile(...) AS THE CALLER (the DB re-checks everything, binds email <-> tenant <-> username);
-//   5. fn_set_user_pin(profile, HMAC-SHA256(pin, PIN_PEPPER)) with the service role. The raw PIN never reaches SQL;
+//   5. fn_set_user_pin(profile, HMAC-SHA256(pin, PIN_PEPPER), pin length) with the service role. The raw PIN never reaches SQL;
 //   6. ANY failure after step 3 rolls back: delete the profile (if created) and the Auth user.
 // Returns only { profile_id }. Errors are generic (see logic.ts mapRpcError). Nothing sensitive is logged.
 //
@@ -15,12 +15,13 @@
 import { createClient } from '@supabase/supabase-js'
 import { corsHeaders, parseAllowedOrigins, resolveAllowedOrigin } from '../_shared/cors.ts'
 import { readStaffCreateEnv } from '../_shared/env.ts'
-import { computePinDigest } from '../_shared/pin.ts'
+import { computePinDigest, pinLengthForRole } from '../_shared/pin.ts'
 import { clientIp, createRateLimiter } from '../pin-login/logic.ts'
 import {
   MAX_BODY_BYTES,
   extractBearer,
   interpretPrepare,
+  pinLengthMatchesRole,
   mapRpcError,
   parseStaffCreateBody,
   randomPassword,
@@ -88,6 +89,9 @@ async function createStaff(token: string, input: StaffCreateInput): Promise<Outc
   const prepared = interpretPrepare(prep.data, input.username)
   const email = prepared ? staffEmail(input.username, prepared.slug) : null
   if (!prepared || !email) return { ok: false, kind: 'server_error' }
+  // the PIN length depends on the role NAME (Cashier = 6 digits, others 4), looked up server-side from role_id;
+  // checked BEFORE any Auth user exists. Weak-PIN rules were applied to the raw PIN at parse time.
+  if (!pinLengthMatchesRole(input.pin, prepared.roleName)) return { ok: false, kind: 'invalid_pin_length' }
 
   // 3. the Auth identity (service role)
   const created = await admin.auth.admin.createUser({
@@ -127,7 +131,7 @@ async function createStaff(token: string, input: StaffCreateInput): Promise<Outc
 
     // 5. the PIN, peppered here; the DB never sees it
     const digest = await computePinDigest(input.pin, env.pinPepper)
-    const pin = await admin.rpc('fn_set_user_pin', { p_profile_id: userId, p_pin_digest: digest })
+    const pin = await admin.rpc('fn_set_user_pin', { p_profile_id: userId, p_pin_digest: digest, p_pin_length: pinLengthForRole(prepared.roleName) })
     if (pin.error) {
       await rollback()
       return { ok: false, kind: 'server_error' }

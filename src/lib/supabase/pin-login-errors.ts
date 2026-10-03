@@ -13,7 +13,7 @@ export function failureFromStatus(status: number): PinLoginFailure {
 export const PIN_LOGIN_MESSAGES: Record<PinLoginFailure, string> = {
   invalid_credentials: 'Incorrect username or PIN, or the account is temporarily locked. Try again shortly.',
   rate_limited: 'Too many attempts. Please wait a minute and try again.',
-  invalid_request: 'Enter your username and a 4-digit PIN.',
+  invalid_request: 'Enter your username and your PIN (4-digit PIN, 6 digits for Cashier).',
   network: 'Cannot reach the server. Check your connection and try again.',
   server_error: 'Something went wrong. Please try again.',
 }
@@ -21,6 +21,6 @@ export const PIN_LOGIN_MESSAGES: Record<PinLoginFailure, string> = {
 // Client-side mirror of the Edge Function's input rules (UX only; the server re-validates).
 // Kept in sync with supabase/functions/pin-login/logic.ts; a unit test checks parity.
 export const USERNAME_PATTERN = /^[a-z0-9][a-z0-9._-]{1,31}$/
-export const PIN_PATTERN = /^[0-9]{4}$/
+export const PIN_PATTERN = /^[0-9]{4}$|^[0-9]{6}$/
 export const PIN_MIN_LENGTH = 4
-export const PIN_MAX_LENGTH = 4
+export const PIN_MAX_LENGTH = 6

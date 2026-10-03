@@ -2,12 +2,33 @@
 //
 // The database never sees a raw PIN: Edge Functions send digest = hex(HMAC-SHA256(pin, PIN_PEPPER)) to
 // fn_verify_pin / fn_set_user_pin, which bcrypt it. PIN_PEPPER lives only in the Edge Function environment, so a
-// leaked database cannot be brute-forced offline (a 4-digit PIN has only 10^4 candidates; the lockout is what limits online guessing). The weak-PIN policy is
+// leaked database cannot be brute-forced offline (a 4-digit PIN has only 10^4 candidates, a Cashier's 6-digit PIN 10^6; the lockout is what limits online guessing). The weak-PIN policy is
 // enforced HERE because only here is the raw PIN visible. Never log a PIN, a digest or the pepper.
 
 export const PIN_MIN_LENGTH = 4
-export const PIN_MAX_LENGTH = 4
-export const PIN_RE = /^[0-9]{4}$/
+export const PIN_MAX_LENGTH = 6
+/** Shape accepted on the wire (pin-login cannot know a user's length; it only compares digests): 4 or 6 digits. */
+export const PIN_RE = /^[0-9]{4}$|^[0-9]{6}$/
+
+/**
+ * DOCUMENTED EXCEPTION (user decision 2026-10-03) to the dynamic-domain rule: the role named 'Cashier' signs in with a
+ * 6-digit PIN, every other PIN role with exactly 4. This constant + pinLengthForRole() are the ONLY name-keyed rule in
+ * TypeScript; the SQL twin is fn_pin_length_for_role_name() (migration 0021). The role name must always come from the
+ * database (looked up from role_id server-side), never from the client.
+ */
+export const CASHIER_ROLE_NAME = 'Cashier'
+
+/** Same normalisation as roles.normalized_name (trim, collapse whitespace, lower-case). */
+const normalizeRoleName = (name: string): string => name.trim().replace(/\s+/g, ' ').toLowerCase()
+
+export function pinLengthForRole(roleName: string | null | undefined): 4 | 6 {
+  return typeof roleName === 'string' && normalizeRoleName(roleName) === normalizeRoleName(CASHIER_ROLE_NAME) ? 6 : 4
+}
+
+/** Full set-time policy for a role: exact length for that role, digits only, and not weak. */
+export function isPinAcceptableForRole(pin: string, roleName: string | null | undefined): boolean {
+  return pin.length === pinLengthForRole(roleName) && PIN_RE.test(pin) && !isWeakPin(pin)
+}
 export const MIN_PEPPER_LENGTH = 32
 /** The pepper seed.sql uses for the demo PINs. Valid only where the seed guard passed (local stack / CI). */
 export const DEMO_PEPPER = 'cafeos-local-demo-pepper-do-not-use-v1'

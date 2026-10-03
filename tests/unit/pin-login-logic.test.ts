@@ -23,6 +23,9 @@ import {
   isPepperAllowedFor,
   isUsablePepper,
   isWeakPin,
+  pinLengthForRole,
+  isPinAcceptableForRole,
+  CASHIER_ROLE_NAME,
   DEMO_PEPPER,
 } from '../../supabase/functions/_shared/pin'
 import { corsHeaders, parseAllowedOrigins, resolveAllowedOrigin } from '../../supabase/functions/_shared/cors'
@@ -44,8 +47,8 @@ describe('parsePinLoginBody', () => {
 
   it.each([
     ['3 digits', { ...valid, pin: '123' }],
-    ['7 digits (maximum is 6)', { ...valid, pin: '48290' }],
-    ['9 digits', { ...valid, pin: '4829037' }],
+    ['5 digits (only 4 or 6 exist)', { ...valid, pin: '48290' }],
+    ['7 digits (maximum is 6)', { ...valid, pin: '4829037' }],
     ['letters in pin', { ...valid, pin: '12a4' }],
     ['numeric pin', { ...valid, pin: 1234 }],
     ['Arabic-Indic digits', { ...valid, pin: '١٢٣٤' }],
@@ -74,7 +77,7 @@ describe('parsePinLoginBody', () => {
       expect(USERNAME_PATTERN.test(u.trim().toLowerCase())).toBe(server)
     }
     // the client pattern may be looser (UX only) but must never reject what the server accepts
-    for (const p of ['1234', '4829', '12345', '123', 'abcd', '12 4']) {
+    for (const p of ['1234', '4829', '480516', '12345', '123', 'abcd', '12 4']) {
       if (parsePinLoginBody(body({ ...valid, pin: p })).ok) expect(PIN_PATTERN.test(p)).toBe(true)
     }
   })
@@ -257,8 +260,8 @@ describe('CORS', () => {
 
 describe('peppered PIN digest', () => {
   it('matches the HMAC-SHA256 vector the pgTAP suite checks against SQL (hex, 64 chars)', async () => {
-    expect(await computePinDigest('4805', DEMO_PEPPER)).toBe(
-      'c322f575dc02e97fa786764ad638da86d57e28a251a7589d8d1f4057721bfb62',
+    expect(await computePinDigest('480516', DEMO_PEPPER)).toBe(
+      '4f633837f6f2abccc01eab0a980ee22939c23ae3759d067cbd0641a9eb82d0cb',
     )
   })
   it('depends on the pepper and on the PIN', async () => {
@@ -293,7 +296,7 @@ describe('isWeakPin', () => {
     'abcd',
     '123456',
   ])('rejects %s', (p) => expect(isWeakPin(p)).toBe(true))
-  it.each(['4829', '4805', '7392', '6028', '9153', '8510'])('accepts %s', (p) =>
+  it.each(['4829', '7392', '6028', '9153', '8510', '480516', '264813'])('accepts %s', (p) =>
     expect(isWeakPin(p)).toBe(false),
   )
 })
@@ -316,5 +319,31 @@ describe('demo pepper is local-only', () => {
   )
   it('any other pepper is fine anywhere', () => {
     expect(isPepperAllowedFor('x'.repeat(40), 'https://abcd.supabase.co')).toBe(true)
+  })
+})
+
+describe('PIN length by role (documented Cashier exception)', () => {
+  it('Cashier needs 6 digits, every other role exactly 4', () => {
+    expect(CASHIER_ROLE_NAME).toBe('Cashier')
+    expect(pinLengthForRole('Cashier')).toBe(6)
+    expect(pinLengthForRole('  cashier ')).toBe(6) // same normalisation as roles.normalized_name
+    expect(pinLengthForRole('CASHIER')).toBe(6)
+    for (const n of ['Waiter', 'Kitchen', 'Bar', 'Cashier Assistant', 'Cashiers', '', null, undefined]) {
+      expect(pinLengthForRole(n)).toBe(4)
+    }
+  })
+  it('applies length AND the weak-PIN rules', () => {
+    expect(isPinAcceptableForRole('4829', 'Waiter')).toBe(true)
+    expect(isPinAcceptableForRole('480516', 'Waiter')).toBe(false)
+    expect(isPinAcceptableForRole('480516', 'Cashier')).toBe(true)
+    expect(isPinAcceptableForRole('4829', 'Cashier')).toBe(false)
+    expect(isPinAcceptableForRole('123456', 'Cashier')).toBe(false)
+    expect(isPinAcceptableForRole('111111', 'Cashier')).toBe(false)
+    expect(isPinAcceptableForRole('121212', 'Cashier')).toBe(false)
+    expect(isPinAcceptableForRole('1234', 'Waiter')).toBe(false)
+  })
+  it('pin-login accepts both lengths on the wire (it cannot know the user)', () => {
+    expect(parsePinLoginBody(JSON.stringify({ ...valid, pin: '480516' })).ok).toBe(true)
+    expect(parsePinLoginBody(JSON.stringify({ ...valid, pin: '4829' })).ok).toBe(true)
   })
 })
