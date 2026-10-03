@@ -3,7 +3,8 @@
 #   initdb temp cluster -> Supabase-compat shim -> migrations -> seed -> pgTAP (pg_prove) -> teardown
 #
 # Usage: scripts/db-test.sh [--keep] [--no-tests] [test-file ...]
-# Env:   PG_BIN (default: pg_config --bindir or /usr/lib/postgresql/16/bin), DB_TEST_PORT (default 54329)
+# Env:   PG_BIN (default: PostgreSQL 15 if installed, matching supabase/config.toml major_version = 15; else
+#        pg_config --bindir), DB_TEST_PORT (default 54329)
 #
 # Real-stack equivalents (same migrations / seed / tests; this is what CI runs):
 #   supabase db reset   = migrations + supabase/seed.sql  (config.toml [db.seed] sql_paths = ["./seed.sql"])
@@ -20,7 +21,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PG_BIN="${PG_BIN:-$( (command -v pg_config >/dev/null && pg_config --bindir) || echo /usr/lib/postgresql/16/bin)}"
+if [ -z "${PG_BIN:-}" ]; then
+  if [ -x /usr/lib/postgresql/15/bin/initdb ]; then PG_BIN=/usr/lib/postgresql/15/bin
+  else PG_BIN="$( (command -v pg_config >/dev/null && pg_config --bindir) || echo /usr/lib/postgresql/16/bin)"; fi
+fi
 PORT="${DB_TEST_PORT:-54329}"
 TESTS_DIR="$ROOT/supabase/tests"
 KEEP=0; RUN_TESTS=1; FILES=()
@@ -81,6 +85,8 @@ if [ "$RUN_TESTS" -eq 1 ]; then
   cd "$TESTS_DIR"
   if [ "${#FILES[@]}" -eq 0 ]; then
     pg_prove --ext .pg --ext .sql -r --verbose .
+    echo "==> pgTAP, second pass (the suite must be re-runnable on the same database: helper install/cleanup is idempotent)"
+    pg_prove --ext .pg --ext .sql -r .
   else
     # explicit subset: helpers (00_helpers.test.sql) always go first, then the requested files.
     # (On the real stack a single-file run needs the helpers to be installed already.)

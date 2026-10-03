@@ -1,6 +1,6 @@
 -- Immutability, system role, platform boundary, RPC authorization
 begin;
-select * from no_plan();
+select plan(50);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,

@@ -3,7 +3,7 @@
 -- never reach a client (PIN hash, token hashes), Realtime publication, default privileges.
 -- A failure here after a new migration means the new object needs the same hardening (or a reviewed allowlist entry).
 begin;
-select * from no_plan();
+select plan(59);
 
 -- ═════════ SECURITY DEFINER / function hygiene ═════════
 create temp view _fn as

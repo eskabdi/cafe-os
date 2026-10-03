@@ -2,7 +2,7 @@
 -- PIN login still work, every write and write-RPC is refused). suspended / cancelled: no access of any kind,
 -- indistinguishable from "no such tenant" for the resolver and the PIN check. Other tenants are unaffected.
 begin;
-select plan(61);
+select plan(53);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,

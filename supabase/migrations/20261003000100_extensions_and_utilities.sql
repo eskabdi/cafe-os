@@ -1,6 +1,6 @@
 -- 0001  Extensions + generic utility functions
 -- Valid on the real Supabase stack (extensions already live in schema "extensions")
--- and on the plain-Postgres test shim (supabase/tests/shim/00_supabase_shim.sql).
+-- and on the plain-Postgres test shim (scripts/db/shim/00_supabase_shim.sql).
 
 create schema if not exists extensions;
 create extension if not exists pgcrypto with schema extensions;

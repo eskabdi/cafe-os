@@ -1,6 +1,6 @@
 -- Cross-tenant RLS, permission scoping, tenant suspension
 begin;
-select * from no_plan();
+select plan(46);
 
 -- fixtures (superuser): one order per tenant + staff orders in tenant A
 create temp table _f on commit drop as

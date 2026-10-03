@@ -2,7 +2,7 @@
 -- RPC that takes a UUID. Denial alone is not enough: the outcome must be identical to an id that exists
 -- nowhere (no existence oracle), and B's data must be byte-for-byte unchanged afterwards.
 begin;
-select * from no_plan();
+select plan(72);
 
 -- ── fixtures: make sure tenant B owns at least one row in EVERY tenant table ──
 create temp table _f on commit drop as

@@ -30,16 +30,35 @@ jobs:
 
   database:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Lint migrations (forbidden patterns)
+        run: node scripts/check-forbidden-patterns.mjs
+      - name: Test layout guard (supabase test db runs EVERY .sql/.pg file under supabase/tests)
+        run: |
+          bad="$(find supabase/tests -type f ! -name '*.test.sql' -print)"
+          if [ -n "$bad" ]; then echo "only *.test.sql pgTAP files may live in supabase/tests:"; echo "$bad"; exit 1; fi
+          for f in $(find supabase/tests -type f -name '*.test.sql'); do
+            grep -qE 'plan\(|no_plan\(' "$f" || { echo "no pgTAP plan in $f"; exit 1; }
+          done
       - uses: supabase/setup-cli@v1
         with:
           version: latest
       - run: supabase start
+      # applies supabase/migrations/*.sql then supabase/seed.sql (config.toml [db.seed] sql_paths = ["./seed.sql"])
       - run: supabase db reset
+      # pgTAP: pg_prove --ext .pg --ext .sql -r supabase/tests (helpers 00_, adversarial suites 10_-16_, cleanup 99_)
       - run: supabase test db
-      - name: Lint migrations (forbidden patterns)
-        run: node scripts/check-forbidden-patterns.mjs
+      # the suite must be re-runnable on the same database (helper install/cleanup idempotent)
+      - run: supabase test db
+      - name: Helper schema must not outlive the run
+        run: |
+          n="$(PGPASSWORD=postgres psql -h 127.0.0.1 -p 54322 -U postgres -d postgres -Atc "select count(*) from pg_namespace where nspname = 'tests'")"
+          test "$n" = "0"
       - if: always()
         run: supabase stop --no-backup
 

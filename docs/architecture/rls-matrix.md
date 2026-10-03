@@ -1,4 +1,4 @@
-# RLS matrix (migration 0007; 80 policies; RLS enabled AND forced on every public table)
+# RLS matrix (migrations 0007 + 0010; 80 policies; RLS enabled AND forced on every public table)
 
 Helpers (SECURITY DEFINER, empty search_path, identity from `profiles` via `auth.uid()`, never from JWT claims):
 `current_restaurant_id()`, `current_user_id()`, `current_role_id()`, `has_permission(key)`, `has_station_access(station_id)`,
@@ -32,10 +32,28 @@ Suspended/cancelled tenants resolve to NULL (no access); `past_due` is read-only
 | order_items | T + `orders.view` + (`orders.view_all` or station access or own order) | none | none | none |
 | payments | T + `payments.view` | none (fn_confirm_payment later) | trigger-blocked for all roles | trigger-blocked for all roles |
 | vouchers, installments | T + `vouchers.view` | none | none | none |
-| expenses | T + `expenses.view`/`expenses.manage` | T + `expenses.manage` + W (actor, day, method snapshot set by trigger) | same; frozen once its day is closed | same; frozen once its day is closed |
+| expenses | T + `expenses.view`/`expenses.manage` | T + `expenses.manage` + W (actor, day, method snapshot set by trigger; **requires an open business day**, else `day_closed`; a foreign `restaurant_id` is refused with the RLS 42501 before any lookup) | same; frozen once its day is closed | same; frozen once its day is closed |
 
 Policies per table: admin_audit_log 1, audit_logs 1, categories 4, customer_sessions 1, day_sessions 1, expense_categories 4, expenses 4,
 ingredients 4, installments 1, menu_items 4, order_items 1, orders 1, payment_methods 4, payments 1, permissions 1, plans 5,
 platform_admins 3, platform_invoices 4, profiles 2, qr_credentials 1, recipe_lines 4, restaurants 3, role_permissions 1,
 role_station_access 1, roles 4, stations 4, stock_movements 1, subscriptions 4, table_areas 4, table_sessions 1, tables 4, vouchers 1;
 profile_secrets, tenant_counters, idempotency_keys: 0 (deny all).
+
+## Migration 0010 hardening (found by the adversarial suite, `supabase/tests/database/1*_*.test.sql`)
+- **Realtime**: `qr_credentials` was removed from `supabase_realtime`. postgres_changes streams whole rows (column privileges do not apply),
+  which would have sent `token_hash` to subscribers. Accepted residual: `orders.public_token_hash` (sha256 of a random tracking token) is still
+  in the stream because `orders` needs REPLICA IDENTITY FULL; moving it to a side table is a Phase-4 option. Every published table has RLS
+  enabled+forced and a `restaurant_id` (asserted by `13_security_hygiene`).
+- `restaurants.branding.logo_path` must start with `restaurants/<own id>/` (CHECK `restaurants_logo_own_tenant_check`).
+- `platform_admins` insert/update of `id` is refused when the id is a tenant profile (AFTER trigger `trg_guard_platform_admin`; a BEFORE trigger
+  would have been an existence oracle ahead of the RLS check).
+- `fn_expense_context` refuses a foreign `restaurant_id` first and requires an open day.
+
+## Hygiene invariants asserted from the catalogs (`13_security_hygiene`)
+Every function in `public` pins `search_path`; EXECUTE for PUBLIC = none, anon = `fn_err`, `fn_resolve_tenant_slug`, authenticated = the reviewed list
+(adding a client-callable function fails the test until the list is updated consciously); no view, materialized view or foreign table without
+`security_invoker` (none exist); deny-all tables (`profile_secrets`, `tenant_counters`, `idempotency_keys`) carry no client privilege; no client
+privilege on any `*hash*/*secret*/*token*/*password*` column; no `USING (true)` / FOR ALL policy; the total policy count (80) is pinned to this document.
+**Every new migration that adds a function must `revoke all on function ... from public, anon, authenticated` explicitly** (Postgres grants PUBLIC
+execute by default and a schema-level default privilege cannot undo it).
