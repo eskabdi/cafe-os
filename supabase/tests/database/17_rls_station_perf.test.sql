@@ -1,7 +1,7 @@
 -- H1: station-scoped RLS is resolved once per statement. 20k orders in one tenant; a kitchen-role user counting
 -- them must finish well under a second (it took ~15 s with per-row has_station_access / order_has_station_access).
 begin;
-select plan(9);
+select plan(8);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a,

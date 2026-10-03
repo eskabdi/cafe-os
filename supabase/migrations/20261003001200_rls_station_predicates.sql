@@ -67,6 +67,19 @@ revoke all on function public.fn_sync_order_stations() from public, anon, authen
 create trigger trg_sync_order_stations after insert or delete or update of station_id, order_id on public.order_items
   for each row execute function public.fn_sync_order_stations();
 
+-- is_order_owner ran two extra definer lookups (current_restaurant_id/current_user_id) per ITEM row. The policy that
+-- calls it already pins the tenant (restaurant_id = current_restaurant_id()), and orders.created_by is a
+-- tenant-composite FK, so ownership reduces to created_by = auth.uid().
+create or replace function public.is_order_owner(p_order_id uuid)
+returns boolean
+language sql stable security definer set search_path = ''
+as $$
+  select exists (
+    select 1 from public.orders o
+    where o.id = p_order_id and o.created_by = (select auth.uid())
+  )
+$$;
+
 -- ── policies ────────────────────────────────────────────────────────────────
 alter policy orders_select on public.orders
   using (restaurant_id = (select public.current_restaurant_id())
