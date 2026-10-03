@@ -274,7 +274,7 @@ create table public.orders (
     references public.profiles (restaurant_id, id) on delete restrict,
   constraint orders_cancelled_by_fk foreign key (restaurant_id, cancelled_by)
     references public.profiles (restaurant_id, id) on delete restrict,
-  constraint orders_total_check check (total = subtotal + vat_amount),
+  constraint orders_total_sum_check check (total = subtotal + vat_amount),
   constraint orders_cancelled_check check ((status = 'cancelled') = (cancelled_at is not null)),
   constraint orders_staff_creator_check check (source <> 'staff' or created_by is not null)
 );
