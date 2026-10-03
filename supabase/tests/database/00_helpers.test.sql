@@ -95,6 +95,19 @@ exception when others then
     regexp_replace(coalesce(v_detail, ''), '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '<uuid>', 'g');
 end $$;
 
+-- Existence-oracle probe. The template holds the token {id}; it is run once with a REAL foreign id and once
+-- with a random id that exists nowhere. Returns the common outcome (tests.run format) when both are
+-- indistinguishable, or 'LEAK|real=...|unknown=...' when the caller could tell them apart.
+create or replace function tests.oracle(p_template text, p_real uuid) returns text
+language plpgsql as $$
+declare
+  v_real text := tests.run(replace(p_template, '{id}', quote_literal(p_real::text)));
+  v_fake text := tests.run(replace(p_template, '{id}', quote_literal(gen_random_uuid()::text)));
+begin
+  if v_real = v_fake then return v_real; end if;
+  return 'LEAK|real=' || v_real || '|unknown=' || v_fake;
+end $$;
+
 -- Minimal auth.users row for fixtures (columns that exist on both GoTrue and the plain-Postgres shim).
 create or replace function tests.create_auth_user(p_id uuid, p_email text) returns uuid
 language plpgsql as $$

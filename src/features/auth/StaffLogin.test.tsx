@@ -62,14 +62,13 @@ describe('StaffLogin', () => {
 
   it('maps a thrown error to the generic server message', async () => {
     const user = userEvent.setup()
-    pinLogin.mockImplementation(() => {
-      throw new Error('boom: secret detail')
-    })
+    // a bare thenable (no native promise) so the spy layer does not track a rejected promise
+    pinLogin.mockImplementation(() => ({
+      then: (_ok: unknown, fail: (e: unknown) => void) => fail(new Error('boom: secret detail')),
+    }))
     render(<StaffLogin slug="demo-cafe" />)
     await toPinStep(user)
     await user.keyboard('1234{Enter}')
-    await new Promise((r) => setTimeout(r, 50))
-    screen.debug(undefined, 4000)
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(PIN_LOGIN_MESSAGES.server_error)
     expect(alert.textContent).not.toContain('secret')
