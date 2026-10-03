@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react'
-import { createBrowserRouter, Outlet, useParams } from 'react-router-dom'
+import { createBrowserRouter, Outlet, useParams, type RouteObject } from 'react-router-dom'
 import {
   AuthProvider,
   PlatformLoginPage,
@@ -48,7 +48,7 @@ function PlatformGuard() {
 
 // `/r/:slug/*` is only a pre-auth tenant resolver. Tenant identity always comes
 // from the authenticated session, never from the slug (CLAUDE.md, multi-tenancy).
-export const router = createBrowserRouter([
+export const routes: RouteObject[] = [
   {
     element: <Root />,
     children: [
@@ -83,4 +83,6 @@ export const router = createBrowserRouter([
       { path: '*', element: <NotFoundPage /> },
     ],
   },
-])
+]
+
+export const router = createBrowserRouter(routes)

@@ -1,0 +1,16 @@
+{
+  "$comment": "Documented exemptions for scripts/check-forbidden-patterns.mjs. Every entry needs file, rule and a non-empty reason; `match` (optional) narrows it to a matched substring. Prefer fixing the code. SQL seed data should use `-- forbidden-patterns: allow-seed-data` ... `-- forbidden-patterns: end` markers instead.",
+  "entries": [
+    {
+      "file": "supabase/migrations/20261003000200_platform_tables.sql",
+      "rule": "sql-domain-literal-list",
+      "match": "'telebirr','chapa','manual_bank_transfer'",
+      "reason": "platform_invoices.method is the PLATFORM's own billing channel (SaaS subscription payments), not a tenant payment_methods domain row. Interim: replace with an allow-seed-data marker or a lookup table in a follow-up migration."
+    },
+    {
+      "file": "supabase/seed.sql",
+      "rule": "sql-name-literal-comparison",
+      "reason": "Local/demo seed data resolves its own freshly inserted demo rows by name to wire FKs; seed.sql never runs in production. Interim: wrap those statements in -- forbidden-patterns: allow-seed-data / end markers, then delete these entries."
+    }
+  ]
+}
