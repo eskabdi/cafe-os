@@ -22,4 +22,6 @@
 | Seed safety | `seed.sql` aborts unless the local-stack JWT secret is present or `app.allow_demo_seed=on`; **never run the seed against a hosted project** | `scripts/db-test.sh` (refusal checks) |
 | Slug resolver | `fn_resolve_tenant_slug` returns only id/name/branding; unknown/suspended identical | `02_tenant_isolation`, `10_idor_bola` |
 
+See `deploy-checklist.md` for the manual hosted-project steps (Auth hook, MFA, secrets, never seed / never `supabase test db`).
+
 Not covered yet (later phases): Storage policies, Realtime channel authorization against a live Realtime server (the DB side - publication contents, RLS on published tables - is asserted), order/payment/stock RPCs, rate limiting of the resolver (edge/WAF), the Edge Functions and the Auth hook have never been run against real GoTrue/Deno (hook unit-tested as SQL only), the identity-rotation Edge Function (the RPC exists), idempotency-key retention, Realtime DELETE-event key leakage.

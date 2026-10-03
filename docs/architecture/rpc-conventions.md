@@ -52,7 +52,7 @@ raise exception using errcode = 'P0001', message = '<stable_machine_code>', deta
 | `fn_user_auth_method(user_id)` | service_role, supabase_auth_admin | helper (the hook itself no longer needs it) |
 | `fn_tenant_status_guard(write)` | internal | see error table |
 | `fn_suspend_tenant` / `fn_reactivate_tenant` | platform super admin | require a reason, write `admin_audit_log` + tenant audit |
-| `fn_resolve_tenant_slug(slug)` | anon | id, name, branding only; unknown/suspended/cancelled => NULL |
+| `fn_resolve_tenant_slug(slug)` | anon | name and branding only (**no tenant id** since 0020; pin-login resolves the id with the service role); unknown/suspended/cancelled => NULL |
 | `fn_get_session_context()` | authenticated | profile, tenant (no tin/opening_float), role, permission keys, station ids, writable flag, `open_day`, and for platform admins `platform_mfa` |
 | `fn_idempotency_begin(key, command, request_hash)` / `fn_idempotency_complete(key, command, result)` | internal | unique per (tenant, key, command); a payload hash is mandatory |
 | `fn_write_audit`, `fn_write_admin_audit`, `fn_next_number` | internal | `fn_write_audit(event, record, restaurant?)`: actor is only `auth.uid()` (no actor parameter, no direct EXECUTE for anyone) |
