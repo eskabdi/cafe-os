@@ -31,7 +31,11 @@
 -- Names below are DATA: no application code depends on them. Safe to re-run (idempotent).
 
 
--- ── GUARD: must be the first executable statement ──
+-- ── GUARD: must be the first executable statement. The whole file is ONE transaction: when the guard raises,
+-- nothing below runs or persists, even under plain `psql -f` without ON_ERROR_STOP (the failed transaction stays
+-- aborted until the final COMMIT, which then rolls back). ──
+begin;
+
 do $guard$
 begin
   if coalesce(current_setting('app.allow_demo_seed', true), '') <> 'on'
@@ -46,6 +50,17 @@ $guard$;
 
 -- act as the service role for the duration of the seed (fn_provision_tenant / fn_set_user_pin require it)
 select set_config('request.jwt.claims', '{"role":"service_role"}', false);
+
+-- Local demo platform admin: it has no TOTP factor and platform admins need aal2 in production (migration 0015). On the
+-- local stack opt the DATABASE out so the demo console is usable; takes effect for NEW sessions. Needs ownership of the
+-- database: if the role lacks it we only warn (set it yourself: alter database postgres set app.platform_mfa_required = 'off').
+do $mfa$
+begin
+  execute format('alter database %I set app.platform_mfa_required to %L', current_database(), 'off');
+exception when insufficient_privilege then
+  raise warning 'could not set app.platform_mfa_required=off; the demo platform admin needs aal2 (enrol TOTP) or run: alter database % set app.platform_mfa_required to ''off''', current_database();
+end
+$mfa$;
 
 -- ── platform plans & admin ──
 insert into public.plans (name, price_etb_monthly, max_staff, max_menu_items, features) values
@@ -81,6 +96,7 @@ values ('00000000-0000-4000-8000-0000000000c1', 'Platform Admin', 'platform_supe
 on conflict (id) do nothing;
 
 -- ═════════ Tenant 1: Central Cafe ═════════
+-- forbidden-patterns: allow-seed-data (demo rows are resolved by their own freshly inserted names; seed never runs in production)
 do $seed$
 declare
   v_plan uuid := (select id from public.plans where name = 'Growth');
@@ -232,8 +248,10 @@ begin
   where t.restaurant_id = v_rid and t.label in ('T01','T03','T05','T07','T09','V01');
 end
 $seed$;
+-- forbidden-patterns: end
 
 -- ═════════ Tenant 2: minimal, for isolation tests ═════════
+-- forbidden-patterns: allow-seed-data
 do $seed$
 declare
   v_plan uuid := (select id from public.plans where name = 'Starter');
@@ -264,5 +282,8 @@ begin
   select v_rid, a.id, 'B01', 2 from public.table_areas a where a.restaurant_id = v_rid and a.name = 'Main Hall';
 end
 $seed$;
+-- forbidden-patterns: end
 
 select set_config('request.jwt.claims', '', false);
+
+commit;

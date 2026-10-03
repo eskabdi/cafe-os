@@ -2,7 +2,7 @@
 // The service-role key is read ONLY here, inside the function runtime. It is never returned,
 // logged, or forwarded to a client.
 
-import { isUsablePepper } from './pin.ts'
+import { isPepperAllowedFor, isUsablePepper } from './pin.ts'
 
 export interface PinLoginEnv {
   supabaseUrl: string
@@ -20,6 +20,8 @@ export function readPinLoginEnv(): PinLoginEnv | null {
   const pinPepper = Deno.env.get('PIN_PEPPER')
   // a missing or short pepper disables the function (fail closed): a weak pepper defeats its purpose
   if (!supabaseUrl || !serviceRoleKey || !anonKey || !isUsablePepper(pinPepper)) return null
+  // the public demo pepper (seed.sql) must never protect a hosted project's PINs
+  if (!isPepperAllowedFor(pinPepper, supabaseUrl)) return null
   return { supabaseUrl, serviceRoleKey, anonKey, allowedOrigins: Deno.env.get('ALLOWED_ORIGINS'), pinPepper }
 }
 

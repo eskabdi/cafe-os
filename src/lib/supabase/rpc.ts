@@ -27,12 +27,20 @@ const tenantSchema = z
   .object({
     id: z.string().uuid(),
     name: z.string(),
+    // mirrors restaurants_branding_check / restaurants_branding_shape_check: whitelisted keys, hex colours,
+    // tenant-scoped storage path only
     branding: z
       .object({
-        logo_path: z.string().nullable().optional(),
-        primary_color: z.string().nullable().optional(),
-        accent_color: z.string().nullable().optional(),
+        logo_path: z
+          .string()
+          .regex(/^restaurants\/[0-9a-f-]{36}\/[A-Za-z0-9._/-]{1,200}$/)
+          .refine((v) => !v.includes('..'))
+          .nullable()
+          .optional(),
+        primary_color: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional(),
+        accent_color: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional(),
       })
+      .strict()
       .partial()
       .optional(),
   })

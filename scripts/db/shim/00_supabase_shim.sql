@@ -61,13 +61,17 @@ create unique index users_email_idx on auth.users (lower(email));
 alter table auth.users enable row level security;
 
 -- MFA factors (subset of GoTrue's auth.mfa_factors): fn_platform_mfa_satisfied / fn_require_step_up read it
+create type auth.factor_type as enum ('totp', 'webauthn', 'phone');
+create type auth.factor_status as enum ('unverified', 'verified');
+-- deliberately NO defaults on id / created_at / updated_at: like GoTrue's table, so tests cannot rely on them
 create table auth.mfa_factors (
-  id uuid primary key default gen_random_uuid(),
+  id uuid primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
   friendly_name text,
-  factor_type text not null default 'totp',
-  status text not null default 'unverified' check (status in ('unverified','verified')),
-  created_at timestamptz default now()
+  factor_type auth.factor_type not null,
+  status auth.factor_status not null,
+  created_at timestamptz not null,
+  updated_at timestamptz not null
 );
 alter table auth.mfa_factors enable row level security;
 

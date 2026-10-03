@@ -15,7 +15,7 @@
 --  L7   (only the agreed subset) payments: a reversal is for the same order / voucher / method as the original and for
 --       at most its amount; orders: table_id must be the table of its table_session. (order_items.station_id =
 --       menu_items.station_id is enforced in 0012.)
---  M9   missing foreign-key indexes (see supabase/tests/database/17_hardening_validation.test.sql for the rule and the
+--  M9   missing foreign-key indexes (see supabase/tests/database/21_validation_invariants.test.sql for the rule and the
 --       reviewed exceptions: actor columns such as created_by, whose parents are never deleted).
 
 -- ── M4 ──────────────────────────────────────────────────────────────────────

@@ -27,8 +27,8 @@ grant all on _f to public;
 insert into public.ingredients (restaurant_id, name, station_id, unit, stock) select b, 'Flour B', b_station, 'kg', 5 from _f;
 insert into public.recipe_lines (restaurant_id, menu_item_id, ingredient_id, qty_per_serving)
   select f.b, f.b_menu, i.id, 1 from _f f join public.ingredients i on i.restaurant_id = f.b;
-insert into public.stock_movements (restaurant_id, ingredient_id, station_id, qty_delta, reason)
-  select f.b, i.id, i.station_id, 5, 'opening' from _f f join public.ingredients i on i.restaurant_id = f.b;
+insert into public.stock_movements (restaurant_id, ingredient_id, station_id, qty_delta, reason, day_session_id)
+  select f.b, i.id, i.station_id, 5, 'opening', f.b_day from _f f join public.ingredients i on i.restaurant_id = f.b;
 insert into public.table_sessions (restaurant_id, table_id, day_session_id) select b, b_table, b_day from _f;
 insert into public.qr_credentials (restaurant_id, table_id, token_hash) select b, b_table, repeat('b', 64) from _f;
 insert into public.customer_sessions (restaurant_id, table_session_id, qr_credential_id, session_token_hash, expires_at)

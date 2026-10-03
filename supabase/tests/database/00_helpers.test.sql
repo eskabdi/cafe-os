@@ -124,6 +124,15 @@ begin
   return p_id;
 end $$;
 
+-- A verified TOTP factor exactly as GoTrue stores it (real auth.mfa_factors has NO defaults for id/created_at/updated_at
+-- and typed factor_type/status columns: supply everything, cast from text).
+create or replace function tests.add_verified_factor(p_user_id uuid) returns void
+language plpgsql as $$
+begin
+  insert into auth.mfa_factors (id, user_id, friendly_name, factor_type, status, created_at, updated_at)
+  values (gen_random_uuid(), p_user_id, 'test-totp', 'totp', 'verified', now(), now());
+end $$;
+
 -- Every public table that carries a restaurant_id column (the tenant tables), by name.
 create or replace function tests.tenant_tables() returns setof text
 language sql stable as $$

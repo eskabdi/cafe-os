@@ -4,18 +4,18 @@
 --    digest = hex(HMAC-SHA256(pin, PIN_PEPPER)) with a secret that lives only in the Edge Function environment and
 --    pass the 64-hex digest to fn_set_user_pin / fn_verify_pin, which bcrypt (cost 10) that digest. A leaked database
 --    (backup, replica, SQL injection) therefore cannot be brute-forced offline without the pepper: the PIN space is
---    only 10^6 for six digits, which bcrypt alone would not protect.
---    Consequence: the weak-PIN policy (4-6 digits, no repeated / sequential PINs) is enforced where the raw PIN is
+--    only 10^4 for four digits, which bcrypt alone would not protect (the lockout is what limits ONLINE guessing).
+--    Consequence: the weak-PIN policy (exactly 4 digits, no repeated / sequential / common PINs) is enforced where the raw PIN is
 --    visible, in the Edge Functions (supabase/functions/_shared/pin.ts). SQL can only insist on the digest format
---    (a raw 4-8 digit PIN, or anything else, is refused with invalid_pin).
+--    (a raw 4-digit PIN, or anything else, is refused with invalid_pin).
 --    Pre-existing hashes were bcrypt(raw PIN) and no longer verify: PINs must be set again (seed does so).
 --  * SERIALISATION. fn_verify_pin first takes the profile_secrets row FOR UPDATE, so concurrent guesses against one
---    account are evaluated strictly one after the other: the 6th..Nth concurrent guess sees the lock set by the 5th.
---    (Measured before this change: 60 concurrent sessions drove failed_attempts to 8, not 5.)
+--    account are evaluated strictly one after the other: the 4th..Nth concurrent guess sees the lock set by the 3rd.
+--    (Measured before this change: 60 concurrent sessions drove failed_attempts well past the threshold.)
 --  * ESCALATING, NON-RESETTING LOCK. failed_attempts only returns to 0 after a successful verify or an explicit
 --    fn_reset_pin_lockout (users.manage, audited). It no longer resets when a lock merely expires, so an attacker
---    cannot farm a fresh window every 15 minutes. From the 5th failure on EVERY further failure re-locks:
---    failures 5-9 => 15 minutes, 10-14 => 1 hour, 15+ => 24 hours. While locked, a PIN is rejected WITHOUT being
+--    cannot farm a fresh window every 15 minutes. From the 3rd failure on EVERY further failure re-locks:
+--    failures 3-5 => 15 minutes, 6-8 => 1 hour, 9+ => 24 hours. While locked, a PIN is rejected WITHOUT being
 --    evaluated (no counter change, no success path), at the same bcrypt cost as a real check.
 --  * NO STATE ORACLE (L2). unknown / not PIN-eligible / inactive / tenant suspended / locked / wrong PIN all return
 --    exactly {"status":"invalid"}. attempts_left and locked_until are no longer returned. (An attacker who knows a

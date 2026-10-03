@@ -84,7 +84,7 @@ select set_config('app.platform_mfa_required', 'off', true);
 select tests.claims((select su1 from _f), 'aal1');
 select ok(public.is_platform_super_admin(), 'opted out (local/CI) + no verified factor: aal1 is enough');
 select tests.clear_auth();
-insert into auth.mfa_factors (user_id, status) select su1, 'verified' from _f;
+select tests.add_verified_factor(su1) from _f;
 select tests.claims((select su1 from _f), 'aal1');
 select ok(not public.is_platform_super_admin(), 'opted out but a verified factor exists: aal1 is refused (no downgrade)');
 select tests.clear_auth();
@@ -96,7 +96,7 @@ select set_config('app.platform_mfa_required', 'off', true);
 delete from auth.mfa_factors;
 
 -- ═════════ tenant-admin step-up ═════════
-insert into auth.mfa_factors (user_id, status) select a_admin, 'verified' from _f;
+select tests.add_verified_factor(a_admin) from _f;
 select tests.claims((select a_admin from _f), 'aal1');
 select is(tests.run(format($q$select public.fn_change_user_role(%L, %L)$q$, (select a_waiter from _f), (select id from public.roles where restaurant_id = (select a from _f) and name = 'Cashier'))), 'P0001|mfa_required|', 'enrolled admin on aal1: fn_change_user_role needs step-up');
 select is(tests.run(format($q$select public.fn_update_role_permissions(%L, array['orders.view'], array[]::uuid[])$q$, (select id from public.roles where restaurant_id = (select a from _f) and name = 'Cashier'))), 'P0001|mfa_required|', 'and fn_update_role_permissions');

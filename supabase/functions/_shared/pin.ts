@@ -19,10 +19,10 @@ export function isWeakPin(pin: string): boolean {
   if (!PIN_RE.test(pin)) return true
   if (COMMON_WEAK.has(pin)) return true
   const d = [...pin].map((c) => c.charCodeAt(0) - 48)
-  // constant step modulo 10: 111111, 123456, 654321, 135791, 246802, 789012 ...
+  // constant step modulo 10: 1111, 1234, 4321, 1357, 2468, 7890 ...
   const step = (((d[1] ?? 0) - (d[0] ?? 0)) % 10 + 10) % 10
   if (d.every((v, i) => i === 0 || (((v - (d[i - 1] ?? 0)) % 10) + 10) % 10 === step)) return true
-  // repeated blocks of 1-3 digits: 121212, 123123, 12121212, 1231231
+  // repeated blocks of 1-3 digits: 1212, 1111, 1231
   for (const k of [1, 2, 3]) {
     if (k < pin.length && pin === pin.slice(0, k).repeat(Math.ceil(pin.length / k)).slice(0, pin.length)) return true
   }
@@ -41,4 +41,21 @@ export async function computePinDigest(pin: string, pepper: string): Promise<str
   const enc = new TextEncoder()
   const key = await crypto.subtle.importKey('raw', enc.encode(pepper), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
   return toHex(await crypto.subtle.sign('HMAC', key, enc.encode(pin)))
+}
+
+/** Hosts the local Supabase CLI stack uses for SUPABASE_URL inside / outside the functions container. */
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1', 'kong', 'host.docker.internal'])
+export function isLocalSupabaseUrl(url: string | undefined | null): boolean {
+  if (!url) return false
+  try {
+    const h = new URL(url).hostname.toLowerCase()
+    return LOCAL_HOSTS.has(h) || h.startsWith('supabase_kong_') || h.endsWith('.localhost')
+  } catch {
+    return false
+  }
+}
+
+/** The documented demo pepper is public: usable only against the local stack, never against a hosted project. */
+export function isPepperAllowedFor(pepper: string, supabaseUrl: string | undefined | null): boolean {
+  return pepper !== DEMO_PEPPER || isLocalSupabaseUrl(supabaseUrl)
 }
