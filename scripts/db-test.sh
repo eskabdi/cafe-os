@@ -49,7 +49,8 @@ fi
 PGDATA="$TMP/data"; SOCK="$TMP"
 
 cleanup() {
-  "${AS_PG[@]}" "$PG_BIN/pg_ctl" -D "$PGDATA" -m immediate stop >/dev/null 2>&1 || true
+  # --keep: fast (clean) shutdown, otherwise fsync=off + immediate would lose the tail of the data
+  "${AS_PG[@]}" "$PG_BIN/pg_ctl" -D "$PGDATA" -m "$([ "$KEEP" -eq 0 ] && echo immediate || echo fast)" stop >/dev/null 2>&1 || true
   if [ "$KEEP" -eq 0 ]; then rm -rf "$TMP"; else echo "kept: $TMP (socket dir, port $PORT)"; fi
 }
 trap cleanup EXIT
