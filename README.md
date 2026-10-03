@@ -6,7 +6,7 @@ Specs live in [`docs/spec`](docs/spec): the [execution prompt](docs/spec/executi
 
 ## Quick start
 
-Requires Node 20+ (`.nvmrc`), pnpm 10 and Docker (for local Supabase).
+Requires Node 22+ (`.nvmrc`), pnpm 10 and Docker (for local Supabase).
 
 ```bash
 pnpm install
