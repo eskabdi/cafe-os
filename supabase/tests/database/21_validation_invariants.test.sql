@@ -1,7 +1,7 @@
 -- M4 audit coverage, M5/SL4 validation, expense date + category snapshot, L4 idempotency, L6, L7 invariants,
 -- M9 foreign-key indexes, SL3 non-escalation, SL5 column exposure.
 begin;
-select plan(80);
+select plan(60);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -29,7 +29,7 @@ update public.recipe_lines set qty_per_serving = qty_per_serving + 0.001 where i
 insert into public.tables (restaurant_id, table_area_id, label) select a, (select id from public.table_areas where restaurant_id = a limit 1), 'Z99' from _f;
 select is((select count(*)::int from public.audit_logs where event = 'ingredients.update'), 1, 'ingredients are audited');
 select is((select count(*)::int from public.audit_logs where event = 'recipe_lines.update'), 1, 'recipe_lines are audited');
-select is((select count(*)::int from public.audit_logs where event = 'tables.insert'), 1, 'tables are audited');
+select is((select count(*)::int from public.audit_logs where event = 'tables.insert' and new_data ->> 'label' = 'Z99'), 1, 'tables are audited');
 select is((select string_agg(distinct c.relname, ',' order by c.relname) from pg_trigger g join pg_class c on c.oid = g.tgrelid
            where g.tgname = 'trg_audit' and c.relname in ('vouchers', 'installments', 'ingredients', 'recipe_lines', 'tables')),
           'ingredients,installments,recipe_lines,tables,vouchers', 'audit triggers exist on vouchers and installments too');
@@ -83,7 +83,7 @@ select is(tests.run($q$select public.fn_idempotency_begin('key-0000001', 'submit
 select is(public.fn_idempotency_begin('key-0000001', 'confirm_payment', 'hash-B'), null::jsonb, 'keys are scoped by command: the same key under another command is independent');
 select public.fn_idempotency_complete('key-0000001', 'submit_order', '{"ok": true}');
 select is(public.fn_idempotency_begin('key-0000001', 'submit_order', 'hash-A') -> 'result', '{"ok": true}'::jsonb, 'replay returns the stored result of THAT command');
-select is(public.fn_idempotency_begin('key-0000001', 'confirm_payment', 'hash-B') -> 'result', null::jsonb, 'and not the other command''s');
+select is(public.fn_idempotency_begin('key-0000001', 'confirm_payment', 'hash-B') -> 'result', 'null'::jsonb, 'and not the other command''s');
 select set_config('request.jwt.claims', '', true);
 
 -- ═════════ L7 invariants ═════════
@@ -96,7 +96,7 @@ select is(tests.run(format($q$insert into public.order_items (restaurant_id, ord
           'P0001|station_mismatch|order_items.station_id must equal menu_items.station_id', 'order_items.station_id must be the menu item''s station');
 select is(tests.run(format($q$insert into public.order_items (restaurant_id, order_id, menu_item_id, name_snapshot, price_snapshot, qty, station_id, station_name_snapshot) values (%L, %L, %L, 'x', 1, 1, %L, 'Kitchen')$q$, (select a from _f), (select id from _o), (select mi_kitchen from _f), (select st_kitchen from _f))), 'ok:1', 'matching station is accepted');
 select is((select station_ids from public.orders where id = (select id from _o)), array[(select st_kitchen from _f)], 'orders.station_ids follows the first item');
-select tests.run(format($q$insert into public.order_items (restaurant_id, order_id, menu_item_id, name_snapshot, price_snapshot, qty, station_id, station_name_snapshot) values (%L, %L, %L, 'm', 1, 1, %L, 'Bar')$q$, (select a from _f), (select id from _o), (select mi_bar from _f), (select st_bar from _f)));
+select is(tests.run(format($q$insert into public.order_items (restaurant_id, order_id, menu_item_id, name_snapshot, price_snapshot, qty, station_id, station_name_snapshot) values (%L, %L, %L, 'm', 1, 1, %L, 'Bar')$q$, (select a from _f), (select id from _o), (select mi_bar from _f), (select st_bar from _f))), 'ok:1', 'a Bar item is added to the same order');
 select is((select cardinality(station_ids) from public.orders where id = (select id from _o)), 2, 'a second station is added');
 delete from public.order_items where menu_item_id = (select mi_bar from _f) and order_id = (select id from _o);
 select is((select station_ids from public.orders where id = (select id from _o)), array[(select st_kitchen from _f)], 'and removed again when its last item goes');
