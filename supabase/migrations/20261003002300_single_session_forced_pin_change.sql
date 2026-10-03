@@ -5,7 +5,7 @@
 --     session is active, pin-login refuses (answer byte-identical to a wrong PIN: no oracle), notifies the user and every
 --     active tenant_admin, forces a PIN change and audits it. Admins / password users are never affected.
 --   * profile_secrets.must_change_pin = true => has_permission() / has_station_access() / current_station_ids() answer
---     "nothing" for that user (hard ceiling: every RPC and RLS predicate that uses them denies) until the user sets a new
+--     "nothing" for that user (every RPC and RLS predicate that goes through them denies; tenant-membership-only reads such as roles/stations/categories config stay readable within the user's own tenant) until the user sets a new
 --     PIN through the pin-change Edge Function (fn_set_user_pin clears the flag). tenant_admin is exempt by construction.
 --
 --  Service-only helpers (no client EXECUTE):

@@ -166,10 +166,12 @@ async function authenticate(input: AnyLoginInput): Promise<Outcome> {
   if (gate === 'error') return { ok: false, kind: 'server_error' }
   if (gate === 'blocked') {
     try {
-      await admin.rpc('fn_staff_login_blocked', {
+      // rpc() returns {error} instead of throwing: log a fixed code (never the payload) and keep the answer unchanged
+      const notified = await admin.rpc('fn_staff_login_blocked', {
         p_profile_id: outcome.profileId,
         p_kiosk_token_hash: isTileLogin(input) ? await kioskTokenHash(input.kiosk_token) : null,
       })
+      if (notified.error) console.error('pin-login: blocked_notify_failed')
     } catch {
       console.error('pin-login: blocked_notify_failed')
     }
