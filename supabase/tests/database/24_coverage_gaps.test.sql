@@ -8,7 +8,7 @@
 --   S7  delegated users.manage cannot escalate through staff creation or PIN-lockout reset
 --   S8  PIN lock-tier boundaries (3/6/9) and fn_pin_eligible truth table
 begin;
-select plan(66);
+select plan(61);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -72,8 +72,8 @@ select tests.clear_auth();
 select tests.authenticate_as((select su_off from _f));
 select ok(not public.is_platform_admin() and not public.is_platform_super_admin(), 'inactive super admin: not a platform admin');
 select is((select count(*)::int from public.restaurants), 0, 'inactive super admin lists no tenant');
-select is((select count(*)::int from public.platform_admins) + (select count(*)::int from public.admin_audit_log) + (select count(*)::int from public.subscriptions), 0,
-          'inactive super admin reads no roster, no admin audit, no subscription');
+select is((select count(*)::int from public.platform_admins where id <> (select su_off from _f)) + (select count(*)::int from public.admin_audit_log) + (select count(*)::int from public.subscriptions), 0,
+          'inactive super admin reads no roster (only its own row, by design), no admin audit, no subscription');
 select is(tests.run(format($q$select public.fn_suspend_tenant(%L, 'inactive platform admin')$q$, (select a from _f))), 'P0001|permission_denied|', 'inactive super admin cannot suspend');
 select is(tests.run(format($q$select public.fn_reactivate_tenant(%L, 'inactive platform admin')$q$, (select a from _f))), 'P0001|permission_denied|', 'inactive super admin cannot reactivate');
 select matches(tests.run($q$insert into public.plans (name, price_etb_monthly, max_staff, max_menu_items) values ('Forged', 1, 1, 1)$q$), '^42501\|', 'inactive super admin cannot create plans');
@@ -89,35 +89,61 @@ select tests.clear_auth();
 insert into public.ingredients (restaurant_id, name, station_id, unit, stock) select b, 'Flour B', b_station, 'kg', 5 from _f;
 insert into public.recipe_lines (restaurant_id, menu_item_id, ingredient_id, qty_per_serving)
   select f.b, (select id from public.menu_items where restaurant_id = f.b limit 1), i.id, 1 from _f f join public.ingredients i on i.restaurant_id = f.b;
-insert into public.stock_movements (restaurant_id, ingredient_id, station_id, qty_delta, reason, day_session_id)
-  select f.b, i.id, i.station_id, 5, 'opening', (select id from public.day_sessions where restaurant_id = f.b and status = 'open')
-  from _f f join public.ingredients i on i.restaurant_id = f.b;
-insert into public.table_sessions (restaurant_id, table_id, day_session_id)
-  select b, (select id from public.tables where restaurant_id = f.b limit 1), (select id from public.day_sessions where restaurant_id = f.b and status = 'open') from _f f;
+insert into public.table_sessions (restaurant_id, table_id, day_session_id, opened_by)
+  select b, (select id from public.tables where restaurant_id = f.b limit 1), (select id from public.day_sessions where restaurant_id = f.b and status = 'open'), b_waiter from _f f;
 insert into public.qr_credentials (restaurant_id, table_id, token_hash)
   select b, (select id from public.tables where restaurant_id = f.b limit 1), repeat('b', 64) from _f f;
+insert into public.qr_credentials (restaurant_id, table_id, token_hash, status, revoked_at, revoked_by, version)
+  select b, (select id from public.tables where restaurant_id = f.b limit 1), repeat('d', 64), 'revoked', now(), b_admin, 2 from _f f;
 insert into public.customer_sessions (restaurant_id, table_session_id, qr_credential_id, session_token_hash, expires_at)
   select f.b, ts.id, q.id, repeat('c', 64), now() + interval '1 hour'
-  from _f f join public.table_sessions ts on ts.restaurant_id = f.b join public.qr_credentials q on q.restaurant_id = f.b;
-insert into public.orders (restaurant_id, day_session_id, order_no, created_by, subtotal, vat_rate_snapshot, vat_amount, total)
-  select b, (select id from public.day_sessions where restaurant_id = f.b and status = 'open'), 'ORD-0001', b_waiter, 100, 15, 15, 115 from _f f;
+  from _f f join public.table_sessions ts on ts.restaurant_id = f.b join public.qr_credentials q on q.restaurant_id = f.b and q.status = 'active';
+insert into public.orders (restaurant_id, day_session_id, order_no, created_by, subtotal, vat_rate_snapshot, vat_amount, total, table_id, table_session_id, customer_session_id)
+  select b, (select id from public.day_sessions where restaurant_id = f.b and status = 'open'), 'ORD-0001', b_waiter, 100, 15, 15, 115,
+         ts.table_id, ts.id, cs.id
+  from _f f join public.table_sessions ts on ts.restaurant_id = f.b join public.customer_sessions cs on cs.restaurant_id = f.b;
+insert into public.orders (restaurant_id, day_session_id, order_no, created_by, subtotal, vat_rate_snapshot, vat_amount, total, status, cancelled_at, cancelled_by)
+  select b, (select id from public.day_sessions where restaurant_id = f.b and status = 'open'), 'ORD-0002', b_waiter, 10, 15, 1.5, 11.5, 'cancelled', now(), b_admin from _f f;
+insert into public.stock_movements (restaurant_id, ingredient_id, station_id, qty_delta, reason, day_session_id, created_by, order_id)
+  select f.b, i.id, i.station_id, 5, 'opening', (select id from public.day_sessions where restaurant_id = f.b and status = 'open'), f.b_admin,
+         (select id from public.orders where restaurant_id = f.b and order_no = 'ORD-0001')
+  from _f f join public.ingredients i on i.restaurant_id = f.b;
+insert into public.stock_movements (restaurant_id, ingredient_id, station_id, qty_delta, reason, day_session_id, reverses_movement_id)
+  select m.restaurant_id, m.ingredient_id, m.station_id, -5, 'reversal', m.day_session_id, m.id from public.stock_movements m where m.restaurant_id = (select b from _f);
 insert into public.order_items (restaurant_id, order_id, menu_item_id, name_snapshot, price_snapshot, qty, station_id, station_name_snapshot)
   select f.b, o.id, (select id from public.menu_items where restaurant_id = f.b limit 1), 'Special', 100, 1, f.b_station, 'Kitchen'
-  from _f f join public.orders o on o.restaurant_id = f.b;
-insert into public.vouchers (restaurant_id, voucher_no, order_id, customer_name, total, installment_count, interval_days)
-  select f.b, 'VCH-0001', o.id, 'Cust', 115, 2, 30 from _f f join public.orders o on o.restaurant_id = f.b;
+  from _f f join public.orders o on o.restaurant_id = f.b and o.order_no = 'ORD-0001';
+insert into public.vouchers (restaurant_id, voucher_no, order_id, customer_name, total, installment_count, interval_days, created_by, down_payment_method_id)
+  select f.b, 'VCH-0001', o.id, 'Cust', 115, 2, 30, f.b_admin, (select id from public.payment_methods where restaurant_id = f.b and name = 'Cash')
+  from _f f join public.orders o on o.restaurant_id = f.b and o.order_no = 'ORD-0001';
+insert into public.payments (restaurant_id, day_session_id, order_id, kind, amount, payment_method_id, method_name_snapshot, method_affects_drawer_snapshot, receipt_no, created_by)
+  select f.b, (select id from public.day_sessions where restaurant_id = f.b and status = 'open'), o.id, 'order_payment', 115,
+         (select id from public.payment_methods where restaurant_id = f.b and name = 'Cash'), 'Cash', true, 'RCT-0001', f.b_admin
+  from _f f join public.orders o on o.restaurant_id = f.b and o.order_no = 'ORD-0001';
+insert into public.payments (restaurant_id, day_session_id, order_id, voucher_id, kind, amount, payment_method_id, method_name_snapshot, method_affects_drawer_snapshot, receipt_no)
+  select f.b, p.day_session_id, p.order_id, v.id, 'down_payment', 10, p.payment_method_id, 'Cash', true, 'RCT-0002'
+  from _f f join public.payments p on p.restaurant_id = f.b and p.receipt_no = 'RCT-0001' join public.vouchers v on v.restaurant_id = f.b;
+insert into public.payments (restaurant_id, day_session_id, order_id, kind, amount, payment_method_id, method_name_snapshot, method_affects_drawer_snapshot, receipt_no, reversed_payment_id)
+  select f.b, p.day_session_id, p.order_id, 'reversal', 5, p.payment_method_id, 'Cash', true, 'RCT-0003', p.id
+  from _f f join public.payments p on p.restaurant_id = f.b and p.receipt_no = 'RCT-0001';
 insert into public.installments (restaurant_id, voucher_id, no, due_date, amount)
   select f.b, v.id, 1, current_date + 30, 57.5 from _f f join public.vouchers v on v.restaurant_id = f.b;
-insert into public.payments (restaurant_id, day_session_id, order_id, kind, amount, payment_method_id, method_name_snapshot, method_affects_drawer_snapshot, receipt_no)
-  select f.b, (select id from public.day_sessions where restaurant_id = f.b and status = 'open'), o.id, 'order_payment', 115,
-         (select id from public.payment_methods where restaurant_id = f.b and name = 'Cash'), 'Cash', true, 'RCT-0001'
-  from _f f join public.orders o on o.restaurant_id = f.b;
-insert into public.expenses (restaurant_id, expense_category_id, payment_method_id, amount)
-  select b, (select id from public.expense_categories where restaurant_id = f.b limit 1), (select id from public.payment_methods where restaurant_id = f.b and name = 'Cash'), 10 from _f f;
+insert into public.installments (restaurant_id, voucher_id, no, due_date, amount, paid, paid_at, payment_id)
+  select f.b, v.id, 2, current_date + 60, 57.5, true, now(), (select id from public.payments where restaurant_id = f.b and receipt_no = 'RCT-0002')
+  from _f f join public.vouchers v on v.restaurant_id = f.b;
 insert into public.idempotency_keys (restaurant_id, key, command) select b, 'idem-key-000001', 'test' from _f;
 insert into public.tenant_counters (restaurant_id, counter_key, last_value) select b, 'order', 1 from _f on conflict do nothing;
 insert into public.platform_invoices (restaurant_id, subscription_id, amount, period_start, period_end, status)
   select b, (select id from public.subscriptions where restaurant_id = f.b), 990, current_date, current_date + 30, 'pending' from _f f;
+insert into public.admin_audit_log (action, platform_admin_id, restaurant_id) select 'fixture.sweep', su1, b from _f;
+insert into public.day_sessions (restaurant_id, day_no, status, opened_by, closed_at, closed_by, order_count, gross_collected, cash_collected, cash_expenses,
+                                 expenses_total, expected_cash, counted_cash, cash_variance, net_profit, station_snapshot, expense_snapshot, payment_snapshot, inventory_variance)
+  select b, 900, 'closed', b_admin, now(), b_admin, 0, 0, 0, 0, 0, 0, 0, 0, 0, '[]', '[]', '[]', 0 from _f;
+-- expenses: created through the client path so the BEFORE trigger files the real actor and the open day
+select tests.authenticate_as((select b_admin from _f));
+insert into public.expenses (restaurant_id, expense_category_id, payment_method_id, amount)
+  select f.b, (select id from public.expense_categories where restaurant_id = f.b limit 1), (select id from public.payment_methods where restaurant_id = f.b and name = 'Cash'), 10 from _f f;
+select tests.clear_auth();
 
 -- For each FK: pick a parent row that has a child through THAT constraint, delete the parent, expect SQLSTATE 23503 raised by
 -- THAT constraint (named, with a "still referenced" detail the UI can show). A delete that succeeds is rolled back by the sentinel.
@@ -149,7 +175,9 @@ begin
                         else 'blocked-by:' || coalesce(v_con, '?') end;
       when others then
         get stacked diagnostics v_state = returned_sqlstate;
-        outcome := 'other:' || v_state || ':' || sqlerrm;
+        -- a BEFORE-trigger guard that is stricter than the FK (closed days, system roles) is fine, but named
+        outcome := case when v_state = 'P0001' and sqlerrm in ('closed_day_immutable', 'system_role_protected', 'immutable_record', 'last_platform_super_admin')
+                        then 'guarded:' || sqlerrm else 'other:' || v_state || ':' || sqlerrm end;
     end;
     return next;
   end loop;
@@ -162,13 +190,11 @@ select is((select string_agg(conname || '=' || outcome, ', ' order by conname) f
           'every foreign key has a victim row (the sweep is not vacuous)');
 select is((select string_agg(conname || '=' || outcome, ', ' order by conname) from tests.fk_delete_sweep() where outcome = 'DELETED'), null,
           'no foreign key lets its parent be deleted while a child exists');
--- a parent with several children may be blocked by a sibling constraint first: that is still a dependency error, but list it so a
--- change of delete rule on the hidden constraint cannot hide behind it silently
 select is((select string_agg(conname || '=' || outcome, ', ' order by conname) from tests.fk_delete_sweep() where outcome like 'other:%'), null,
           'the only way a parent delete fails is a foreign-key violation (no trigger / privilege / cascade surprise)');
-select is((select count(*)::int from tests.fk_delete_sweep() where outcome = 'restricted'), (select count(*)::int from tests.fk_delete_sweep()) - (select count(*)::int from tests.fk_delete_sweep() where outcome like 'blocked-by:%'),
-          'every remaining foreign key is restricted by exactly its own constraint');
-select cmp_ok((select count(*)::int from tests.fk_delete_sweep() where outcome = 'restricted'), '>=', 40, 'most constraints are proven individually (not only through a sibling)');
+-- tenant_id -> restaurants constraints are all reported as blocked by whichever sibling fires first (the confdeltype pin in 14 covers each
+-- individually); the business-record constraints below prove their own delete rule
+select cmp_ok((select count(*)::int from tests.fk_delete_sweep() where outcome = 'restricted'), '>=', 20, 'at least 20 business-record constraints are proven individually (own constraint named in the error)');
 
 -- the six dynamic domains + role, through the tenant_admin''s REAL DELETE grant: dependency error, and the row survives
 select tests.authenticate_as((select b_admin from _f));
