@@ -23,12 +23,12 @@ select is((select string_agg(name, ',' order by name) from _fn where pg_get_user
 select is((select string_agg(name, ',' order by name) from _fn where has_function_privilege('public', oid, 'execute')),
           null, 'no function in public is executable by PUBLIC');
 select is((select string_agg(name, ',' order by name) from _fn where has_function_privilege('anon', oid, 'execute')),
-          'fn_err,fn_resolve_tenant_slug', 'anon may execute only fn_err and fn_resolve_tenant_slug');
+          'fn_resolve_tenant_slug', 'anon may execute only fn_resolve_tenant_slug (fn_err is authenticated/service_role only)');
 select is((select string_agg(name, ',' order by name) from _fn where has_function_privilege('authenticated', oid, 'execute')),
-          'current_restaurant_id,current_role_id,current_tenant_writable,current_user_id,fn_change_user_role,fn_err,fn_get_session_context,fn_provision_tenant,fn_reactivate_tenant,fn_resolve_tenant_slug,fn_suspend_tenant,fn_update_role_permissions,has_permission,has_station_access,is_order_owner,is_platform_admin,is_platform_super_admin,is_tenant_admin,order_has_station_access',
+          'current_restaurant_id,current_role_id,current_station_ids,current_tenant_writable,current_user_id,fn_change_user_role,fn_create_staff_profile,fn_err,fn_get_open_day,fn_get_restaurant_settings,fn_get_session_context,fn_prepare_staff_creation,fn_provision_tenant,fn_reactivate_tenant,fn_reset_pin_lockout,fn_resolve_tenant_slug,fn_suspend_tenant,fn_update_role_permissions,has_permission,has_station_access,is_order_owner,is_platform_admin,is_platform_super_admin,is_tenant_admin',
           'authenticated executes exactly the reviewed RPC + RLS helper list (update this list consciously)');
 select is((select string_agg(name, ',' order by name) from _fn where has_function_privilege('authenticated', oid, 'execute') and has_function_privilege('anon', oid, 'execute')
-           and name not in ('fn_err', 'fn_resolve_tenant_slug')), null, 'nothing anon can run beyond the allowlist is also open to authenticated');
+           and name not in ('fn_resolve_tenant_slug')), null, 'nothing anon can run beyond the allowlist is also open to authenticated');
 select is((select string_agg(name, ',' order by name) from _fn
            where name in ('fn_set_user_pin', 'fn_verify_pin', 'fn_register_pin_failure', 'fn_user_auth_method', 'fn_write_audit', 'fn_write_admin_audit',
                           'fn_seed_tenant_defaults', 'fn_next_number', 'fn_tenant_status_guard', 'fn_idempotency_begin', 'fn_idempotency_complete', 'fn_pin_eligible')
@@ -40,7 +40,7 @@ select is((select string_agg(name, ',' order by name) from _fn where prorettype 
 -- every client-callable business RPC must authorise inside its body (it is the only gate; RLS does not apply to definers)
 select is((select string_agg(name, ',' order by name) from _fn
            where has_function_privilege('authenticated', oid, 'execute')
-             and name not in ('current_restaurant_id', 'current_role_id', 'current_tenant_writable', 'current_user_id', 'has_permission', 'has_station_access',
+             and name not in ('current_restaurant_id', 'current_role_id', 'current_station_ids', 'current_tenant_writable', 'current_user_id', 'has_permission', 'has_station_access',
                               'is_order_owner', 'is_platform_admin', 'is_platform_super_admin', 'is_tenant_admin', 'order_has_station_access',
                               'fn_err', 'fn_resolve_tenant_slug')
              and prosrc !~ '(fn_tenant_status_guard|is_platform_super_admin|is_service_role|auth\.uid)'),
@@ -56,7 +56,7 @@ select is((select string_agg(name, ',' order by name) from _fn
           null, 'no client-callable definer function returns rows or table row types');
 select is((select string_agg(name, ',' order by name) from _fn
            where has_function_privilege('authenticated', oid, 'execute') and prorettype in ('jsonb'::regtype, 'json'::regtype, 'text'::regtype, 'record'::regtype)),
-          'fn_change_user_role,fn_get_session_context,fn_provision_tenant,fn_reactivate_tenant,fn_resolve_tenant_slug,fn_suspend_tenant,fn_update_role_permissions',
+          'fn_change_user_role,fn_create_staff_profile,fn_get_open_day,fn_get_restaurant_settings,fn_get_session_context,fn_prepare_staff_creation,fn_provision_tenant,fn_reactivate_tenant,fn_reset_pin_lockout,fn_resolve_tenant_slug,fn_suspend_tenant,fn_update_role_permissions',
           'the set of client-callable functions returning free-form json/text is the reviewed one');
 select is((select string_agg(name, ',' order by name) from _fn where prorettype = 'public.profile_secrets'::regtype or proargnames @> array['pin_hash']
            or (name <> 'fn_audit_row' and prosrc ~* '''pin_hash''') or prosrc ~* 'returning\s+(ps\.)?pin_hash' or prosrc ~* 'to_jsonb\(\s*(ps|profile_secrets)'),
@@ -161,7 +161,7 @@ select tests.authenticate_as_service_role();
 select ok(not ((select public.fn_verify_pin((select cashier from _ctx), '3456'))::text ~* '(pin_hash|\$2[aby]\$)'), 'fn_verify_pin (ok) never returns the hash');
 select ok(not ((select public.fn_verify_pin((select cashier from _ctx), '0000'))::text ~* '(pin_hash|\$2[aby]\$)'), 'fn_verify_pin (bad pin) never returns the hash');
 select ok(not ((select public.fn_register_pin_failure((select cashier from _ctx)))::text ~* '(pin_hash|\$2[aby]\$)'), 'fn_register_pin_failure never returns the hash');
-select lives_ok(format($q$select public.fn_set_user_pin(%L, '2468')$q$, (select cashier from _ctx)), 'PIN rotation (service) works');
+select lives_ok(format($q$select public.fn_set_user_pin(%L, encode(sha256('2468'::bytea), 'hex'))$q$, (select cashier from _ctx)), 'PIN rotation (service) works');
 select tests.clear_auth();
 select is((select count(*)::int from public.audit_logs
            where coalesce(old_data::text, '') || coalesce(new_data::text, '') ~* '(pin_hash|token_hash|\$2[aby]\$|[0-9a-f]{64})'), 0,

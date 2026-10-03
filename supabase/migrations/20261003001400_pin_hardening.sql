@@ -163,8 +163,8 @@ as $$
            where rsa.role_id = p_role_id and not (rsa.station_id = any (((select public.current_station_ids()))::uuid[])))
   end
 $$;
-revoke all on function public.fn_caller_covers_role(uuid) from public, anon;
-grant execute on function public.fn_caller_covers_role(uuid) to authenticated;
+-- internal: only definer RPCs / triggers call it
+revoke all on function public.fn_caller_covers_role(uuid) from public, anon, authenticated;
 
 -- Admin reset of a PIN lockout (the ONLY way, besides a successful verify, for the counter to return to 0).
 create or replace function public.fn_reset_pin_lockout(p_profile_id uuid)

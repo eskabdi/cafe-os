@@ -123,7 +123,7 @@ select is((select platform_admin_id from public.admin_audit_log where action = '
           (select super_admin from _f), 'admin_audit_log records the real platform admin as actor');
 select is((select actor_type from public.audit_logs where event = 'tenant.suspended' and restaurant_id = (select b from _f)), 'platform_admin', 'tenant audit row marks the actor as platform_admin');
 select is((select actor_id from public.audit_logs where event = 'tenant.suspended' and restaurant_id = (select b from _f)), (select super_admin from _f), 'tenant audit row carries the real actor id');
-select is((select count(*)::int from public.admin_audit_log), (select admin_audit::int from _snap) + 1, 'exactly one admin audit row was added by the whole file');
+select is((select count(*)::int from public.admin_audit_log), (select admin_audit::int from _snap) + 2, 'the suspension added exactly two admin audit rows: the semantic tenant.suspend row and the subscriptions.status mirror row');
 
 -- ═════════ untouched ═════════
 select is((select count(*)::int from public.plans), (select plans::int from _snap), 'no plan was created or removed');

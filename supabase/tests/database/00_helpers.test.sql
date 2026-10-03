@@ -147,6 +147,11 @@ begin
   return md5(acc);
 end $$;
 
+-- Peppered PIN digest exactly as the Edge Functions compute it: hex(HMAC-SHA256(pin, pepper)). The pepper is the
+-- documented DEMO pepper (the one seed.sql uses).
+create or replace function tests.pin_digest(p_pin text) returns text
+language sql immutable as $$ select encode(extensions.hmac(p_pin, 'cafeos-local-demo-pepper-v1', 'sha256'), 'hex') $$;
+
 grant execute on all functions in schema tests to anon, authenticated, service_role;
 
 select has_function('tests', 'authenticate_as', array['uuid'], 'test helpers installed');

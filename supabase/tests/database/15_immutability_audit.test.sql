@@ -53,15 +53,15 @@ select is(tests.run($q$truncate public.stock_movements$q$), 'P0001|immutable_rec
 select tests.authenticate_as_service_role();
 select is(tests.run($q$update public.payments set amount = 1$q$), 'P0001|immutable_record|payments', 'payments: UPDATE blocked for service_role');
 select is(tests.run($q$delete from public.payments$q$), 'P0001|immutable_record|payments', 'payments: DELETE blocked for service_role');
-select matches(tests.run($q$truncate public.payments$q$), '^(P0001\|immutable_record\||0A000\|cannot truncate a table referenced)', 'payments: TRUNCATE blocked for service_role (trigger or FK, never executed)');
-select is(tests.run($q$update public.audit_logs set event = 'tampered'$q$), 'P0001|immutable_record|audit_logs', 'audit_logs: UPDATE blocked for service_role');
-select is(tests.run($q$delete from public.audit_logs$q$), 'P0001|immutable_record|audit_logs', 'audit_logs: DELETE blocked for service_role');
-select is(tests.run($q$truncate public.audit_logs$q$), 'P0001|immutable_record|audit_logs', 'audit_logs: TRUNCATE blocked for service_role');
-select is(tests.run($q$update public.admin_audit_log set action = 'tampered'$q$), 'P0001|immutable_record|admin_audit_log', 'admin_audit_log: UPDATE blocked for service_role');
-select is(tests.run($q$delete from public.admin_audit_log$q$), 'P0001|immutable_record|admin_audit_log', 'admin_audit_log: DELETE blocked for service_role');
+select matches(tests.run($q$truncate public.payments$q$), '^(42501\|permission denied for table payments\||P0001\|immutable_record\||0A000\|cannot truncate a table referenced)', 'payments: TRUNCATE blocked for service_role (trigger or FK, never executed)');
+select is(tests.run($q$update public.audit_logs set event = 'tampered'$q$), '42501|permission denied for table audit_logs|', 'audit_logs: UPDATE blocked for service_role');
+select is(tests.run($q$delete from public.audit_logs$q$), '42501|permission denied for table audit_logs|', 'audit_logs: DELETE blocked for service_role');
+select is(tests.run($q$truncate public.audit_logs$q$), '42501|permission denied for table audit_logs|', 'audit_logs: TRUNCATE blocked for service_role');
+select is(tests.run($q$update public.admin_audit_log set action = 'tampered'$q$), '42501|permission denied for table admin_audit_log|', 'admin_audit_log: UPDATE blocked for service_role');
+select is(tests.run($q$delete from public.admin_audit_log$q$), '42501|permission denied for table admin_audit_log|', 'admin_audit_log: DELETE blocked for service_role');
 select is(tests.run($q$update public.stock_movements set qty_delta = 999$q$), 'P0001|immutable_record|stock_movements', 'stock_movements: UPDATE blocked for service_role');
 select is(tests.run($q$delete from public.stock_movements$q$), 'P0001|immutable_record|stock_movements', 'stock_movements: DELETE blocked for service_role');
-select is(tests.run($q$truncate public.stock_movements$q$), 'P0001|immutable_record|stock_movements', 'stock_movements: TRUNCATE blocked for service_role');
+select is(tests.run($q$truncate public.stock_movements$q$), '42501|permission denied for table stock_movements|', 'stock_movements: TRUNCATE blocked for service_role');
 select tests.clear_auth();
 
 select tests.authenticate_as((select admin from _f));
@@ -92,8 +92,8 @@ select tests.clear_auth();
 select tests.authenticate_as((select admin from _f));
 select is(tests.run(format($q$insert into public.audit_logs (restaurant_id, actor_id, actor_type, event, action) values (%L, %L, 'user', 'forged', 'event')$q$, (select a from _f), (select waiter from _f))),
           '42501|permission denied for table audit_logs|', 'tenant_admin cannot insert audit rows (no forged actor / fake history)');
-select is(tests.run(format($q$select public.fn_write_audit('forged', null, %L, %L)$q$, (select a from _f), (select waiter from _f))),
-          '42501|permission denied for function fn_write_audit|', 'fn_write_audit is not callable by clients (actor cannot be supplied)');
+select is(tests.run(format($q$select public.fn_write_audit('forged', null, %L)$q$, (select a from _f))),
+          '42501|permission denied for function fn_write_audit|', 'fn_write_audit is not callable by clients (and takes no actor argument)');
 select is(tests.run($q$select public.fn_write_admin_audit('forged', null)$q$), '42501|permission denied for function fn_write_admin_audit|', 'fn_write_admin_audit is not callable by clients');
 
 -- every config change is audited with the real actor, the real tenant, and only the changed columns
@@ -165,7 +165,7 @@ select tests.clear_auth();
 -- ═════════ closed business day ═════════
 update public.day_sessions set status = 'closed', closed_at = now(), closed_by = (select admin from _f), order_count = 1, gross_collected = 483, cash_collected = 483,
   cash_expenses = 1000, expenses_total = 1000, expected_cash = 1983, counted_cash = 1983, cash_variance = 0, net_profit = -517,
-  station_snapshot = '[]', expense_snapshot = '[]' where id = (select day1 from _f);
+  station_snapshot = '[]', expense_snapshot = '[]', payment_snapshot = '[]', inventory_variance = 0 where id = (select day1 from _f);
 select is(tests.run(format($q$update public.day_sessions set counted_cash = 1 where id = %L$q$, (select day1 from _f))), 'P0001|closed_day_immutable|', 'closed day: edit blocked for the owner');
 select is(tests.run(format($q$update public.day_sessions set status = 'open', closed_at = null where id = %L$q$, (select day1 from _f))), 'P0001|closed_day_immutable|', 'closed day: cannot be silently reopened by the owner');
 select is(tests.run(format($q$delete from public.day_sessions where id = %L$q$, (select day1 from _f))), 'P0001|closed_day_immutable|day sessions cannot be deleted', 'days are never deleted (owner)');

@@ -55,7 +55,7 @@ select throws_ok($q$update public.audit_logs set event = 'tampered'$q$, 'P0001',
 select throws_ok($q$delete from public.audit_logs$q$, 'P0001', 'immutable_record', 'audit_logs cannot be deleted (owner)');
 select throws_ok($q$truncate public.audit_logs$q$, 'P0001', 'immutable_record', 'audit_logs cannot be truncated');
 select tests.authenticate_as_service_role();
-select throws_ok($q$delete from public.audit_logs$q$, 'P0001', 'immutable_record', 'audit_logs cannot be deleted (service_role)');
+select throws_ok($q$delete from public.audit_logs$q$, '42501', null, 'audit_logs cannot be deleted (service_role has no privilege)');
 select tests.clear_auth();
 select tests.authenticate_as(tests.user_id('selam', 'central-cafe'));
 select throws_ok(format($q$insert into public.audit_logs (restaurant_id, actor_id, actor_type, event, action) values (%L, %L, 'user', 'forged', 'event')$q$,
@@ -131,7 +131,7 @@ select tests.clear_auth();
 update public.day_sessions set status = 'closed', closed_at = now(), closed_by = tests.user_id('selam', 'central-cafe'),
   order_count = 0, gross_collected = 0, cash_collected = 0, cash_expenses = 0, expenses_total = 0,
   expected_cash = 2500, counted_cash = 2500, cash_variance = 0, net_profit = 0,
-  station_snapshot = '{}', expense_snapshot = '{}'
+  station_snapshot = '{}', expense_snapshot = '{}', payment_snapshot = '{}', inventory_variance = 0
  where restaurant_id = (select a from _f) and status = 'open';
 select throws_ok(format($q$update public.day_sessions set counted_cash = 1 where restaurant_id = %L$q$, (select a from _f)),
                  'P0001', 'closed_day_immutable', 'closed day cannot be edited');

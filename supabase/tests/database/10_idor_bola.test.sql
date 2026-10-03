@@ -163,6 +163,7 @@ begin
 end $$;
 
 -- ═════════ tenant A admin against tenant B ═════════
+grant execute on all functions in schema tests to public;  -- default privileges no longer grant PUBLIC execute
 select tests.authenticate_as((select a_admin from _f));
 select is(tests.leaks_read((select a from _f)), '', 'A admin: no row of any other tenant is readable in any tenant table');
 select is(tests.leaks_write((select b from _f)), '', 'A admin: no delete/insert/update reaches tenant B in any tenant table');
@@ -261,7 +262,7 @@ select is(tests.oracle($q$select public.fn_seed_tenant_defaults({id})$q$, (selec
           '42501|permission denied for function fn_seed_tenant_defaults|', 'fn_seed_tenant_defaults(B): internal only');
 select is(tests.oracle($q$select public.fn_next_number({id}, 'order', 'ORD')$q$, (select b from _f)),
           '42501|permission denied for function fn_next_number|', 'fn_next_number(B): internal only (cannot burn B''s counters)');
-select is(tests.oracle($q$select public.fn_write_audit('forged', null, {id}, null)$q$, (select b from _f)),
+select is(tests.oracle($q$select public.fn_write_audit('forged', null, {id})$q$, (select b from _f)),
           '42501|permission denied for function fn_write_audit|', 'fn_write_audit(B): cannot forge B audit rows');
 select is(tests.oracle($q$select public.fn_write_admin_audit('forged', {id})$q$, (select b from _f)),
           '42501|permission denied for function fn_write_admin_audit|', 'fn_write_admin_audit(B): internal only');
@@ -269,7 +270,7 @@ select is(tests.oracle($q$select public.has_station_access({id})$q$, (select b_s
 select ok(not public.has_station_access((select b_station from _f)), 'has_station_access(B station) is false');
 select ok(public.has_station_access((select a_station from _f)), 'has_station_access(own station) is true for the admin');
 select ok(not public.is_order_owner((select b_order from _g)), 'is_order_owner(B order) is false');
-select ok(not public.order_has_station_access((select b_order from _g)), 'order_has_station_access(B order) is false');
+select ok(not exists (select 1 from public.orders where id = (select b_order from _g)), 'B order is invisible to the A admin (station/tenant predicates)');
 select tests.clear_auth();
 select is(tests.snapshot((select b from _f)), (select b from _snap), 'tenant B data is byte-for-byte unchanged after every A admin attack');
 

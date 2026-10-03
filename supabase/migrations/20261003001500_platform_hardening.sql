@@ -37,8 +37,8 @@ as $$
           and not exists (select 1 from auth.mfa_factors f
                           where f.user_id = (select auth.uid()) and f.status = 'verified'))
 $$;
-revoke all on function public.fn_platform_mfa_satisfied() from public, anon;
-grant execute on function public.fn_platform_mfa_satisfied() to authenticated;
+-- internal: called by definer helpers / RPCs only
+revoke all on function public.fn_platform_mfa_satisfied() from public, anon, authenticated;
 
 create or replace function public.is_platform_admin()
 returns boolean
