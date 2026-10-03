@@ -17,28 +17,36 @@ import {
   shapeFailure,
   shapeSuccess,
 } from '../../supabase/functions/pin-login/logic'
+import {
+  computePinDigest,
+  isUsablePepper,
+  isWeakPin,
+  DEMO_PEPPER,
+} from '../../supabase/functions/_shared/pin'
 import { corsHeaders, parseAllowedOrigins, resolveAllowedOrigin } from '../../supabase/functions/_shared/cors'
 import { PIN_PATTERN, USERNAME_PATTERN } from '../../src/lib/supabase/pin-login-errors'
 
 const TENANT = '11111111-1111-4111-8111-111111111111'
 const PROFILE = '22222222-2222-4222-8222-222222222222'
 const body = (o: unknown) => JSON.stringify(o)
-const valid = { restaurant_slug: 'demo-cafe', username: 'abebe', pin: '1234' }
+const valid = { restaurant_slug: 'demo-cafe', username: 'abebe', pin: '482916' }
 
 describe('parsePinLoginBody', () => {
   it('accepts a valid body and normalizes slug/username', () => {
     const r = parsePinLoginBody(
-      body({ restaurant_slug: ' Demo-Cafe ', username: ' Abebe.K ', pin: '123456' }),
+      body({ restaurant_slug: ' Demo-Cafe ', username: ' Abebe.K ', pin: '482916' }),
     )
     expect(r).toEqual({
       ok: true,
-      value: { restaurant_slug: 'demo-cafe', username: 'abebe.k', pin: '123456' },
+      value: { restaurant_slug: 'demo-cafe', username: 'abebe.k', pin: '482916' },
     })
   })
 
   it.each([
     ['3 digits', { ...valid, pin: '123' }],
-    ['7 digits', { ...valid, pin: '1234567' }],
+    ['4 digits (minimum is 6)', { ...valid, pin: '1234' }],
+    ['5 digits', { ...valid, pin: '48291' }],
+    ['9 digits', { ...valid, pin: '482916037' }],
     ['letters in pin', { ...valid, pin: '12a4' }],
     ['numeric pin', { ...valid, pin: 1234 }],
     ['Arabic-Indic digits', { ...valid, pin: '١٢٣٤' }],
@@ -66,8 +74,9 @@ describe('parsePinLoginBody', () => {
       const server = parsePinLoginBody(body({ ...valid, username: u })).ok
       expect(USERNAME_PATTERN.test(u.trim().toLowerCase())).toBe(server)
     }
-    for (const p of ['1234', '123456', '123', '1234567', 'abcd', '12 4']) {
-      expect(PIN_PATTERN.test(p)).toBe(parsePinLoginBody(body({ ...valid, pin: p })).ok)
+    // the client pattern may be looser (UX only) but must never reject what the server accepts
+    for (const p of ['1234', '123456', '482916', '123', 'abcd', '12 4']) {
+      if (parsePinLoginBody(body({ ...valid, pin: p })).ok) expect(PIN_PATTERN.test(p)).toBe(true)
     }
   })
 })
@@ -245,4 +254,47 @@ describe('CORS', () => {
       'https://app.example.com',
     )
   })
+})
+
+describe('peppered PIN digest', () => {
+  it('matches the HMAC-SHA256 vector the pgTAP suite checks against SQL (hex, 64 chars)', async () => {
+    expect(await computePinDigest('480516', DEMO_PEPPER)).toBe(
+      'd4de579ed5e91dc8a519f2c9bd1fdb7df062d1172e6c4ae1828f8408abe0fee0',
+    )
+  })
+  it('depends on the pepper and on the PIN', async () => {
+    const a = await computePinDigest('482916', DEMO_PEPPER)
+    expect(a).toMatch(/^[0-9a-f]{64}$/)
+    expect(await computePinDigest('482916', DEMO_PEPPER + 'x')).not.toBe(a)
+    expect(await computePinDigest('482917', DEMO_PEPPER)).not.toBe(a)
+  })
+  it('requires a long pepper', () => {
+    expect(isUsablePepper(undefined)).toBe(false)
+    expect(isUsablePepper('short')).toBe(false)
+    expect(isUsablePepper(DEMO_PEPPER)).toBe(false) // 27 chars: the demo pepper is never a production pepper
+    expect(isUsablePepper('x'.repeat(32))).toBe(true)
+  })
+})
+
+describe('isWeakPin', () => {
+  it.each([
+    '000000',
+    '111111',
+    '123456',
+    '654321',
+    '121212',
+    '123123',
+    '112233',
+    '789012',
+    '135791',
+    '12121212',
+    '1231231',
+    '12345',
+    '1234567890',
+    'abcdef',
+    '12345678',
+  ])('rejects %s', (p) => expect(isWeakPin(p)).toBe(true))
+  it.each(['482916', '739204', '602841', '915370', '48291603'])('accepts %s', (p) =>
+    expect(isWeakPin(p)).toBe(false),
+  )
 })

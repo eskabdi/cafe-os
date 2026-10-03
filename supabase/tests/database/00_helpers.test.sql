@@ -26,6 +26,9 @@ grant usage on schema tests to anon, authenticated, service_role;
 create or replace function tests.authenticate_as(p_user_id uuid) returns void
 language plpgsql as $$
 begin
+  -- Platform admins need aal2 in production (migration 0015). Tests opt out per transaction so they do not depend on
+  -- a database-level setting (the real stack has none); 20_platform_hardening.test.sql exercises the gate itself.
+  perform set_config('app.platform_mfa_required', 'off', true);
   perform set_config('request.jwt.claims',
     json_build_object('sub', p_user_id, 'role', 'authenticated', 'aud', 'authenticated')::text, true);
   perform set_config('request.jwt.claim.sub', p_user_id::text, true);

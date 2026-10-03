@@ -31,7 +31,7 @@ new_tenant() { # slug owner_id owner_email
 }
 as_user() { # uid sql...  -> a transaction that runs as the authenticated user, with the statements given
   local uid="$1"; shift
-  printf "begin;\nselect set_config('request.jwt.claims', '{\"sub\":\"%s\",\"role\":\"authenticated\"}', true);\nset local role authenticated;\n%s\ncommit;\n" "$uid" "$*"
+  printf "begin;\nselect set_config('app.platform_mfa_required', 'off', true);\nselect set_config('request.jwt.claims', '{\"sub\":\"%s\",\"role\":\"authenticated\"}', true);\nset local role authenticated;\n%s\ncommit;\n" "$uid" "$*"
 }
 active_admins() { q "select count(*) from public.profiles p join public.roles r on r.id = p.role_id and r.restaurant_id = p.restaurant_id join public.restaurants x on x.id = p.restaurant_id where x.slug = '$1' and p.is_active and r.system_key = 'tenant_admin'"; }
 

@@ -36,8 +36,6 @@ create extension if not exists pgtap with schema extensions;
 
 grant usage on schema extensions, auth, storage to anon, authenticated, service_role, postgres;
 alter database postgres set search_path to "$user", public, extensions;
--- local/CI posture: platform admins are not forced through TOTP (production default = required; see migration 0015)
-alter database postgres set app.platform_mfa_required to 'off';
 set search_path to "$user", public, extensions;
 
 -- auth.users: superset of the columns seed.sql writes (GoTrue token columns are NOT NULL '' on real stacks)
