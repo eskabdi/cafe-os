@@ -32,6 +32,7 @@ flowchart TD
     end
     subgraph Edge["Edge Functions (service_role)"]
         P["pin-login"]
+        PC["pin-change (user JWT)"]
     end
     subgraph Auth["Supabase Auth"]
         GT["GoTrue: email + password, MFA"]
@@ -52,7 +53,11 @@ flowchart TD
     V --> S
     V --> PR
     V -->|ok: profile| P
+    P -->|3b fn_staff_has_active_session; if active: fn_staff_login_blocked, answer = wrong PIN| V
     P -->|4 mint session via admin API| GT
+    A -->|forced change: JWT + current/new PIN| PC
+    PC -->|verify, fn_set_user_pin clears must_change_pin| V
+    PC -->|signOut others| GT
     B -->|email + password| GT
     GT -->|JWT sub only| H
     A -->|queries / RPC with JWT| RLS
@@ -63,6 +68,9 @@ flowchart TD
     RPC --> H
     RPC --> AU
 ```
+Single session: the blocked-login path writes `user_notifications` (recipient: the user and every tenant_admin) which reach the SPA through Realtime (RLS: own rows) and sets
+`must_change_pin`, which makes `has_permission` deny everything for that user until `pin-change` succeeds. Trust boundary: `fn_staff_*` are service_role only; the browser never learns why a login was refused.
+
 Rules: PIN verification is attempted only for profiles whose `auth_method='pin'` and whose role is not the system `tenant_admin`; for admins
 and platform admins `fn_verify_pin` returns the same `invalid` result as for an unknown account. The JWT contributes only `sub`; tenant, role and
 permissions are re-derived from `profiles` on every statement.

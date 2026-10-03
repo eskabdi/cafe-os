@@ -19,6 +19,8 @@ erDiagram
     restaurants ||--o{ profiles : employs
     roles ||--o{ profiles : "assigned (RESTRICT)"
     profiles ||--o| profile_secrets : "PIN hash (staff only)"
+    profiles ||--o{ user_notifications : "recipient (composite FK)"
+    restaurants ||--o{ user_notifications : scopes
     restaurants ||--o{ roles : defines
     roles ||--o{ role_permissions : grants
     permissions ||--o{ role_permissions : "global catalog"
@@ -28,6 +30,8 @@ erDiagram
     restaurants ||--o{ idempotency_keys : dedupes
     restaurants ||--o{ tenant_counters : numbers
     profiles { uuid id PK "= auth.users.id" text auth_method "password (tenant_admin) | pin (staff)" text first_name text middle_name text last_name text short_name "generated first+middle" bool identity_rotation_pending "demoted admin awaiting synthetic identity" }
+    user_notifications { uuid id PK uuid restaurant_id uuid recipient_id text kind "security.concurrent_login_blocked" jsonb payload "no secrets" timestamptz created_at timestamptz read_at "only mutable column" }
+    profile_secrets { uuid profile_id PK text pin_hash smallint pin_length bool must_change_pin "forced PIN change; has_permission denies while true" }
     roles { uuid id PK text system_key "null | tenant_admin" boolean is_system }
     restaurants { uuid id PK text slug UK text status "trialing|active|past_due|suspended|cancelled" jsonb branding "CHECK hex colours + storage path" }
 ```
@@ -85,3 +89,6 @@ Additions in migrations 0011-0018: `orders.station_ids uuid[]` (trigger-maintain
 `(restaurant_id, key, command)`, `expenses.expense_date` derived (no default), indexes on `stock_movements.day_session_id`, `orders.table_session_id`,
 `orders.customer_session_id`, `table_sessions.day_session_id`, `installments.payment_id`, `vouchers.down_payment_method_id`. FK-index rule and its reviewed
 exceptions (tenant-root and actor FKs): `21_validation_invariants`.
+
+Migration 0023: `profile_secrets.must_change_pin boolean`, table `user_notifications` (unique `(restaurant_id, id)`, composite FK `(restaurant_id, recipient_id)` to `profiles`, RESTRICT),
+read-only reference to `auth.sessions` (GoTrue) by the service-only `fn_staff_has_active_session`.

@@ -9,11 +9,13 @@ import {
   clientIp,
   createPinLoginLimiters,
   createRateLimiter,
+  failureForBlockedLogin,
   interpretVerifyResult,
   isPinCandidate,
   isSyntheticStaffEmail,
   parsePinLoginBody,
   remainingDelayMs,
+  sessionGate,
   shapeFailure,
   shapeSuccess,
 } from '../../supabase/functions/pin-login/logic'
@@ -345,5 +347,30 @@ describe('PIN length by role (documented Cashier exception)', () => {
   it('pin-login accepts both lengths on the wire (it cannot know the user)', () => {
     expect(parsePinLoginBody(JSON.stringify({ ...valid, pin: '480516' })).ok).toBe(true)
     expect(parsePinLoginBody(JSON.stringify({ ...valid, pin: '4829' })).ok).toBe(true)
+  })
+})
+
+describe('single concurrent session gate (no oracle)', () => {
+  it('only a literal boolean from a successful call is trusted; everything else fails closed', () => {
+    expect(sessionGate(true, null)).toBe('blocked')
+    expect(sessionGate(false, null)).toBe('allow')
+    expect(sessionGate(false, { message: 'boom' })).toBe('error')
+    expect(sessionGate(true, { message: 'boom' })).toBe('error')
+    for (const odd of [null, undefined, 'true', 1, 0, {}, []]) expect(sessionGate(odd, null)).toBe('error')
+  })
+
+  it('a blocked login is answered byte-identically to a wrong PIN (body, status, headers)', () => {
+    const blocked = shapeFailure(failureForBlockedLogin())
+    const wrong = shapeFailure('invalid_credentials')
+    expect(JSON.stringify(blocked.body)).toBe(JSON.stringify(wrong.body))
+    expect(blocked.status).toBe(wrong.status)
+    expect(blocked.status).toBe(401)
+    expect(JSON.stringify(blocked.headers)).toBe(JSON.stringify(wrong.headers))
+    expect(JSON.stringify(blocked.body)).toBe('{"error":"invalid_credentials"}')
+  })
+
+  it('and it shares the same response-time floor as every other outcome (padding is applied by index.ts to all of them)', () => {
+    const fast = remainingDelayMs(1000, 1010, () => 0)
+    expect(fast).toBe(MIN_RESPONSE_MS - 10)
   })
 })

@@ -26,3 +26,8 @@ Do these BEFORE a hosted project takes real users. Items marked (manual) cannot 
     (details: tenant-routing.md). Never use a cookie `Domain=.cafeos.et`.
 11. **Kiosks:** register devices only from the tenant host, treat the token like a password (shown once), revoke on theft or staff turnover, review `last_seen_at`
     (kiosk-terminals.md). `staff-roster` and `pin-login` must run with `PIN_PEPPER` set (shared fail-closed env).
+12. **Single session / forced PIN change (0023):** deploy `pin-change` (`supabase functions deploy pin-change`; `verify_jwt = true` in config.toml) together with `pin-login` and the migration.
+    Keep `fn_active_session_window()` (2 h) longer than the project's JWT expiry (Auth settings > JWT expiry; local = 3600 s); if you raise the expiry above 1 hour raise the window too, otherwise a
+    live session could look stale. Verify once on the hosted project: sign in as PIN staff on device A, attempt the same login on device B => the normal "Could not sign in" answer, a notification for the
+    user and the tenant admin, and the user is routed to the PIN change screen; after the change, device A is signed out. Verify the Realtime publication lists `user_notifications` with its column list.
+    Optional retention job: delete `user_notifications` older than 90 days (rls-matrix.md).

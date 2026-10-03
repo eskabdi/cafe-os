@@ -6,6 +6,7 @@
 #   * last platform_super_admin: two super admins deactivate each other                 (SM6)
 #   * closed-day guard vs fn_close_day-style UPDATE, both orders of arrival             (H3)
 #   * 60 concurrent wrong PIN guesses against one account                               (SM3) -> failed_attempts stays 3
+#   * 20 concurrent blocked-login handlers for one user                                 (SS1) -> exactly one notification set
 # Needs PGHOST / PGPORT / PGUSER=postgres / PGDATABASE in the environment (db-test.sh exports them) and the seeded
 # schema. NEVER run it against a real project: it provisions throwaway tenants (race-*) and leaves them behind.
 set -uo pipefail
@@ -125,6 +126,15 @@ check "failed_attempts after 60 concurrent wrong guesses" 3 "$(q "select failed_
 check "account is locked" t "$(q "select (locked_until > now()) from public.profile_secrets where profile_id = '$P'")"
 check "the right PIN is refused while locked" invalid "$(q "$SVC select public.fn_verify_pin('$P', '$GOOD') ->> 'status'" | tail -1)"
 check "and the lock did not move the counter" 3 "$(q "select failed_attempts from public.profile_secrets where profile_id = '$P'")"
+
+echo "== SS1: 20 concurrent blocked-login notifications for one user (dedupe is serialised)"
+for i in $(seq 1 20); do
+  ( printf "begin; select set_config('request.jwt.claims', '{\"role\":\"service_role\"}', true); set local role service_role; select public.fn_staff_login_blocked('%s'); commit;\n" "$P" | "${PSQL[@]}" >/dev/null 2>&1 ) &
+done
+wait
+check "one notification for the user (the owner admin gets one too)" 2 "$(q "select count(*) from public.user_notifications n join public.restaurants r on r.id = n.restaurant_id where r.slug = 'race-pin'")"
+check "the user's own notifications" 1 "$(q "select count(*) from public.user_notifications where recipient_id = '$P'")"
+check "must_change_pin is set" t "$(q "select must_change_pin from public.profile_secrets where profile_id = '$P'")"
 
 rm -f /tmp/race.$$.*
 if [ "$FAILS" -ne 0 ]; then echo "race tests: $FAILS failure(s)"; exit 1; fi

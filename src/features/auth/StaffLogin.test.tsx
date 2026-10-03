@@ -55,10 +55,10 @@ describe('StaffLogin', () => {
     expect(onSignedIn).not.toHaveBeenCalled()
   })
 
-  it('shows one generic message for lockout, unknown user, admin and wrong PIN', () => {
-    // all four are the same server response (401 invalid_credentials) and cannot be told apart in the UI
-    expect(PIN_LOGIN_MESSAGES.invalid_credentials).toMatch(
-      /Incorrect username or PIN, or the account is temporarily locked/,
+  it('shows one generic message for lockout, unknown user, admin, wrong PIN and an already-active session', () => {
+    // all five are the same server response (401 invalid_credentials) and cannot be told apart in the UI
+    expect(PIN_LOGIN_MESSAGES.invalid_credentials).toBe(
+      'Could not sign in. Check your username and PIN, or sign out of any other device first. If it keeps happening, ask your manager.',
     )
   })
 

@@ -21,6 +21,9 @@
 // failures itself, so this function must NOT call fn_register_pin_failure again: that would double count).
 // The in-memory throttling here is defense in depth only.
 //
+// Known gap: the active-session check and the minting are two steps, so two simultaneous correct-PIN logins can both pass it.
+// A second sign-in later is blocked; see docs/architecture/auth-flows.md (residual risk).
+//
 // NOT EXECUTED in CI here: Deno was unavailable when this was written. See README.md.
 import { createClient } from '@supabase/supabase-js'
 import { corsHeaders, parseAllowedOrigins, resolveAllowedOrigin } from '../_shared/cors.ts'
@@ -35,6 +38,8 @@ import {
   createPinLoginLimiters,
   interpretVerifyResult,
   isPinCandidate,
+  sessionGate,
+  failureForBlockedLogin,
   isSyntheticStaffEmail,
   parsePinLoginBody,
   remainingDelayMs,
@@ -152,6 +157,24 @@ async function authenticate(input: AnyLoginInput): Promise<Outcome> {
   const user = await admin.auth.admin.getUserById(outcome.profileId)
   const email = user.data?.user?.email
   if (user.error || !isSyntheticStaffEmail(email)) return { ok: false, kind: 'invalid_credentials' }
+
+  // 4b. ONE concurrent session per PIN staff member: a correct PIN while another session is active is refused with the exact
+  //     answer of a wrong PIN (no oracle). The DB then notifies the user and the tenant admins, forces a PIN change and audits it.
+  //     A failure of the notification must never change the answer, hence the try/catch and the ignored result.
+  const active = await admin.rpc('fn_staff_has_active_session', { p_profile_id: outcome.profileId })
+  const gate = sessionGate(active.data, active.error)
+  if (gate === 'error') return { ok: false, kind: 'server_error' }
+  if (gate === 'blocked') {
+    try {
+      await admin.rpc('fn_staff_login_blocked', {
+        p_profile_id: outcome.profileId,
+        p_kiosk_token_hash: isTileLogin(input) ? await kioskTokenHash(input.kiosk_token) : null,
+      })
+    } catch {
+      console.error('pin-login: blocked_notify_failed')
+    }
+    return { ok: false, kind: failureForBlockedLogin() }
+  }
 
   // 5. mint the session (see header comment)
   const link = await admin.auth.admin.generateLink({ type: 'magiclink', email })

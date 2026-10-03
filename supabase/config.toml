@@ -80,6 +80,9 @@ enable_confirmations = false
 [functions.pin-login]
 verify_jwt = true
 
+[functions.pin-change]
+verify_jwt = true
+
 [functions.staff-create]
 verify_jwt = true
 

@@ -46,6 +46,11 @@ sequenceDiagram
     alt not ok
         EF-->>UI: 401 invalid_credentials (identical for every cause) after a timing floor
     else ok
+        EF->>DB: fn_staff_has_active_session(profile)
+        alt another session is active
+            EF->>DB: fn_staff_login_blocked(profile, kiosk hash?) (notify, must_change_pin, audit)
+            EF-->>UI: 401 invalid_credentials (byte-identical, same timing floor)
+        end
         EF->>GT: admin.generateLink(magiclink, synthetic email)
         EF->>GT: verifyOtp(token_hash) with anon client
         GT-->>EF: session
@@ -65,6 +70,7 @@ sequenceDiagram
 | Session minting abuse | single-use magic-link hash stays server-side; no JWT secret in the function; GoTrue refresh rotation applies |
 | CORS | exact origins from `ALLOWED_ORIGINS`, no wildcard |
 | Client-side bypass | guards are UX only; tenant/role/permissions come from `fn_get_session_context` and RLS, never JWT claims or the URL slug |
+| Concurrent / shared PIN use | one active session per PIN staff member (see below); blocked attempt looks like a wrong PIN, notifies the user + tenant admins, forces a PIN change |
 | Targeted lockout (DoS) | an attacker can lock a known username (inherent to lockout); mitigate with per-IP limits and admin unlock |
 | Password login of PIN staff | Auth hook `password_verification_attempt` -> `fn_auth_password_verification_hook` rejects every `auth_method='pin'` profile (wired in `config.toml`; **not exercised against real GoTrue**, SQL unit-tested only) |
 | Demoted admin keeps a password identity | `identity_rotation_pending`: not PIN-eligible, hook rejects its password, until `fn_complete_identity_rotation` (the Edge Function that rewrites the auth user is a follow-up) |
@@ -119,3 +125,43 @@ sequenceDiagram
     L-->>K: session | 401 invalid_credentials (identical for every cause)
 ```
 The Cashier (6-digit PIN) and everyone else can use the username + PIN path on any device. Lockout 3/6/9 is shared by both paths.
+
+## One concurrent session per PIN staff member (migration 0023, user decision 2026-10-03)
+Applies to `profiles.auth_method = 'pin'` non-admin staff only; tenant_admin, platform admins and password users are never blocked
+(`fn_staff_has_active_session` returns false for them).
+- **Active session** = a row in `auth.sessions` for the user with `not_after` null or in the future AND
+  `coalesce(refreshed_at, updated_at, created_at)` within `fn_active_session_window()` (**2 hours**, deliberately longer than `jwt_expiry` = 1 hour so a
+  live browser that refreshes its token always counts, while a closed browser goes stale). Sign-out deletes the GoTrue row and frees the slot immediately.
+  `refreshed_at` is `timestamp` without zone (UTC) in GoTrue; the function converts it explicitly. The shim mirrors the real columns.
+- **Blocked login = no oracle.** After the PIN verifies and the identity checks pass, `pin-login` asks `fn_staff_has_active_session`. If true it calls
+  `fn_staff_login_blocked` (result ignored) and answers `401 {"error":"invalid_credentials"}` through the very same `shapeFailure('invalid_credentials')`
+  and the same response-time floor (450 ms + jitter) as a wrong PIN. Username and tile paths behave the same. A DB error in the check answers 503
+  (fail closed; never mints). The user message is generic: "Could not sign in. Check your username and PIN, or sign out of any other device first. If it keeps happening, ask your manager."
+- **Consequences of a blocked-after-correct-PIN attempt** (the PIN is treated as exposed): (a) one `user_notifications` row of kind
+  `security.concurrent_login_blocked` for the user and one for every active tenant_admin of the tenant, deduped to one set per user per 5 minutes (advisory-locked,
+  race-tested); (b) `profile_secrets.must_change_pin = true`; (c) audit event `auth.concurrent_login_blocked` (profile id, kiosk name, whether notified; no secret).
+- **Forced PIN change, enforced in the database.** While `must_change_pin` is true `has_permission()`, `has_station_access()` and `current_station_ids()` answer
+  nothing for that user, so every permission-checked RPC and RLS policy denies. Not affected: identity helpers (the session stays valid), `fn_get_session_context`
+  (returns `must_change_pin: true`, `permissions: []`, `station_ids: []`), `fn_mark_notification_read`, and `fn_verify_pin`. tenant_admin is exempt by construction (no secret row can exist
+  for admins, the guard trigger refuses it, and the helpers exempt `system_key = 'tenant_admin'` anyway), so no tenant can be locked out of its last admin.
+  `fn_reset_pin_lockout` (admin unlock) does NOT clear the flag; only `fn_set_user_pin` does.
+- **`pin-change` Edge Function** (the only way out of the state), see `supabase/functions/pin-change/README.md`:
+```mermaid
+sequenceDiagram
+    actor S as Staff (must_change_pin)
+    participant EF as pin-change (verify_jwt)
+    participant DB as Postgres (service role RPCs)
+    participant GT as Supabase Auth
+    S->>EF: Authorization: Bearer JWT, {current_pin, new_pin}
+    EF->>GT: getUser(jwt) -> user id (never from the body)
+    EF->>EF: parse, weak-PIN policy, new != current, throttle
+    EF->>DB: profile + role name lookup; length check (4, Cashier 6)
+    EF->>DB: fn_verify_pin(profile, HMAC(current)) (shared lockout)
+    EF->>DB: fn_set_user_pin(profile, HMAC(new), length) (clears must_change_pin)
+    EF->>GT: admin.signOut(jwt, 'others') (end every other session)
+    EF-->>S: {changed: true, other_sessions_revoked}
+```
+- **Residual risks:** (1) two simultaneous correct-PIN logins can both pass the check before either session exists (check and mint are separate steps; the
+  next login is blocked); (2) a staff member who closed the browser without signing out is blocked for up to 2 hours (or until they sign out elsewhere), and then must change their PIN
+  (user-decided; their manager is notified); (3) a person who knows the PIN can trigger the forced change of that account (a nuisance, bounded by the per-user throttle);
+  (4) `auth.sessions` semantics and `signOut(jwt, 'others')` were verified against the documented GoTrue schema only, not against a running GoTrue.

@@ -21,7 +21,7 @@ A page whose Origin is `<other-slug>.cafeos.et` cannot sign in to a different te
 | result | status | body |
 |---|---|---|
 | success | 200 | `{ "access_token", "refresh_token", "expires_in" }` (nothing else) |
-| unknown tenant / unknown user / inactive / locked / admin / wrong PIN | 401 | `{ "error": "invalid_credentials" }` (identical) |
+| unknown tenant / unknown user / inactive / locked / admin / wrong PIN / **correct PIN while another session of that user is active** | 401 | `{ "error": "invalid_credentials" }` (byte-identical, same timing floor) |
 | bad shape (slug, username, a PIN that is not 4 or 6 digits; the function cannot know which length a user has and never reveals it) | 400 / 413 | `{ "error": "invalid_request" }` |
 | throttled | 429 | `{ "error": "try_later" }` + `Retry-After` |
 | infrastructure failure | 503 | `{ "error": "server_error" }` |
@@ -46,6 +46,9 @@ Set with `supabase secrets set ALLOWED_ORIGINS=...`.
   Trade-off: someone can burn a victim's per-username bucket, which only delays that username, like the DB lockout does.
 - The session is minted via `admin.generateLink` + `verifyOtp` (see the comment block in `index.ts`). The hashed token stays
   server-side. PINs and tokens are never logged.
+- **One concurrent session per PIN staff** (migration 0023): after a correct PIN the function asks `fn_staff_has_active_session` (auth.sessions, 2 h window). If active it calls
+  `fn_staff_login_blocked` (notifications to the user and tenant admins, `must_change_pin`, audit; on the tile path the kiosk token hash is passed so the notification names the kiosk) and answers the
+  generic 401. If the check itself fails the answer is 503 and no session is minted. Known gap: check and mint are two steps, so two simultaneous logins can both pass.
 - Only identities with `fn_user_auth_method = 'pin'` and a `*.staff.cafeos.invalid` email can be minted.
 
 ## Local run

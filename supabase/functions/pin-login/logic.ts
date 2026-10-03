@@ -182,6 +182,29 @@ export function isPinCandidate(profile: unknown, tenantId: string): profile is {
   )
 }
 
+// ── single concurrent session ───────────────────────────────────────────────
+export type SessionGate = 'allow' | 'blocked' | 'error'
+
+/**
+ * Interprets fn_staff_has_active_session. Only a literal boolean from a successful call is trusted:
+ * true => blocked, false => allow; an RPC error or any other shape => error (fail closed, never mint a session).
+ */
+export function sessionGate(data: unknown, rpcError: unknown): SessionGate {
+  if (rpcError) return 'error'
+  if (data === true) return 'blocked'
+  if (data === false) return 'allow'
+  return 'error'
+}
+
+/**
+ * NO ORACLE: a login refused because another session is active must be indistinguishable from a wrong PIN, so it uses the very
+ * same failure kind (same body, same status, same headers) and the same response-time floor. The caller learns of the real cause
+ * only through the in-app notification the DB creates for the account owner and the tenant admins.
+ */
+export function failureForBlockedLogin(): FailureKind {
+  return 'invalid_credentials'
+}
+
 // ── response shaping ────────────────────────────────────────────────────────
 export type FailureKind = 'invalid_request' | 'invalid_credentials' | 'rate_limited' | 'payload_too_large' | 'method_not_allowed' | 'forbidden_origin' | 'server_error'
 
