@@ -58,14 +58,26 @@ export const router = createBrowserRouter([
         children: [
           { path: 'login', element: <TenantLoginPage /> },
           { path: 'admin-login', element: <TenantAdminLoginPage /> },
-          { element: <TenantGuard />, children: [{ path: '*', element: <TenantRoutes /> }] },
+          {
+            element: <TenantGuard />,
+            children: [
+              { index: true, element: <TenantRoutes /> },
+              { path: '*', element: <TenantRoutes /> },
+            ],
+          },
         ],
       },
       {
         path: 'platform',
         children: [
           { path: 'login', element: <PlatformLoginPage /> },
-          { element: <PlatformGuard />, children: [{ path: '*', element: <PlatformRoutes /> }] },
+          {
+            element: <PlatformGuard />,
+            children: [
+              { index: true, element: <PlatformRoutes /> },
+              { path: '*', element: <PlatformRoutes /> },
+            ],
+          },
         ],
       },
       { path: '*', element: <NotFoundPage /> },
