@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Brand — overridable at runtime by TenantThemeProvider (primary/accent only). */
+    --primary: 0 72% 51%; /* #dc2626 */
+    --primary-dark: 0 74% 42%; /* #b91c1c */
+    --primary-foreground: 0 0% 100%;
+    --accent: 210 40% 96%;
+    --accent-foreground: 217 33% 17%;
+    --ring: 0 72% 51%;
+
+    /* Neutrals (ink #1e293b, line #e2e8f0, bg #f8fafc) */
+    --background: 210 40% 98%;
+    --foreground: 217 33% 17%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 217 33% 17%;
+    --radius: 0.5rem;
+
+    /* Semantic status colours: fixed platform-wide, never tenant-branded. */
+    --status-success: 142 76% 36%;
+    --status-warning: 32 95% 44%;
+    --status-error: 0 72% 51%;
+    --status-cancelled: 215 16% 47%;
+    --status-overdue: 21 90% 48%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background font-sans text-foreground antialiased;
+  }
+}
