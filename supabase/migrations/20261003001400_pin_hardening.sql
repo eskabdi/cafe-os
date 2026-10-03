@@ -160,7 +160,7 @@ as $$
            where rp.role_id = p_role_id and not public.has_permission(pm.key))
          and not exists (
            select 1 from public.role_station_access rsa
-           where rsa.role_id = p_role_id and not (rsa.station_id = any ((select public.current_station_ids()))))
+           where rsa.role_id = p_role_id and not (rsa.station_id = any (((select public.current_station_ids()))::uuid[])))
   end
 $$;
 revoke all on function public.fn_caller_covers_role(uuid) from public, anon;

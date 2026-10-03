@@ -36,6 +36,8 @@ create extension if not exists pgtap with schema extensions;
 
 grant usage on schema extensions, auth, storage to anon, authenticated, service_role, postgres;
 alter database postgres set search_path to "$user", public, extensions;
+-- local/CI posture: platform admins are not forced through TOTP (production default = required; see migration 0015)
+alter database postgres set app.platform_mfa_required to 'off';
 set search_path to "$user", public, extensions;
 
 -- auth.users: superset of the columns seed.sql writes (GoTrue token columns are NOT NULL '' on real stacks)
@@ -59,6 +61,17 @@ create table auth.users (
 );
 create unique index users_email_idx on auth.users (lower(email));
 alter table auth.users enable row level security;
+
+-- MFA factors (subset of GoTrue's auth.mfa_factors): fn_platform_mfa_satisfied / fn_require_step_up read it
+create table auth.mfa_factors (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  friendly_name text,
+  factor_type text not null default 'totp',
+  status text not null default 'unverified' check (status in ('unverified','verified')),
+  created_at timestamptz default now()
+);
+alter table auth.mfa_factors enable row level security;
 
 -- exactly as GoTrue defines them: read the PostgREST-provided request GUCs
 create function auth.uid() returns uuid language sql stable as $$

@@ -2,7 +2,10 @@
 # Throwaway-Postgres database test harness (no Docker / no Supabase stack needed).
 #   initdb temp cluster -> Supabase-compat shim -> migrations -> seed -> pgTAP (pg_prove) -> teardown
 #
-# Usage: scripts/db-test.sh [--keep] [--no-tests] [test-file ...]
+# Usage: scripts/db-test.sh [--keep] [--no-tests] [--no-race] [--upto <migration-file-prefix>] [test-file ...]
+#   --upto 20261003001000   apply migrations only up to (and including) that one: lets a new test be run against the
+#                           PREVIOUS schema to prove it fails before the fix (the seed is skipped when it needs a later one)
+#   --no-race               skip scripts/db/race-tests.sh (real concurrent sessions; runs after both pgTAP passes)
 # Env:   PG_BIN (default: PostgreSQL 15 if installed, matching supabase/config.toml major_version = 15; else
 #        pg_config --bindir), DB_TEST_PORT (default 54329)
 #
@@ -27,9 +30,16 @@ if [ -z "${PG_BIN:-}" ]; then
 fi
 PORT="${DB_TEST_PORT:-54329}"
 TESTS_DIR="$ROOT/supabase/tests"
-KEEP=0; RUN_TESTS=1; FILES=()
-for a in "$@"; do
-  case "$a" in --keep) KEEP=1 ;; --no-tests) RUN_TESTS=0 ;; *) FILES+=("$a") ;; esac
+KEEP=0; RUN_TESTS=1; RUN_RACE=1; UPTO=""; FILES=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --keep) KEEP=1 ;;
+    --no-tests) RUN_TESTS=0 ;;
+    --no-race) RUN_RACE=0 ;;
+    --upto) UPTO="${2:?--upto needs a migration prefix}"; shift ;;
+    *) FILES+=("$1") ;;
+  esac
+  shift
 done
 
 # ── layout contract ──
@@ -72,12 +82,16 @@ echo "==> Supabase shim (as supabase_admin)"
 
 echo "==> migrations (as postgres)"
 for f in "$ROOT"/supabase/migrations/*.sql; do
+  b="$(basename "$f")"
+  if [ -n "$UPTO" ] && [[ "${b:0:${#UPTO}}" > "$UPTO" ]]; then continue; fi
   echo "    $(basename "$f")"
   "${PSQL[@]}" --single-transaction -f "$f"
 done
 
-echo "==> seed (as postgres)"
-"${PSQL[@]}" -f "$ROOT/supabase/seed.sql"
+# The demo seed refuses to run unless it recognises the local Supabase stack (default JWT secret) or is explicitly
+# opted in. This throwaway cluster has neither, so opt in for the seed session only.
+echo "==> seed (as postgres, app.allow_demo_seed=on)"
+PGOPTIONS="-c app.allow_demo_seed=on" "${PSQL[@]}" -f "$ROOT/supabase/seed.sql"
 
 if [ "$RUN_TESTS" -eq 1 ]; then
   echo "==> pgTAP"

@@ -79,13 +79,13 @@ alter policy order_items_select on public.order_items
   using (restaurant_id = (select public.current_restaurant_id())
          and (select public.has_permission('orders.view'))
          and ((select public.has_permission('orders.view_all'))
-              or station_id = any ((select public.current_station_ids()))
+              or station_id = any (((select public.current_station_ids()))::uuid[])
               or public.is_order_owner(order_id)));
 
 alter policy ingredients_select on public.ingredients
   using (restaurant_id = (select public.current_restaurant_id())
          and (((select public.has_permission('inventory.view'))
-               and (station_id = any ((select public.current_station_ids()))
+               and (station_id = any (((select public.current_station_ids()))::uuid[])
                     or (select public.has_permission('inventory.adjust'))
                     or (select public.has_permission('inventory.receive'))))
               or (select public.has_permission('menu.manage'))));
@@ -93,7 +93,7 @@ alter policy ingredients_select on public.ingredients
 alter policy stock_movements_select on public.stock_movements
   using (restaurant_id = (select public.current_restaurant_id())
          and (select public.has_permission('inventory.view'))
-         and (station_id = any ((select public.current_station_ids()))
+         and (station_id = any (((select public.current_station_ids()))::uuid[])
               or (select public.has_permission('inventory.adjust'))
               or (select public.has_permission('inventory.receive'))));
 
