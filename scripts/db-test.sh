@@ -111,4 +111,8 @@ if [ "$RUN_TESTS" -eq 1 ]; then
     pg_prove --ext .pg --ext .sql -r --verbose "${ARGS[@]}"
   fi
 fi
+if [ "$RUN_TESTS" -eq 1 ] && [ "$RUN_RACE" -eq 1 ] && [ "${#FILES[@]}" -eq 0 ]; then
+  echo "==> race tests (real concurrent sessions)"
+  PGHOST="$SOCK" PGPORT="$PORT" PGUSER=postgres PGDATABASE=postgres bash "$ROOT/scripts/db/race-tests.sh"
+fi
 echo "==> OK"
