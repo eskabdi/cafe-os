@@ -20,7 +20,7 @@
 --   Staff (non-admin roles) sign in by PIN, verified server-side (profile_secrets + fn_verify_pin).
 --     Their auth.users rows use synthetic non-routable emails <username>@<slug>.staff.cafeos.invalid and
 --     random unusable passwords; profiles.auth_method = 'pin'.
---     PINs are 4 digits and are stored as bcrypt(HMAC-SHA256(pin, pepper)), like production: the database never holds
+--     PINs are 4 digits (the Cashier's is 6) and are stored as bcrypt(HMAC-SHA256(pin, pepper)), like production: the database never holds
 --     a raw PIN. The seed cannot know a production pepper, so it uses the DEMO PEPPER below, which is only valid
 --     because the guard above passed. For the pin-login Edge Function to accept these PINs locally, run it with
 --         PIN_PEPPER=cafeos-local-demo-pepper-do-not-use-v1

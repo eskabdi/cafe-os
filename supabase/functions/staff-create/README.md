@@ -12,7 +12,8 @@ Creates a PIN-login staff member. Caller: a signed-in user holding `users.manage
 |---|---|---|
 | created | 201 | `{ "profile_id" }` (nothing else) |
 | bad shape / invalid role / escalation | 400 | `{ "error": "invalid_request" }` |
-| weak PIN (repeated, sequential, not exactly 4 digits) | 400 | `{ "error": "weak_pin" }` |
+| weak PIN (repeated, sequential) | 400 | `{ "error": "weak_pin" }` |
+| PIN length does not fit the role (Cashier: 6 digits, all others: 4; the role name is looked up server-side from `role_id`) | 400 | `{ "error": "invalid_pin_length" }` |
 | no / invalid JWT | 401 | `{ "error": "unauthorized" }` |
 | no `users.manage`, suspended / read-only tenant, MFA step-up missing | 403 | `{ "error": "forbidden" }` |
 | username taken / plan staff limit | 409 | `{ "error": "username_taken" }` / `{ "error": "staff_limit_reached" }` |
