@@ -1,4 +1,4 @@
-import { Navigate, useParams } from 'react-router-dom'
+import { Link, Navigate, useParams } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/features/auth'
 
@@ -9,7 +9,7 @@ import { useAuth } from '@/features/auth'
  */
 export default function TenantRoutes() {
   const { slug } = useParams<{ slug: string }>()
-  const { context, signOut } = useAuth()
+  const { context, signOut, can } = useAuth()
   const tenantSlug = context?.restaurant?.slug
 
   if (!context?.restaurant || !context.user || !context.role) {
@@ -35,6 +35,16 @@ export default function TenantRoutes() {
       <p className="text-sm text-ink">
         {context.user.first_name} · {context.role.name}
       </p>
+      {can('kiosks.manage') && (
+        <p>
+          <Link
+            className="text-sm text-ink underline underline-offset-4"
+            to={`/r/${tenantSlug}/settings/terminals`}
+          >
+            Terminals
+          </Link>
+        </p>
+      )}
       <Button variant="outline" onClick={() => void signOut()}>
         Sign out
       </Button>

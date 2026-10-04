@@ -8,8 +8,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-/** Files allowed to use localStorage/sessionStorage (per-viewer UI prefs and the Supabase client's own session storage). */
-export const LOCAL_STORAGE_ALLOWLIST = ['src/lib/utils/ui-prefs.ts', 'src/lib/supabase/client.ts']
+/** Files allowed to use localStorage/sessionStorage (per-viewer UI prefs, the Supabase client's own session storage, the kiosk device token). */
+export const LOCAL_STORAGE_ALLOWLIST = [
+  'src/lib/utils/ui-prefs.ts',
+  'src/lib/supabase/client.ts',
+  'src/lib/utils/kiosk-token.ts',
+]
 
 /** The only role literals the client/DB may hardcode (CLAUDE.md: two hardcoded system roles). */
 export const SYSTEM_ROLE_LITERALS = ['tenant_admin', 'platform_super_admin']

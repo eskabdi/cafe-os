@@ -18,9 +18,26 @@ const sessionSchema = z.object({
   expires_in: z.number().positive(),
 })
 
-/** Calls the pin-login Edge Function and, on success, installs the returned session in the Supabase client. */
-export async function pinLogin(req: PinLoginRequest): Promise<PinLoginResult> {
-  const { data, error } = await supabase.functions.invoke('pin-login', { body: req })
+/** Tile path of a registered kiosk device (kiosk-terminals.md): the tile id plus the device's kiosk token. 4-digit PIN. */
+export interface PinLoginTileRequest {
+  restaurant_slug: string
+  kiosk_token: string
+  profile_id: string
+  pin: string
+}
+
+/** Calls the pin-login Edge Function (username path) and, on success, installs the returned session. */
+export function pinLogin(req: PinLoginRequest): Promise<PinLoginResult> {
+  return invokePinLogin(req)
+}
+
+/** Calls the pin-login Edge Function (kiosk tile path) and, on success, installs the returned session. */
+export function pinLoginTile(req: PinLoginTileRequest): Promise<PinLoginResult> {
+  return invokePinLogin(req)
+}
+
+async function invokePinLogin(body: PinLoginRequest | PinLoginTileRequest): Promise<PinLoginResult> {
+  const { data, error } = await supabase.functions.invoke('pin-login', { body })
   if (error) {
     if (error instanceof FunctionsHttpError) {
       const status = (error.context as { status?: number } | undefined)?.status ?? 500

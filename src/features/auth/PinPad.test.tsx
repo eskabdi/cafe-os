@@ -4,9 +4,19 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { PinPad } from './PinPad'
 
-function Harness({ onSubmit, disabled }: { onSubmit?: () => void; disabled?: boolean }) {
+function Harness({
+  onSubmit,
+  disabled,
+  fixedLength,
+}: {
+  onSubmit?: () => void
+  disabled?: boolean
+  fixedLength?: number
+}) {
   const [v, setV] = useState('')
-  return <PinPad value={v} onChange={setV} onSubmit={onSubmit} disabled={disabled} />
+  return (
+    <PinPad value={v} onChange={setV} onSubmit={onSubmit} disabled={disabled} fixedLength={fixedLength} />
+  )
 }
 
 describe('PinPad', () => {
@@ -72,5 +82,47 @@ describe('PinPad', () => {
     expect(screen.getByRole('button', { name: 'Digit 1' })).toBeDisabled()
     await user.keyboard('1234')
     expect(screen.getByRole('status')).toHaveTextContent('0 of 6')
+  })
+
+  describe('fixed-length (4) mode', () => {
+    it('shows four dots that fill, never echoes digits, and caps at 4', async () => {
+      const user = userEvent.setup()
+      const { container } = render(<Harness fixedLength={4} />)
+      const dots = () => container.querySelectorAll('span.rounded-full')
+      expect(dots()).toHaveLength(4)
+      await user.keyboard('97')
+      expect(Array.from(dots()).filter((d) => d.className.includes('bg-ink'))).toHaveLength(2)
+      await user.keyboard('3156')
+      expect(screen.getByRole('status')).toHaveTextContent('4 of 4 digits entered')
+      expect(container.textContent).not.toContain('9731')
+    })
+
+    it('has a labelled Delete key and a Sign in key that needs all 4 digits', async () => {
+      const user = userEvent.setup()
+      const onSubmit = vi.fn()
+      render(<Harness fixedLength={4} onSubmit={onSubmit} />)
+      const signIn = screen.getByRole('button', { name: 'Sign in' })
+      expect(signIn).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Delete last digit' })).toHaveTextContent('Delete')
+      expect(screen.queryByRole('button', { name: 'Clear PIN' })).toBeNull()
+      await user.keyboard('123')
+      expect(signIn).toBeDisabled()
+      await user.keyboard('4')
+      expect(signIn).toBeEnabled()
+      await user.click(signIn)
+      expect(onSubmit).toHaveBeenCalledTimes(1)
+      await user.click(screen.getByRole('button', { name: 'Delete last digit' }))
+      expect(screen.getByRole('status')).toHaveTextContent('3 of 4')
+    })
+
+    it('does not submit on Enter before 4 digits', async () => {
+      const user = userEvent.setup()
+      const onSubmit = vi.fn()
+      render(<Harness fixedLength={4} onSubmit={onSubmit} />)
+      await user.keyboard('123{Enter}')
+      expect(onSubmit).not.toHaveBeenCalled()
+      await user.keyboard('4{Enter}')
+      expect(onSubmit).toHaveBeenCalledTimes(1)
+    })
   })
 })

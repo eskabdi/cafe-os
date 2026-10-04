@@ -40,6 +40,7 @@ describe('check-forbidden-patterns: client code', () => {
   it('flags localStorage outside the allowlist only', () => {
     expect(rules('src/features/x.ts', 'localStorage.setItem("a","b")')).toContain('local-storage')
     expect(rules('src/lib/utils/ui-prefs.ts', 'localStorage.setItem("a","b")')).toEqual([])
+    expect(rules('src/lib/utils/kiosk-token.ts', 'localStorage.setItem("a","b")')).toEqual([])
   })
 
   it('flags service_role in any casing', () => {

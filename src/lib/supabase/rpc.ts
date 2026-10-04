@@ -100,3 +100,32 @@ export async function getSessionContext(): Promise<SessionContext | null> {
 export async function isPlatformSuperAdmin(): Promise<boolean> {
   return z.boolean().parse(await callRpc('is_platform_super_admin'))
 }
+
+// ── Kiosk devices (shared floor terminals; kiosk-terminals.md) ─────────────────────────────────────────────
+const kioskSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  created_by: z.string().nullable().optional(),
+  created_at: z.string(),
+  last_seen_at: z.string().nullable().optional(),
+  revoked_at: z.string().nullable().optional(),
+})
+export type KioskDevice = z.infer<typeof kioskSchema>
+
+/** Metadata only: the server never returns a token or hash here. Needs kiosks.manage. */
+export async function listKiosks(): Promise<KioskDevice[]> {
+  return z.array(kioskSchema).parse(await callRpc('fn_list_kiosks'))
+}
+
+const registeredKioskSchema = z.object({ id: z.string().uuid(), name: z.string(), token: z.string().regex(/^[0-9a-f]{64}$/) })
+export type RegisteredKiosk = z.infer<typeof registeredKioskSchema>
+
+/** Registers a terminal. The raw `token` exists only in this response: show it once, never log or cache it. Needs step-up (mfa_required). */
+export async function registerKiosk(name: string): Promise<RegisteredKiosk> {
+  return registeredKioskSchema.parse(await callRpc('fn_register_kiosk', { p_name: name }))
+}
+
+/** Idempotent, audited, tenant-scoped. Takes effect on the device's next roster / sign-in call. */
+export async function revokeKiosk(kioskId: string): Promise<void> {
+  z.object({ revoked: z.literal(true) }).passthrough().parse(await callRpc('fn_revoke_kiosk', { p_kiosk_id: kioskId }))
+}

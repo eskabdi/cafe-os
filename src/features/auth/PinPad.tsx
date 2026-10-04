@@ -10,6 +10,11 @@ export interface PinPadProps {
   onSubmit?: () => void
   minLength?: number
   maxLength?: number
+  /**
+   * Fixed-length mode (shared floor terminal): exactly `fixedLength` digits, that many dots, a visibly labelled Delete key
+   * and a labelled "Sign in" submit key in place of CLR. Overrides minLength/maxLength. Omit for the 4-6 digit variant.
+   */
+  fixedLength?: number
   disabled?: boolean
   label?: string
 }
@@ -33,11 +38,14 @@ export function PinPad({
   value,
   onChange,
   onSubmit,
-  minLength = PIN_MIN_LENGTH,
-  maxLength = PIN_MAX_LENGTH,
+  minLength: minLengthProp = PIN_MIN_LENGTH,
+  maxLength: maxLengthProp = PIN_MAX_LENGTH,
+  fixedLength,
   disabled = false,
   label = 'PIN keypad',
 }: PinPadProps) {
+  const minLength = fixedLength ?? minLengthProp
+  const maxLength = fixedLength ?? maxLengthProp
   const groupRef = useRef<HTMLDivElement>(null)
 
   // Keep keyboard focus on the pad (initially, and after a busy/disabled period such as a failed attempt).
@@ -84,7 +92,11 @@ export function PinPad({
             key={i}
             className={cn(
               'h-3.5 w-3.5 rounded-full border-2',
-              value.length > i ? 'border-primary bg-primary' : 'border-slate-300 bg-white',
+              value.length > i
+                ? fixedLength
+                  ? 'border-ink bg-ink'
+                  : 'border-primary bg-primary'
+                : 'border-slate-400 bg-white',
             )}
           />
         ))}
@@ -105,15 +117,28 @@ export function PinPad({
             {d}
           </button>
         ))}
-        <button
-          type="button"
-          className={cn(KEY_CLASS, 'text-xs tracking-wide text-muted-foreground')}
-          disabled={disabled}
-          aria-label="Clear PIN"
-          onClick={clear}
-        >
-          CLR
-        </button>
+        {fixedLength ? (
+          <button
+            type="button"
+            className={cn(KEY_CLASS, 'flex-col gap-0.5 text-xs font-semibold text-ink')}
+            disabled={disabled || value.length === 0}
+            aria-label="Delete last digit"
+            onClick={back}
+          >
+            <Delete size={18} aria-hidden="true" />
+            <span aria-hidden="true">Delete</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            className={cn(KEY_CLASS, 'text-xs tracking-wide text-muted-foreground')}
+            disabled={disabled}
+            aria-label="Clear PIN"
+            onClick={clear}
+          >
+            CLR
+          </button>
+        )}
         <button
           type="button"
           className={KEY_CLASS}
@@ -123,15 +148,27 @@ export function PinPad({
         >
           0
         </button>
-        <button
-          type="button"
-          className={KEY_CLASS}
-          disabled={disabled}
-          aria-label="Delete last digit"
-          onClick={back}
-        >
-          <Delete size={18} aria-hidden="true" />
-        </button>
+        {fixedLength ? (
+          <button
+            type="button"
+            className={cn(KEY_CLASS, 'bg-ink text-sm font-bold text-white hover:bg-ink/90 active:bg-ink/80')}
+            disabled={disabled || value.length < fixedLength}
+            aria-label="Sign in"
+            onClick={() => onSubmit?.()}
+          >
+            Sign in
+          </button>
+        ) : (
+          <button
+            type="button"
+            className={KEY_CLASS}
+            disabled={disabled}
+            aria-label="Delete last digit"
+            onClick={back}
+          >
+            <Delete size={18} aria-hidden="true" />
+          </button>
+        )}
       </div>
     </div>
   )
