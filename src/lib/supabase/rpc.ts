@@ -85,9 +85,22 @@ const sessionContextSchema = z
     station_ids: z.array(z.string()).default([]),
     tenant_writable: z.boolean().optional(),
     platform_role: z.string().optional(),
+    // Forced PIN change / maker-checker (migrations 0023, 0024). Absent for platform-only identities. An unknown status
+    // fails the parse (contextStatus 'error') instead of being guessed: guessing 'none' would hide the restriction screen.
+    must_change_pin: z.boolean().optional(),
+    pin_change_status: z.enum(['none', 'required', 'pending_approval']).optional(),
+    pin_length: z.union([z.literal(4), z.literal(6)]).nullable().optional(),
   })
   .nullable()
 export type SessionContext = NonNullable<z.infer<typeof sessionContextSchema>>
+export type PinChangeStatus = 'none' | 'required' | 'pending_approval'
+
+/** The account's PIN-change state as the server reported it (UX only; the database is what restricts the account). */
+export function pinChangeStatusOf(ctx: Pick<SessionContext, 'pin_change_status' | 'must_change_pin'> | null | undefined): PinChangeStatus {
+  if (!ctx) return 'none'
+  if (ctx.pin_change_status) return ctx.pin_change_status
+  return ctx.must_change_pin ? 'required' : 'none'
+}
 
 /** Server-derived identity (profile, role, permissions, station access, tenant status). Never from JWT claims. */
 export async function getSessionContext(): Promise<SessionContext | null> {
@@ -128,4 +141,36 @@ export async function registerKiosk(name: string): Promise<RegisteredKiosk> {
 /** Idempotent, audited, tenant-scoped. Takes effect on the device's next roster / sign-in call. */
 export async function revokeKiosk(kioskId: string): Promise<void> {
   z.object({ revoked: z.literal(true) }).passthrough().parse(await callRpc('fn_revoke_kiosk', { p_kiosk_id: kioskId }))
+}
+
+// ── Forced PIN change approvals (maker-checker, migration 0024) ───────────────────────────────────────────────
+const pendingPinChangeSchema = z.object({
+  profile_id: z.string().uuid(),
+  user_name: z.string().nullable(),
+  role_label: z.string().nullable(),
+  requested_at: z.string().nullable(),
+})
+export type PendingPinChange = z.infer<typeof pendingPinChangeSchema>
+
+/** Staff of the caller's own tenant whose forced PIN change waits for approval. Needs users.manage (server-checked). */
+export async function listPendingPinChanges(): Promise<PendingPinChange[]> {
+  return z.array(pendingPinChangeSchema).parse(await callRpc('fn_list_pending_pin_changes'))
+}
+
+const pinDecisionSchema = z.object({ profile_id: z.string().uuid(), status: z.enum(['approved', 'rejected']) })
+export type PinDecision = z.infer<typeof pinDecisionSchema>
+
+/** users.manage + step-up (mfa_required). Unknown, foreign-tenant and no-longer-pending ids are all not_found. */
+export async function approvePinChange(profileId: string): Promise<PinDecision> {
+  return pinDecisionSchema.parse(await callRpc('fn_approve_pin_change', { p_profile_id: profileId }))
+}
+
+/** Same checks as approve; the subject must choose another PIN afterwards. */
+export async function rejectPinChange(profileId: string): Promise<PinDecision> {
+  return pinDecisionSchema.parse(await callRpc('fn_reject_pin_change', { p_profile_id: profileId }))
+}
+
+/** Own notifications only (unknown / foreign ids are not_found). Works while a PIN change is pending. */
+export async function markNotificationRead(id: string): Promise<void> {
+  z.object({ id: z.string() }).passthrough().parse(await callRpc('fn_mark_notification_read', { p_id: id }))
 }
