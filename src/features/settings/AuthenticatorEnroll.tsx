@@ -124,11 +124,8 @@ export function AuthenticatorEnroll({ onEnrolled }: AuthenticatorEnrollProps) {
         code,
       })
       setCode('')
-      if (verifyError) {
-        setError(verifyErrorMessage(verifyError))
-        return
-      }
-      verified = true
+      if (verifyError) setError(verifyErrorMessage(verifyError))
+      else verified = true
     } catch {
       setError(AUTHENTICATOR_MESSAGES.generic)
     } finally {

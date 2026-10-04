@@ -87,6 +87,18 @@ describe('AuthenticatorEnroll', () => {
     expect(h.unenroll).toHaveBeenCalledTimes(1)
   })
 
+  it('a refused code re-enables the form, keeps the factor and shows a neutral error', async () => {
+    h.challengeAndVerify.mockResolvedValue({ data: null, error: new Error('invalid') })
+    const onEnrolled = vi.fn()
+    const { user } = await reachCodeStep(onEnrolled)
+    await user.click(screen.getByRole('button', { name: 'Verify and finish' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('That code did not work.')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Verify and finish' })).toBeEnabled())
+    expect(screen.getByTestId('authenticator-key')).toBeInTheDocument()
+    expect(h.unenroll).not.toHaveBeenCalled()
+    expect(onEnrolled).not.toHaveBeenCalled()
+  })
+
   it('unmounting before any verify still discards the unfinished factor', async () => {
     const { view } = await reachCodeStep(vi.fn())
     view.unmount()
