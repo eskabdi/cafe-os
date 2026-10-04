@@ -35,4 +35,18 @@ describe('inactivity policy', () => {
     delete window.__CAFEOS_INACTIVITY__
     expect(inactivityTimings()).toEqual({ idleMs: IDLE_MS, warnMs: WARN_MS })
   })
+
+  it('uses the tenant session_timers (warning for signout - warn seconds), the DEV override still wins', () => {
+    expect(inactivityTimings({ idle_warning_seconds: 60, signout_seconds: 300 })).toEqual({
+      idleMs: 60_000,
+      warnMs: 240_000,
+    })
+    expect(inactivityTimings({ signout_seconds: 300 })).toEqual({ idleMs: IDLE_MS, warnMs: WARN_MS })
+    window.__CAFEOS_INACTIVITY__ = { idleMs: 1000, warnMs: 1000 }
+    expect(inactivityTimings({ idle_warning_seconds: 60, signout_seconds: 300 })).toEqual({
+      idleMs: 1000,
+      warnMs: 1000,
+    })
+    delete window.__CAFEOS_INACTIVITY__
+  })
 })

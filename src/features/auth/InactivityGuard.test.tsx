@@ -89,6 +89,20 @@ afterEach(() => {
 })
 
 describe('InactivityGuard', () => {
+  it('follows the tenant session_timers from the context (warning at 10 s, sign-out at 25 s)', async () => {
+    renderGuard(
+      value({ session_timers: { idle_warning_seconds: 10, signout_seconds: 25, pin_pad_idle_seconds: 60 } }),
+    )
+    await advance(9_000)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    await advance(2_000)
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    await advance(12_000)
+    expect(signOut).not.toHaveBeenCalled()
+    await advance(3_000)
+    expect(signOut).toHaveBeenCalledTimes(1)
+  })
+
   it.each(['required', 'pending_approval'] as const)(
     'still signs out a user on the forced PIN screens (status %s)',
     async (status) => {

@@ -1,6 +1,6 @@
 import { FunctionsFetchError, FunctionsHttpError } from '@supabase/supabase-js'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanDisplayText, fetchStaffRoster, parseRoster } from './staff-roster'
+import { cleanDisplayText, fetchStaffRoster, parsePinPadIdleSeconds, parseRoster } from './staff-roster'
 
 const h = vi.hoisted(() => ({ invoke: vi.fn() }))
 vi.mock('./client', () => ({ supabase: { functions: { invoke: h.invoke } } }))
@@ -56,8 +56,20 @@ describe('fetchStaffRoster', () => {
   it('posts exactly slug + token and returns tiles', async () => {
     h.invoke.mockResolvedValue({ data: { staff: [{ id: ID, name: 'A B', role: 'R', color: null, icon: null }] }, error: null })
     const res = await fetchStaffRoster(req)
-    expect(res).toEqual({ ok: true, staff: [{ id: ID, name: 'A B', role: 'R', color: null, icon: null }] })
+    expect(res).toEqual({
+      ok: true,
+      staff: [{ id: ID, name: 'A B', role: 'R', color: null, icon: null }],
+      pinPadIdleSeconds: null,
+    })
     expect(h.invoke).toHaveBeenCalledWith('staff-roster', { body: req })
+  })
+
+  it('accepts the {staff, pin_pad_idle_seconds} response (migration 0025)', async () => {
+    h.invoke.mockResolvedValue({
+      data: { staff: [{ id: ID, name: 'A B', role: 'R', color: null, icon: null }], pin_pad_idle_seconds: 90 },
+      error: null,
+    })
+    await expect(fetchStaffRoster(req)).resolves.toMatchObject({ ok: true, pinPadIdleSeconds: 90 })
   })
 
   it.each([
@@ -75,5 +87,15 @@ describe('fetchStaffRoster', () => {
     await expect(fetchStaffRoster(req)).resolves.toEqual({ ok: false, reason: 'network' })
     h.invoke.mockResolvedValue({ data: { nope: 1 }, error: null })
     await expect(fetchStaffRoster(req)).resolves.toEqual({ ok: false, reason: 'server_error' })
+  })
+})
+
+describe('parsePinPadIdleSeconds', () => {
+  it('keeps a finite number and ignores anything else', () => {
+    expect(parsePinPadIdleSeconds({ staff: [], pin_pad_idle_seconds: 45 })).toBe(45)
+    expect(parsePinPadIdleSeconds({ staff: [] })).toBeNull()
+    expect(parsePinPadIdleSeconds({ staff: [], pin_pad_idle_seconds: '45' })).toBeNull()
+    expect(parsePinPadIdleSeconds({ staff: [], pin_pad_idle_seconds: Number.NaN })).toBeNull()
+    expect(parsePinPadIdleSeconds(null)).toBeNull()
   })
 })

@@ -205,6 +205,35 @@ describe('TerminalPage', () => {
     expect(screen.getByText('0 of 4 digits entered')).toBeInTheDocument()
   })
 
+  it.each([
+    [20, 20_000],
+    [5, 15_000], // clamped up to 15 s
+    [null, 60_000], // older Edge Function: default 60 s
+  ] as const)(
+    'uses the roster pin_pad_idle_seconds %s for the PIN pad timeout (%s ms)',
+    async (seconds, ms) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      try {
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+        setKioskToken('demo-cafe', TOKEN)
+        h.fetchStaffRoster.mockResolvedValue({ ok: true, staff, pinPadIdleSeconds: seconds })
+        renderAt()
+        await user.click(await screen.findByRole('radio', { name: /Abebe/ }))
+        expect(screen.getByRole('heading', { name: 'Enter your PIN' })).toBeInTheDocument()
+        act(() => {
+          vi.advanceTimersByTime(ms - 500)
+        })
+        expect(screen.getByRole('heading', { name: 'Enter your PIN' })).toBeInTheDocument()
+        act(() => {
+          vi.advanceTimersByTime(1_000)
+        })
+        expect(screen.queryByRole('heading', { name: 'Enter your PIN' })).toBeNull()
+      } finally {
+        vi.useRealTimers()
+      }
+    },
+  )
+
   it('shows a neutral empty state for an empty roster', async () => {
     setKioskToken('demo-cafe', TOKEN)
     h.fetchStaffRoster.mockResolvedValue({ ok: true, staff: [] })
