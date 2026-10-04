@@ -174,8 +174,8 @@ sequenceDiagram
   an exposed PIN again while pending (blocked login) returns to `required`; an admin-set PIN (`fn_set_user_pin`) leaves nobody pending; a voluntary change (no flag) needs no approval.
   `fn_get_session_context()` adds `pin_change_status` (`none|required|pending_approval`) and `pin_length` (4; 6 for Cashier via `fn_pin_length_for_role_name`); `must_change_pin` is true only while `required`.
   The pin-change function answers `{changed, pending_approval, other_sessions_revoked}`. A restricted user can still read and mark read their own notifications (recipient-only policy, no `has_permission`).
-- **Residual risks:** (0) with a single tenant_admin who is unavailable a pending member waits (an admin can also set a PIN through the staff tools); the approver is not required to be a different person than the one whose
-  rights cover the subject (any covering `users.manage` holder may approve); (1) two simultaneous correct-PIN logins can both pass the check before either session exists (check and mint are separate steps; the
+- **Residual risks:** (0) with a single tenant_admin who is unavailable a pending member waits (an admin can also set a PIN through the staff tools); the approver is not required to be a different person than the subject's manager
+  (since 0026/0027 only a tenant_admin on an aal2 session can approve, so one admin may both review and approve); (1) two simultaneous correct-PIN logins can both pass the check before either session exists (check and mint are separate steps; the
   next login is blocked); (2) a staff member who closed the browser without signing out is blocked for up to 2 hours (or until they sign out elsewhere), and then must change their PIN
   (user-decided; their manager is notified); (3) a person who knows the PIN can trigger the forced change of that account (a nuisance, bounded by the per-user throttle);
   (4) `auth.sessions` semantics and `signOut(jwt, 'others')` were verified against the documented GoTrue schema only, not against a running GoTrue.
@@ -227,7 +227,7 @@ All of this is UX; the database (`fn_pin_restricted` behind `has_permission` / s
 - **Settings page** `/r/:slug/settings/session-timers` (`SessionTimersPage`, `RequirePermission settings.session_timers`, header link): react-hook-form +
   zod (`sessionTimersFormSchema`, same bounds as the server, preview only), live explanation of the warning window, Save
   (`fn_update_session_timers`) and "Reset to defaults" with a confirm (`fn_reset_session_timers`, 15 / 30 / 60). `mfa_required` opens `StepUpDialog`
-  (TOTP `challengeAndVerify`, aal2) and retries the same action once verified (server gate: `fn_require_aal2`, which also refuses every PIN profile even at aal2; an account without an authenticator sees "An authenticator is required for this action. This account has none set up; ask your administrator." and cannot proceed); `invalid_input` marks the field named by the error `detail`
+  (TOTP `challengeAndVerify`, aal2) and retries the same action once verified (server gate: `fn_require_aal2`, which also refuses every PIN profile even at aal2; an account without an authenticator sees "An authenticator is required for this action. This account has none set up; ask your administrator." and cannot proceed; a Supabase Auth account is pointed to Settings > Security instead); `invalid_input` marks the field named by the error `detail`
   (`RpcError.detail`, kept only when it is a bare identifier); other codes map to neutral copy. Success: toast, cache update, `refreshContext()`.
 
 ### SPA: authenticator self-enrollment (Security page)
@@ -245,5 +245,5 @@ All of this is UX; the database (`fn_pin_restricted` behind `has_permission` / s
   then session refresh, `refreshContext()` and list invalidation. There is no "last factor" block (an admin may re-enrol at once).
 - **Errors** are neutral ("That code did not work...", rate limit, generic); Supabase codes are mapped in `authenticator-errors.ts` and never shown, and no assurance-level wording reaches the UI.
 - **StepUpDialog** with no authenticator: a Supabase Auth account sees "Set one up in Security settings" with a link to this page; PIN sessions still see "ask your administrator".
-- Tests: `src/lib/domain/authenticator.test.ts`, `src/features/settings/SecurityPage.test.tsx` (mocked `supabase.auth.mfa`), `src/features/auth/StepUpDialog.test.tsx`, `tests/e2e/security.spec.ts` (page.route mocks).
+- Tests: `src/lib/domain/authenticator.test.ts`, `src/features/settings/SecurityPage.test.tsx` (mocked `supabase.auth.mfa`), `src/features/settings/AuthenticatorEnroll.test.tsx`, `src/features/auth/StepUpDialog.test.tsx`, `tests/e2e/security.spec.ts` (page.route mocks).
 - `src/lib/supabase/types.ts` is still the placeholder (no Docker for `supabase gen types`); its `Functions` was hand-extended with the three 0025 RPCs.

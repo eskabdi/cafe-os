@@ -41,3 +41,15 @@ Do these BEFORE a hosted project takes real users. Items marked (manual) cannot 
     a kiosk's `staff-roster` answer carries the tenant's `pin_pad_idle_seconds`. Regenerate `src/lib/supabase/types.ts` (new table and three RPCs).
 15. **Mandatory aal2 (0026):** approving/rejecting a PIN change and changing/resetting the session timers need an aal2 session; PIN-only staff cannot do either, even with the permission and even if they enrol a TOTP factor themselves: since 0027 aal2 requires `profiles.auth_method <> 'pin'`, checked server-side. Before deploying, make sure every
     tenant has at least one tenant_admin who has enrolled TOTP (only tenant_admin accounts use email + password, so a delegate role cannot pass aal2), otherwise nobody can release a PIN-change request or edit the timers. Enrollment is self-service: the account signs in with email + password and opens **Security** (`/r/<slug>/settings/security`, header link) to scan the QR / type the setup key and confirm a 6-digit code; no operator action or Dashboard step is needed, and PIN sessions do not see the page. The page needs no new CSP origin (the QR is an `<img>` `data:` URL, already covered by `img-src data:`). Verify: a PIN staff delegate gets `mfa_required` on both, also from an aal2 session; migration 0027 must be applied together with 0026; the tenant_admin on aal2 succeeds (after enrolling at Security, the next Save/Approve works without signing in again).
+16. **PIN login capacity (auth rate limits):** `pin-login` mints each session server-side (`auth.admin.generateLink`, then `verifyOtp`) from the Edge Function's own address, so GoTrue's per-IP `token_verifications` bucket (default 30 per 5 minutes) is shared by every tenant's PIN logins and would cap the whole platform at ~6 logins a minute. Raise it on the hosted project (Dashboard > Authentication > Rate Limits) to at least the peak PIN logins per 5 minutes across all tenants (`supabase/config.toml` sets 600 for local and CI). A wrong PIN never reaches `verifyOtp`, so the bucket cannot be drained without a correct PIN. Verify under load before launch: a burst of valid logins from several tenants must not return `server_error`.
+17. **Admins without an authenticator (lockout check):** run before every deploy of 0026/0027 and after provisioning a tenant; it must return no rows, otherwise that tenant cannot approve PIN changes or edit session timers until an admin enrols (Settings > Security):
+    ```sql
+    select r.id, r.slug
+    from public.restaurants r
+    where not exists (
+      select 1
+      from public.profiles p
+      join public.roles ro on ro.id = p.role_id and ro.restaurant_id = p.restaurant_id and ro.system_key = 'tenant_admin'
+      join auth.mfa_factors f on f.user_id = p.id and f.status = 'verified' and f.factor_type = 'totp'
+      where p.restaurant_id = r.id and p.is_active);
+    ```

@@ -1,7 +1,8 @@
 import { z } from 'zod'
 
 // Authenticator-app (TOTP) enrollment helpers. Pure and UX-only: Supabase Auth issues and verifies factors, and the
-// database re-checks the assurance level (fn_require_aal2) on every protected command.
+// database re-checks the assurance level on the commands that need it (fn_require_aal2: PIN-change decisions and
+// session-timer writes; fn_require_step_up: destructive admin RPCs).
 
 /** Domain suffix of the synthetic, non-routable emails behind PIN logins (supabase/functions/pin-login/logic.ts). */
 const PIN_ACCOUNT_EMAIL_SUFFIX = '.staff.cafeos.invalid'

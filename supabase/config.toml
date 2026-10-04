@@ -49,7 +49,11 @@ password_requirements = "lower_upper_letters_digits_symbols"
 [auth.rate_limit]
 email_sent = 4
 sign_in_sign_ups = 30
-token_verifications = 30
+# pin-login redeems every PIN session's one-time token (generateLink + verifyOtp) from the Edge Function's own address, so this
+# per-IP bucket is shared by ALL tenants' PIN logins (default 30 per 5 min would cap the whole platform). Wrong PINs never reach
+# verifyOtp, so the bucket cannot be drained without a correct PIN. Size it to the peak PIN logins per 5 minutes; on the hosted
+# project it is set under Authentication > Rate Limits (deploy-checklist item 16).
+token_verifications = 600
 token_refresh = 150
 anonymous_users = 10
 
