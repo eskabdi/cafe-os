@@ -2,7 +2,7 @@
 -- RPC that takes a UUID. Denial alone is not enough: the outcome must be identical to an id that exists
 -- nowhere (no existence oracle), and B's data must be byte-for-byte unchanged afterwards.
 begin;
-select plan(72);
+select plan(74);
 
 -- ── fixtures: make sure tenant B owns at least one row in EVERY tenant table ──
 create temp table _f on commit drop as
@@ -23,6 +23,8 @@ select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
        (select id from public.subscriptions where restaurant_id = tests.tenant_id('second-cafe')) b_sub,
        (select id from public.plans where name = 'Starter') plan_id;
 grant all on _f to public;
+-- tenant B's waiter awaits PIN-change approval: a REAL foreign pending id for the approve/reject oracle probes below
+update public.profile_secrets set pin_change_pending = true, pin_change_requested_at = now() where profile_id = (select b_waiter from _f);
 
 insert into public.ingredients (restaurant_id, name, station_id, unit, stock) select b, 'Flour B', b_station, 'kg', 5 from _f;
 insert into public.recipe_lines (restaurant_id, menu_item_id, ingredient_id, qty_per_serving)
@@ -252,6 +254,10 @@ select is(tests.oracle($q$select public.fn_reactivate_tenant({id}, 'tenant attac
           'P0001|permission_denied|', 'fn_reactivate_tenant(B): permission_denied, same as unknown tenant');
 select is(tests.oracle(format($q$select public.fn_provision_tenant('Evil', 'evil-cafe', {id}, 'x@y.example.com', 'E', null, null, %L, null)$q$, (select plan_id from _f)), (select b_admin from _f)),
           'P0001|permission_denied|', 'fn_provision_tenant(owner = B admin): permission_denied, same as unknown user');
+select is(tests.oracle($q$select public.fn_approve_pin_change({id})$q$, (select b_waiter from _f)),
+          'P0001|not_found|', 'fn_approve_pin_change(B pending staff): not_found, same as unknown');
+select is(tests.oracle($q$select public.fn_reject_pin_change({id})$q$, (select b_waiter from _f)),
+          'P0001|not_found|', 'fn_reject_pin_change(B pending staff): not_found, same as unknown');
 select is(tests.oracle($q$select public.fn_set_user_pin({id}, '9999')$q$, (select b_waiter from _f)),
           '42501|permission denied for function fn_set_user_pin|', 'fn_set_user_pin(B staff): privilege denial, same as unknown');
 select is(tests.oracle($q$select public.fn_verify_pin({id}, '2222')$q$, (select b_waiter from _f)),

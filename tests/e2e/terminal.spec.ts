@@ -64,11 +64,13 @@ test('a device without a token shows the neutral not-set-up screen', async ({ pa
   expect(called).toBe(false)
 })
 
-test('a 401 roster clears the stored token and shows the same neutral screen', async ({ page }) => {
+test('a 401 roster shows the neutral screen, keeps the token, and removal is explicit', async ({ page }) => {
   await withToken(page)
   await mockFn(page, 'staff-roster', (route) => json(route, 401, { error: 'invalid_kiosk' }))
   await page.goto(`/r/${SLUG}/terminal`)
   await expect(page.getByText('This terminal is not set up. Ask a manager to register it.')).toBeVisible()
+  expect(await page.evaluate((k) => localStorage.getItem(k), STORAGE_KEY)).toBe(TOKEN)
+  await page.getByRole('button', { name: 'Remove setup from this device' }).click()
   expect(await page.evaluate((k) => localStorage.getItem(k), STORAGE_KEY)).toBeNull()
 })
 

@@ -86,8 +86,8 @@ terminal is noticed on its next load, focus or sign-in attempt.
   challenge) is a **follow-up**.
 - **Inactivity sign-out after login.** `InactivityGuard` (mounted once inside `AuthProvider`, `src/features/auth`) ends the session of every signed-in
   tenant user whose role is not the `tenant_admin` system role (decided from `role.system_key` in the server-derived session context, never a role name) and
-  who is not a platform admin. Constants are in `src/features/auth/inactivity.ts`: `IDLE_MS = 30_000` (a "Still there?" `alertdialog` appears, focus on
-  Continue, countdown in a `role=status` text) and `WARN_MS = 30_000` (sign-out), i.e. **60 s of inactivity in total**. Activity = pointerdown, keydown,
+  who is not a platform admin. Constants are in `src/features/auth/inactivity.ts`: `IDLE_MS = 15_000` (a "Still there?" `alertdialog` appears, focus on
+  Continue, countdown in a `role=status` text) and `WARN_MS = 15_000` (sign-out), i.e. **30 s of inactivity in total**. Activity = pointerdown, keydown,
   touchstart, wheel, visibility return; only Continue answers the warning. Deadlines use `Date.now()`, so a tablet that slept signs out on the first tick or
   visibility event after waking; an in-flight mutation counts as activity. Sign-out calls `supabase.auth.signOut()` (deletes the server session, freeing the
   one-session rule at once), clears the TanStack Query cache and routes to the terminal when the device holds a kiosk token, otherwise to `/r/<slug>/login`.

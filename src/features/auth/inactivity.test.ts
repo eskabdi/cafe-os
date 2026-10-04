@@ -2,19 +2,19 @@ import { describe, expect, it } from 'vitest'
 import { IDLE_MS, WARN_MS, idlePhase, inactivityTimings, isInactivityManaged } from './inactivity'
 
 describe('inactivity policy', () => {
-  it('totals one minute: warning at 30s, sign-out at 60s', () => {
-    expect(IDLE_MS).toBe(30_000)
-    expect(WARN_MS).toBe(30_000)
-    expect(IDLE_MS + WARN_MS).toBe(60_000)
+  it('totals 30 seconds: warning at 15s, sign-out at 30s', () => {
+    expect(IDLE_MS).toBe(15_000)
+    expect(WARN_MS).toBe(15_000)
+    expect(IDLE_MS + WARN_MS).toBe(30_000)
   })
 
   it('derives the phase from elapsed wall-clock time (a long sleep is expired at once)', () => {
     const t = inactivityTimings()
     expect(idlePhase(0, t)).toBe('active')
-    expect(idlePhase(29_999, t)).toBe('active')
-    expect(idlePhase(30_000, t)).toBe('warning')
-    expect(idlePhase(59_999, t)).toBe('warning')
-    expect(idlePhase(60_000, t)).toBe('expired')
+    expect(idlePhase(14_999, t)).toBe('active')
+    expect(idlePhase(15_000, t)).toBe('warning')
+    expect(idlePhase(29_999, t)).toBe('warning')
+    expect(idlePhase(30_000, t)).toBe('expired')
     expect(idlePhase(8 * 3_600_000, t)).toBe('expired')
   })
 

@@ -89,9 +89,9 @@ afterEach(() => {
 })
 
 describe('InactivityGuard', () => {
-  it('shows nothing before 30s, then a focused alertdialog with a countdown', async () => {
+  it('shows nothing before 15s, then a focused alertdialog with a countdown', async () => {
     renderGuard()
-    await advance(29_000)
+    await advance(14_000)
     expect(screen.queryByRole('alertdialog')).toBeNull()
     await advance(2_000)
     const dlg = screen.getByRole('alertdialog')
@@ -99,35 +99,35 @@ describe('InactivityGuard', () => {
     expect(screen.getByRole('button', { name: 'Continue' })).toHaveFocus()
     expect(screen.getByRole('status')).toHaveTextContent(/Signing out in \d+ seconds/)
     await advance(5_000)
-    expect(screen.getByRole('status')).toHaveTextContent('Signing out in 24 seconds')
+    expect(screen.getByRole('status')).toHaveTextContent('Signing out in 9 seconds')
     expect(signOut).not.toHaveBeenCalled()
   })
 
   it('activity before the warning restarts the countdown', async () => {
     renderGuard()
-    await advance(25_000)
+    await advance(12_000)
     act(() => {
       document.dispatchEvent(new Event('pointerdown', { bubbles: true }))
     })
-    await advance(25_000)
+    await advance(12_000)
     expect(screen.queryByRole('alertdialog')).toBeNull()
-    await advance(6_000)
+    await advance(4_000)
     expect(screen.getByRole('alertdialog')).toBeInTheDocument()
   })
 
   it('Continue resets everything', async () => {
     renderGuard()
-    await advance(35_000)
+    await advance(17_000)
     act(() => screen.getByRole('button', { name: 'Continue' }).click())
     expect(screen.queryByRole('alertdialog')).toBeNull()
-    await advance(29_000)
+    await advance(14_000)
     expect(screen.queryByRole('alertdialog')).toBeNull()
     expect(signOut).not.toHaveBeenCalled()
   })
 
   it('ambient activity does not dismiss the warning', async () => {
     renderGuard()
-    await advance(35_000)
+    await advance(17_000)
     act(() => {
       document.dispatchEvent(new Event('keydown', { bubbles: true }))
       document.dispatchEvent(new Event('wheel', { bubbles: true }))
@@ -135,10 +135,10 @@ describe('InactivityGuard', () => {
     expect(screen.getByRole('alertdialog')).toBeInTheDocument()
   })
 
-  it('signs out at 60s total, clears the query cache and goes to the staff login', async () => {
+  it('signs out at 30s total, clears the query cache and goes to the staff login', async () => {
     renderGuard()
     client.setQueryData(['secret'], 'staff data')
-    await advance(61_000)
+    await advance(31_000)
     expect(signOut).toHaveBeenCalledTimes(1)
     expect(client.getQueryData(['secret'])).toBeUndefined()
     expect(screen.getByTestId('where')).toHaveTextContent('/r/demo-cafe/login')
@@ -148,14 +148,14 @@ describe('InactivityGuard', () => {
   it('goes to the terminal when the device holds a kiosk token', async () => {
     setKioskToken('demo-cafe', TOKEN)
     renderGuard()
-    await advance(61_000)
+    await advance(31_000)
     expect(signOut).toHaveBeenCalledTimes(1)
     expect(screen.getByTestId('where')).toHaveTextContent('/r/demo-cafe/terminal')
   })
 
   it('the Sign out button signs out immediately', async () => {
     renderGuard()
-    await advance(35_000)
+    await advance(17_000)
     await act(async () => screen.getByRole('button', { name: 'Sign out' }).click())
     expect(signOut).toHaveBeenCalledTimes(1)
     expect(screen.getByTestId('where')).toHaveTextContent('/login')
@@ -180,11 +180,11 @@ describe('InactivityGuard', () => {
 
   it('a visibility return before the deadline counts as activity', async () => {
     renderGuard()
-    await advance(25_000)
+    await advance(12_000)
     act(() => {
       document.dispatchEvent(new Event('visibilitychange'))
     })
-    await advance(25_000)
+    await advance(12_000)
     expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 
@@ -222,14 +222,14 @@ describe('InactivityGuard', () => {
     expect(signOut).not.toHaveBeenCalled()
     release()
     await advance(0)
-    await advance(35_000)
+    await advance(17_000)
     expect(screen.getByRole('alertdialog')).toBeInTheDocument()
   })
 
   it('cross-tab: activity elsewhere resets, a sign-out elsewhere signs this tab out', async () => {
     renderGuard()
     const other = new FakeChannel('cafeos-session')
-    await advance(35_000)
+    await advance(17_000)
     expect(screen.getByRole('alertdialog')).toBeInTheDocument()
     act(() => other.postMessage({ type: 'activity' }))
     expect(screen.queryByRole('alertdialog')).toBeNull()
@@ -242,7 +242,7 @@ describe('InactivityGuard', () => {
     const other = new FakeChannel('cafeos-session')
     const got = vi.fn()
     other.onmessage = (e) => got(e.data)
-    await advance(61_000)
+    await advance(31_000)
     expect(got).toHaveBeenCalledWith({ type: 'signout' })
   })
 
@@ -250,7 +250,7 @@ describe('InactivityGuard', () => {
     vi.stubGlobal('BroadcastChannel', undefined)
     const remove = vi.spyOn(document, 'removeEventListener')
     renderGuard()
-    await advance(61_000)
+    await advance(31_000)
     expect(signOut).toHaveBeenCalledTimes(1)
     remove.mockRestore()
   })

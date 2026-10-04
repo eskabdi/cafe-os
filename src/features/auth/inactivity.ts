@@ -2,9 +2,9 @@
 // settings later. Total time to sign-out = IDLE_MS + WARN_MS.
 
 /** No activity for this long shows the "Still there?" warning. */
-export const IDLE_MS = 30_000
+export const IDLE_MS = 15_000
 /** Time the warning is shown before the session is ended. */
-export const WARN_MS = 30_000
+export const WARN_MS = 15_000
 
 export interface InactivityTimings {
   idleMs: number
