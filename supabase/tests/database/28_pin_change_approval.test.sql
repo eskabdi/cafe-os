@@ -3,7 +3,7 @@
 -- past_due / suspended, no oracle, never the subject), service-only completion, notifications, audit rows free of secrets,
 -- session-context fields.
 begin;
-select plan(207);
+select plan(239);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -281,7 +281,7 @@ select is((select pin_change_pending from public.profile_secrets where profile_i
 select is((select count(*)::int from public.audit_logs where event in ('auth.pin_change_approved', 'auth.pin_change_rejected')), 0, 'and wrote no decision audit row');
 
 -- delegate (users.manage, lower rights) cannot decide for a role it does not cover
-select tests.authenticate_as((select admin from _f));
+select tests.aal2((select admin from _f));   -- (the admin holds a verified factor by now, so role changes need aal2 step-up)
 insert into public.roles (restaurant_id, name) values ((select a from _f), 'HR Lead');
 select public.fn_update_role_permissions((select id from public.roles where restaurant_id = (select a from _f) and name = 'HR Lead'), array['users.manage', 'users.view'], '{}');
 select public.fn_change_user_role((select deleg from _f), (select id from public.roles where restaurant_id = (select a from _f) and name = 'HR Lead'));

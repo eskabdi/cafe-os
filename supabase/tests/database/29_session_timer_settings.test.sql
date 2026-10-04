@@ -4,7 +4,7 @@
 -- tenant status, cross-tenant isolation, service-only kiosk bootstrap returning the kiosk tenant's own pin_pad_idle_seconds,
 -- service_role holds no direct privilege on the table (the definer RPCs are the only readers/writers).
 begin;
-select plan(161);
+select plan(177);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
