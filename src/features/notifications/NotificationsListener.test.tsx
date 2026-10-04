@@ -2,7 +2,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, useLocation } from 'react-router-dom'
-import { Toaster } from 'sonner'
+import { Toaster, toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthContext, type AuthValue } from '@/features/auth/useAuth'
 import type { NotificationSubscription, UserNotification } from '@/lib/supabase/notifications'
@@ -100,8 +100,14 @@ beforeEach(() => {
   h.markRead.mockReset().mockResolvedValue(undefined)
   refreshContext.mockClear()
 })
-afterEach(() => {
+afterEach(async () => {
   h.handlers = null
+  // Sonner removes a dismissed toast on a timer; let it finish while jsdom still exists, or it can fire after teardown
+  // ("window is not defined", an unhandled error that fails the run).
+  act(() => {
+    toast.dismiss()
+  })
+  await waitFor(() => expect(document.querySelector('[data-sonner-toast]')).toBeNull())
 })
 
 describe('NotificationsListener', () => {
