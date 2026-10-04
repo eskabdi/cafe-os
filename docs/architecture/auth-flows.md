@@ -167,8 +167,8 @@ sequenceDiagram
   The user stays restricted exactly as before (`fn_pin_restricted(user) = must_change_pin or pin_change_pending`, tenant_admin exempt, is the single predicate behind
   `has_permission` / `has_station_access` / `current_station_ids` and the session context). A tenant_admin (or a delegate with `users.manage` who covers the subject's role) decides:
   `fn_approve_pin_change(profile)` clears the pending state (audit `auth.pin_change_approved`, subject notified `security.pin_change_approved`), `fn_reject_pin_change(profile)` sets
-  `must_change_pin = true` again (audit `auth.pin_change_rejected`, subject notified `security.pin_change_rejected`, a new change is needed). Both need `users.manage` and step-up
-  (`fn_require_step_up`: `mfa_required` for an admin with a verified factor on an aal1 session), take the tenant from the identity, lock the row, are never allowed on yourself, and answer
+  `must_change_pin = true` again (audit `auth.pin_change_rejected`, subject notified `security.pin_change_rejected`, a new change is needed). Both need `users.manage` and a real authenticator
+  (`fn_require_aal2`, 0026: `mfa_required` unless the session is aal2; PIN-only staff and admins without a factor never pass, so a PIN delegate holding the permission cannot decide; the tenant_admin or a Supabase Auth delegate with an authenticator does), take the tenant from the identity, lock the row, are never allowed on yourself, and answer
   `not_found` identically for unknown, foreign-tenant and not-pending ids (replays are `not_found` too). `fn_list_pending_pin_changes()` feeds the approval screen (own tenant only).
   States: `none` -> `required` (blocked login) -> `pending_approval` (pin-change) -> `none` (approve) or `required` (reject). A PIN change while already pending stays pending (no bypass);
   an exposed PIN again while pending (blocked login) returns to `required`; an admin-set PIN (`fn_set_user_pin`) leaves nobody pending; a voluntary change (no flag) needs no approval.
@@ -227,6 +227,6 @@ All of this is UX; the database (`fn_pin_restricted` behind `has_permission` / s
 - **Settings page** `/r/:slug/settings/session-timers` (`SessionTimersPage`, `RequirePermission settings.session_timers`, header link): react-hook-form +
   zod (`sessionTimersFormSchema`, same bounds as the server, preview only), live explanation of the warning window, Save
   (`fn_update_session_timers`) and "Reset to defaults" with a confirm (`fn_reset_session_timers`, 15 / 30 / 60). `mfa_required` opens `StepUpDialog`
-  (TOTP `challengeAndVerify`, aal2) and retries the same action once verified; `invalid_input` marks the field named by the error `detail`
+  (TOTP `challengeAndVerify`, aal2) and retries the same action once verified (server gate: `fn_require_aal2`; an account without an authenticator sees "An authenticator is required for this action. This account has none set up; ask your administrator." and cannot proceed); `invalid_input` marks the field named by the error `detail`
   (`RpcError.detail`, kept only when it is a bare identifier); other codes map to neutral copy. Success: toast, cache update, `refreshContext()`.
 - `src/lib/supabase/types.ts` is still the placeholder (no Docker for `supabase gen types`); its `Functions` was hand-extended with the three 0025 RPCs.

@@ -33,9 +33,11 @@ Do these BEFORE a hosted project takes real users. Items marked (manual) cannot 
     Optional retention job: delete `user_notifications` older than 90 days (rls-matrix.md).
 13. **PIN change approval (0024):** deploy the updated `pin-change` Edge Function together with the migration (the old function calls `fn_set_user_pin`, which clears a flag without approval, and does not return `pending_approval`).
     Verify once on the hosted project: block a PIN user (second device login), change the PIN => response `pending_approval: true`, every tenant_admin gets a `security.pin_change_pending_approval` notification, the user
-    still sees no data; an admin with MFA approves from an aal2 session (an aal1 session gets `mfa_required`) => access returns; reject => the user must change the PIN again. Make sure every tenant keeps at least one reachable active tenant_admin.
+    still sees no data; an admin with MFA approves from an aal2 session (any aal1 session, including a PIN-only delegate or an admin without a factor, gets `mfa_required`; since 0026 there is no pass for accounts without an authenticator) => access returns; reject => the user must change the PIN again. Make sure every tenant keeps at least one reachable active tenant_admin.
 14. **Session timers (0025):** apply the migration BEFORE deploying the new `staff-roster` version (it calls `fn_kiosk_terminal_bootstrap`; the old version keeps
     working against the new database because `fn_kiosk_roster` is unchanged). Verify: every tenant has a `restaurant_session_settings` row
     (`select count(*) from restaurants r where not exists (select 1 from restaurant_session_settings s where s.restaurant_id = r.id)` = 0); a tenant admin changes the
-    timers from an aal2 session (an enrolled admin on aal1 gets `mfa_required`); a waiter's `fn_get_session_context()` shows the new `session_timers` after a refetch;
+    timers from an aal2 session (since 0026 any aal1 session, e.g. a PIN-only staff delegate with `settings.session_timers`, gets `mfa_required`); a waiter's `fn_get_session_context()` shows the new `session_timers` after a refetch;
     a kiosk's `staff-roster` answer carries the tenant's `pin_pad_idle_seconds`. Regenerate `src/lib/supabase/types.ts` (new table and three RPCs).
+15. **Mandatory aal2 (0026):** approving/rejecting a PIN change and changing/resetting the session timers need an aal2 session; PIN-only staff cannot do either, even with the permission. Before deploying, make sure every
+    tenant has at least one tenant_admin (or Supabase Auth delegate) who has enrolled TOTP, otherwise nobody can release a PIN-change request or edit the timers. Verify: a PIN staff delegate gets `mfa_required` on both; the tenant_admin on aal2 succeeds.

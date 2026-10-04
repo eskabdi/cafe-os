@@ -1,4 +1,4 @@
-# RLS matrix (migrations 0007 + 0010 + 0022 + 0023 + 0024 + 0025; 83 policies; RLS enabled AND forced on every public table)
+# RLS matrix (migrations 0007 + 0010 + 0022 + 0023 + 0024 + 0025 + 0026; 83 policies; RLS enabled AND forced on every public table)
 
 Helpers (SECURITY DEFINER, empty search_path, identity from `profiles` via `auth.uid()`, never from JWT claims):
 `current_restaurant_id()`, `current_user_id()`, `current_role_id()`, `has_permission(key)`, `has_station_access(station_id)` (RPC use), `current_station_ids()` (policies; one InitPlan per statement),
@@ -32,7 +32,7 @@ Suspended/cancelled tenants resolve to NULL (no access); `past_due` is read-only
 | order_items | T + `orders.view` + (`orders.view_all` or `station_id = any(current_station_ids())` or own order) | none | none | none |
 | kiosk_devices | T + `kiosks.manage` (column grant: no `token_hash`) | none (`fn_register_kiosk`) | none (`fn_revoke_kiosk`; service role refreshes `last_seen_at`) | none |
 | user_notifications | T and `recipient_id = auth.uid()` (own rows only, not even tenant_admin sees others'; column grant on every column, no secret column) | none (`fn_staff_login_blocked`, service-only) | none (`fn_mark_notification_read` sets `read_at` once; trigger refuses any other change, even for the owner role) | none |
-| restaurant_session_settings | T (any active member, no permission: every client needs the timers, also while a PIN change is required/pending; column grant on every column, no secret column) | none (`trg_create_session_settings` on `restaurants` insert) | none (`fn_update_session_timers` / `fn_reset_session_timers`: `settings.session_timers` + step-up + W) | none |
+| restaurant_session_settings | T (any active member, no permission: every client needs the timers, also while a PIN change is required/pending; column grant on every column, no secret column) | none (`trg_create_session_settings` on `restaurants` insert) | none (`fn_update_session_timers` / `fn_reset_session_timers`: `settings.session_timers` + aal2 (0026) + W) | none |
 | payments | T + `payments.view` | none (fn_confirm_payment later) | trigger-blocked for all roles | trigger-blocked for all roles |
 | vouchers, installments | T + `vouchers.view` | none | none | none |
 | expenses | T + `expenses.view`/`expenses.manage` | T + `expenses.manage` + W (actor, day, method snapshot set by trigger; **requires an open business day**, else `day_closed`; a foreign `restaurant_id` is refused with the RLS 42501 before any lookup) | same; frozen once its day is closed | same; frozen once its day is closed |
@@ -89,3 +89,4 @@ execute by default and a role-global default privilege now prevents it for FUTUR
   only (no table-level privilege, no INSERT/UPDATE/DELETE for any client role, not even tenant_admin); `service_role` holds NO privilege on it either (exception to the
   blanket service_role table grant of 0009: the Edge Functions reach the timers only through the definer RPC `fn_kiosk_terminal_bootstrap`; asserted in `29_session_timer_settings`); writes only through the definer RPCs. Not published to Realtime
   (clients re-read `fn_get_session_context()` / `fn_get_session_timers()`). Suspended/cancelled tenants read nothing (helper resolves NULL).
+- 0026 (mandatory aal2): no table, policy or grant change (83 policies). `fn_require_aal2()` is a new internal function (no client EXECUTE); the PIN-change decision and the session-timer writes call it instead of `fn_require_step_up()`, so these two actions need an aal2 session and PIN-only staff cannot perform them even when a role holds the permission.
