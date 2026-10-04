@@ -2,7 +2,7 @@
 -- the single restriction predicate, approve/reject/list RPCs (tenant from identity, users.manage, step-up, no oracle, never the
 -- subject), service-only completion, notifications, audit rows free of secrets, session-context fields.
 begin;
-select plan(142);
+select plan(154);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -78,7 +78,7 @@ select is(public.fn_complete_forced_pin_change((select waiter from _f), tests.pi
 select tests.clear_auth();
 select is((select pin_change_pending or must_change_pin from public.profile_secrets where profile_id = (select waiter from _f)), false, 'no flag, nothing pending');
 select ok(extensions.crypt(tests.pin_digest('7391'), (select pin_hash from public.profile_secrets where profile_id = (select waiter from _f))) = (select pin_hash from public.profile_secrets where profile_id = (select waiter from _f)), 'the new PIN is stored (bcrypt of the digest)');
-select is((select count(*)::int from public.audit_logs where event = 'auth.pin_set' and (new_data ->> 'profile_id') = (select waiter::text from _f)), 1, 'audited like fn_set_user_pin (auth.pin_set)');
+select is((select count(*)::int from public.audit_logs where event = 'auth.pin_set' and created_at >= now() and (new_data ->> 'profile_id') = (select waiter::text from _f)), 1, 'audited like fn_set_user_pin (auth.pin_set)');
 select is(tests.n_admin_notes('security.pin_change_pending_approval', (select waiter from _f)), 0, 'no admin notification for a voluntary change');
 select tests.authenticate_as((select waiter from _f));
 select ok(public.has_permission('orders.create'), 'access is unchanged');
@@ -208,6 +208,11 @@ select is((select pin_change_pending from public.profile_secrets where profile_i
 select is((select count(*)::int from public.audit_logs where event in ('auth.pin_change_approved', 'auth.pin_change_rejected')), 0, 'and wrote no decision audit row');
 
 -- delegate (users.manage, lower rights) cannot decide for a role it does not cover
+select tests.authenticate_as((select admin from _f));
+insert into public.roles (restaurant_id, name) values ((select a from _f), 'HR Lead');
+select public.fn_update_role_permissions((select id from public.roles where restaurant_id = (select a from _f) and name = 'HR Lead'), array['users.manage', 'users.view'], '{}');
+select public.fn_change_user_role((select deleg from _f), (select id from public.roles where restaurant_id = (select a from _f) and name = 'HR Lead'));
+select tests.clear_auth();
 select tests.authenticate_as_service_role();
 select public.fn_staff_login_blocked((select cashier from _f));
 select public.fn_complete_forced_pin_change((select cashier from _f), tests.pin_digest('834921'), 6);
