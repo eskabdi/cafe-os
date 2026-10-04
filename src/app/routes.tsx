@@ -11,6 +11,7 @@ import {
 } from '@/features/auth'
 import { NotificationsListener } from '@/features/notifications'
 import { ChangePinPage, PinApprovalsPage, PinChangeGate, PinPendingPage } from '@/features/pin-change'
+import { SessionTimersPage } from '@/features/settings'
 import { TenantShell } from '@/features/tenant/TenantShell'
 import { TerminalPage, TerminalsPage, terminalPath } from '@/features/terminal'
 import { getKioskToken } from '@/lib/utils/kiosk-token'
@@ -85,6 +86,7 @@ export const routes: RouteObject[] = [
                       { path: 'pin-pending', element: <PinPendingPage /> },
                       { path: 'settings/terminals', element: <TerminalsPage /> },
                       { path: 'settings/pin-approvals', element: <PinApprovalsPage /> },
+                      { path: 'settings/session-timers', element: <SessionTimersPage /> },
                       { index: true, element: <TenantRoutes /> },
                       { path: '*', element: <TenantRoutes /> },
                     ],
