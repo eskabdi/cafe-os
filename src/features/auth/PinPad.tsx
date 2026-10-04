@@ -15,6 +15,8 @@ export interface PinPadProps {
    * and a labelled "Sign in" submit key in place of CLR. Overrides minLength/maxLength. Omit for the 4-6 digit variant.
    */
   fixedLength?: number
+  /** Label of the fixed-length submit key (default "Sign in"). */
+  submitLabel?: string
   disabled?: boolean
   label?: string
 }
@@ -41,6 +43,7 @@ export function PinPad({
   minLength: minLengthProp = PIN_MIN_LENGTH,
   maxLength: maxLengthProp = PIN_MAX_LENGTH,
   fixedLength,
+  submitLabel = 'Sign in',
   disabled = false,
   label = 'PIN keypad',
 }: PinPadProps) {
@@ -153,10 +156,10 @@ export function PinPad({
             type="button"
             className={cn(KEY_CLASS, 'bg-ink text-sm font-bold text-white hover:bg-ink/90 active:bg-ink/80')}
             disabled={disabled || value.length < fixedLength}
-            aria-label="Sign in"
+            aria-label={submitLabel}
             onClick={() => onSubmit?.()}
           >
-            Sign in
+            {submitLabel}
           </button>
         ) : (
           <button

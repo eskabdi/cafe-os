@@ -28,11 +28,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const userId = session?.user.id ?? null
 
-  // Reload the server-derived context when the user changes (not on every token refresh).
+  // Reload the server-derived context when the user changes (not on every token refresh). refreshContext() for the SAME
+  // user reloads in the background: the previous context stays visible until the new one arrives, so a live transition
+  // (e.g. PIN change approved) does not unmount the signed-in tree behind a loading screen.
   useEffect(() => {
     if (!userId) return
     let active = true
-    setCtx({ userId, status: 'loading', context: null })
+    setCtx((prev) =>
+      prev.userId === userId && prev.status === 'ready' ? prev : { userId, status: 'loading', context: null },
+    )
     getSessionContext()
       .then((context) => {
         if (active) setCtx({ userId, status: 'ready', context })
