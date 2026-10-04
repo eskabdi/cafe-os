@@ -6,20 +6,30 @@ import { supabase } from './client'
 
 export class RpcError extends Error {
   readonly code: string
-  constructor(code: string) {
+  /** Optional safe context from fn_err (e.g. the field name of an invalid_input). Only a bare identifier is ever kept. */
+  readonly detail?: string
+  constructor(code: string, detail?: string) {
     super(code)
     this.name = 'RpcError'
     this.code = code
+    this.detail = detail
   }
 }
 
-type RpcResult = PromiseLike<{ data: unknown; error: { message: string } | null }>
+type RpcResult = PromiseLike<{ data: unknown; error: { message: string; details?: string | null } | null }>
+
+const MACHINE_CODE = /^[a-z_]{3,48}$/
 
 async function callRpc(fn: string, args?: Record<string, unknown>): Promise<unknown> {
   const client = supabase as unknown as { rpc: (fn: string, args?: Record<string, unknown>) => RpcResult }
   const { data, error } = await client.rpc(fn, args)
-  // Server errors carry a stable machine code in `message` (rpc-conventions). Nothing else is surfaced.
-  if (error) throw new RpcError(/^[a-z_]{3,48}$/.test(error.message) ? error.message : 'rpc_failed')
+  // Server errors carry a stable machine code in `message` and optional safe context in `details` (rpc-conventions).
+  // Anything that is not a bare identifier is dropped, so no SQL text or foreign data can reach the UI.
+  if (error) {
+    const code = MACHINE_CODE.test(error.message) ? error.message : 'rpc_failed'
+    const detail = typeof error.details === 'string' && MACHINE_CODE.test(error.details) ? error.details : undefined
+    throw new RpcError(code, detail)
+  }
   return data
 }
 
@@ -90,6 +100,17 @@ const sessionContextSchema = z
     must_change_pin: z.boolean().optional(),
     pin_change_status: z.enum(['none', 'required', 'pending_approval']).optional(),
     pin_length: z.union([z.literal(4), z.literal(6)]).nullable().optional(),
+    // Per-tenant inactivity timers (migration 0025). Lenient: a malformed value never blocks sign-in; consumers clamp and
+    // fall back to the defaults (inactivityMsFromTimers).
+    session_timers: z
+      .object({
+        idle_warning_seconds: z.number().optional(),
+        signout_seconds: z.number().optional(),
+        pin_pad_idle_seconds: z.number().optional(),
+      })
+      .nullable()
+      .optional()
+      .catch(undefined),
   })
   .nullable()
 export type SessionContext = NonNullable<z.infer<typeof sessionContextSchema>>
@@ -165,4 +186,36 @@ export async function rejectPinChange(profileId: string): Promise<PinDecision> {
 /** Own notifications only (unknown / foreign ids are not_found). Works while a PIN change is pending. */
 export async function markNotificationRead(id: string): Promise<void> {
   z.object({ id: z.string() }).passthrough().parse(await callRpc('fn_mark_notification_read', { p_id: id }))
+}
+
+// ── Session timers (migration 0025) ───────────────────────────────────────────────────────────────────────────────
+const sessionTimersSchema = z.object({
+  idle_warning_seconds: z.number().int(),
+  signout_seconds: z.number().int(),
+  pin_pad_idle_seconds: z.number().int(),
+})
+export type SessionTimersRow = z.infer<typeof sessionTimersSchema>
+
+/** The caller's tenant timers. Any active member may read them (also while a PIN change is required/pending). */
+export async function getSessionTimers(): Promise<SessionTimersRow> {
+  return sessionTimersSchema.parse(await callRpc('fn_get_session_timers'))
+}
+
+/**
+ * settings.session_timers + step-up (mfa_required), writable tenant. invalid_input carries the field name as `detail`.
+ * Returns the stored values.
+ */
+export async function updateSessionTimers(t: SessionTimersRow): Promise<SessionTimersRow> {
+  return sessionTimersSchema.parse(
+    await callRpc('fn_update_session_timers', {
+      p_idle_warning_seconds: t.idle_warning_seconds,
+      p_signout_seconds: t.signout_seconds,
+      p_pin_pad_idle_seconds: t.pin_pad_idle_seconds,
+    }),
+  )
+}
+
+/** Restores the defaults (15 / 30 / 60) with the same checks as update; returns them. */
+export async function resetSessionTimers(): Promise<SessionTimersRow> {
+  return sessionTimersSchema.parse(await callRpc('fn_reset_session_timers'))
 }

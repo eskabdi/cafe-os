@@ -1,9 +1,11 @@
-// Inactivity sign-out policy for signed-in staff sessions. Constants live here (one place) so they can become per-tenant
-// settings later. Total time to sign-out = IDLE_MS + WARN_MS.
+import { inactivityMsFromTimers } from '@/lib/domain/session-timers'
 
-/** No activity for this long shows the "Still there?" warning. */
+// Inactivity sign-out policy for signed-in staff sessions. The timings are per-tenant settings (migration 0025,
+// session_timers in the session context); these constants are the defaults. Total time to sign-out = idleMs + warnMs.
+
+/** Default: no activity for this long shows the "Still there?" warning. */
 export const IDLE_MS = 15_000
-/** Time the warning is shown before the session is ended. */
+/** Default: time the warning is shown before the session is ended. */
 export const WARN_MS = 15_000
 
 export interface InactivityTimings {
@@ -18,8 +20,14 @@ declare global {
   }
 }
 
-export function inactivityTimings(): InactivityTimings {
-  const base = { idleMs: IDLE_MS, warnMs: WARN_MS }
+/**
+ * Timings from the tenant's server-provided session_timers (idle = warn seconds, warn = signout - warn seconds; clamped,
+ * 15 / 30 when missing). The DEV-only Playwright override, when present, wins.
+ */
+export function inactivityTimings(
+  timers?: { idle_warning_seconds?: number; signout_seconds?: number } | null,
+): InactivityTimings {
+  const base = inactivityMsFromTimers(timers)
   if (import.meta.env.DEV && typeof window !== 'undefined') {
     const o = window.__CAFEOS_INACTIVITY__
     const ok = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 200

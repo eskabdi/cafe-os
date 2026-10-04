@@ -14,8 +14,8 @@ const BROADCAST_THROTTLE_MS = 5000
 type Msg = { type: 'activity' } | { type: 'signout' }
 
 /**
- * Mounted once inside AuthProvider. Ends the session of staff (everyone except tenant_admin / platform admins) after
- * IDLE_MS + WARN_MS of inactivity, with a "Still there?" alertdialog for the last WARN_MS. signOut deletes the server session
+ * Mounted once inside AuthProvider. Ends the session of staff (everyone except tenant_admin / platform admins) after the
+ * tenant's signout_seconds of inactivity (session_timers; default 30 s), with a "Still there?" alertdialog from idle_warning_seconds on. signOut deletes the server session
  * (frees the one-session rule), the query cache is cleared, and the user lands on the terminal (kiosk device) or staff login.
  * Deadline checks use Date.now(), so a tablet that slept signs out on the first tick/visibility event after waking.
  * UX/hygiene only: server-side session limits remain the authority.
@@ -27,6 +27,9 @@ export function InactivityGuard() {
   const mutating = useIsMutating()
   const managed = status === 'authenticated' && isInactivityManaged(context)
   const slug = context?.restaurant?.slug ?? null
+  // Per-tenant timers from the server (session_timers); primitives so the effect only restarts when a value changes.
+  const warnSeconds = context?.session_timers?.idle_warning_seconds
+  const signoutSeconds = context?.session_timers?.signout_seconds
 
   const last = useRef(Date.now())
   const lastBroadcast = useRef(0)
@@ -87,7 +90,7 @@ export function InactivityGuard() {
     done.current = false
     last.current = Date.now()
     warningRef.current = false
-    const timings = inactivityTimings()
+    const timings = inactivityTimings({ idle_warning_seconds: warnSeconds, signout_seconds: signoutSeconds })
 
     try {
       channel.current = new BroadcastChannel('cafeos-session')
@@ -131,7 +134,7 @@ export function InactivityGuard() {
       channel.current?.close()
       channel.current = null
     }
-  }, [managed, endSession, resetActivity])
+  }, [managed, endSession, resetActivity, warnSeconds, signoutSeconds])
 
   useEffect(() => {
     if (remainingS !== null) continueRef.current?.focus()

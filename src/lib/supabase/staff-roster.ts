@@ -29,7 +29,11 @@ export class RosterError extends Error {
     this.reason = reason
   }
 }
-export type RosterResult = { ok: true; staff: RosterTile[] } | { ok: false; reason: RosterFailure }
+/** pinPadIdleSeconds: the tenant's kiosk PIN-pad idle timer (migration 0025), or null when the response has none (consumers clamp
+ * and fall back to 60 s via pinPadIdleMs). */
+export type RosterResult =
+  | { ok: true; staff: RosterTile[]; pinPadIdleSeconds: number | null }
+  | { ok: false; reason: RosterFailure }
 
 /**
  * Display text from the server is untrusted: strip control characters (C0/C1, line/paragraph separators), bidi
@@ -64,6 +68,16 @@ export function parseRoster(data: unknown): RosterTile[] | null {
   return out
 }
 
+/**
+ * `pin_pad_idle_seconds` of the `{staff, pin_pad_idle_seconds}` response (migration 0025). Only a finite number is kept; the
+ * range is clamped by the consumer. A response without it (older Edge Function) yields null.
+ */
+export function parsePinPadIdleSeconds(data: unknown): number | null {
+  if (typeof data !== 'object' || data === null) return null
+  const v = (data as { pin_pad_idle_seconds?: unknown }).pin_pad_idle_seconds
+  return typeof v === 'number' && Number.isFinite(v) ? v : null
+}
+
 export async function fetchStaffRoster(req: { restaurant_slug: string; kiosk_token: string }): Promise<RosterResult> {
   const { data, error } = await supabase.functions.invoke('staff-roster', { body: req })
   if (error) {
@@ -77,5 +91,5 @@ export async function fetchStaffRoster(req: { restaurant_slug: string; kiosk_tok
     return { ok: false, reason: 'server_error' }
   }
   const staff = parseRoster(data)
-  return staff ? { ok: true, staff } : { ok: false, reason: 'server_error' }
+  return staff ? { ok: true, staff, pinPadIdleSeconds: parsePinPadIdleSeconds(data) } : { ok: false, reason: 'server_error' }
 }

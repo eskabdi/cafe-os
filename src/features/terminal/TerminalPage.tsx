@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
+import { pinPadIdleMs } from '@/lib/domain/session-timers'
 import { fetchStaffRoster, RosterError, type RosterTile } from '@/lib/supabase/staff-roster'
 import { isValidSlug } from '@/lib/utils/host'
 import { clearKioskToken, getKioskToken } from '@/lib/utils/kiosk-token'
@@ -31,7 +32,7 @@ export function TerminalPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [returnFocusId, setReturnFocusId] = useState<string | null>(null)
 
-  const roster = useQuery<RosterTile[], RosterError>({
+  const roster = useQuery<{ staff: RosterTile[]; idleMs: number }, RosterError>({
     queryKey: ['staff-roster', slug],
     enabled: Boolean(slug && token),
     retry: false,
@@ -43,7 +44,8 @@ export function TerminalPage() {
       const res = await fetchStaffRoster({ restaurant_slug: slug, kiosk_token: token })
       // Throwing keeps the previous data in the cache, so a failed background refetch never discards tiles mid-entry.
       if (!res.ok) throw new RosterError(res.reason)
-      return res.staff
+      // the tenant's PIN-pad idle timer (clamped 15..300 s, 60 s when the response has none)
+      return { staff: res.staff, idleMs: pinPadIdleMs(res.pinPadIdleSeconds) }
     },
   })
 
@@ -85,7 +87,7 @@ export function TerminalPage() {
     )
   }
 
-  const staff = roster.data
+  const staff = roster.data.staff
   const selected = staff.find((t) => t.id === selectedId) ?? null
 
   const back = () => {
@@ -119,6 +121,7 @@ export function TerminalPage() {
             kioskToken={token}
             tile={selected}
             onCancel={back}
+            idleMs={roster.data.idleMs}
             onSignedIn={() => navigate(`/r/${slug}`, { replace: true })}
           />
         )}
