@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react'
 import { createBrowserRouter, Outlet, useParams, type RouteObject } from 'react-router-dom'
 import {
   AuthProvider,
+  InactivityGuard,
   PlatformLoginPage,
   RequireAuth,
   RequirePlatformAdmin,
@@ -27,6 +28,7 @@ function Loading() {
 function Root() {
   return (
     <AuthProvider>
+      <InactivityGuard />
       <Suspense fallback={<Loading />}>
         <Outlet />
       </Suspense>
