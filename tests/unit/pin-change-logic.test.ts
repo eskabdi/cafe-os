@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   MAX_BODY_BYTES,
   extractBearer,
+  interpretCompleteResult,
   isChangeCandidate,
   parsePinChangeBody,
   pinLengthOk,
@@ -137,13 +138,43 @@ describe('response shaping', () => {
     expect(shapeFailure('unauthorized').status).toBe(401)
     expect(shapeFailure('weak_pin').status).toBe(400)
   })
-  it('success reports only changed + other_sessions_revoked', () => {
-    expect(shapeSuccess(true)).toEqual({
+  it('success reports only changed + pending_approval + other_sessions_revoked', () => {
+    expect(shapeSuccess(true, true)).toEqual({
       status: 200,
-      body: { changed: true, other_sessions_revoked: true },
+      body: { changed: true, pending_approval: true, other_sessions_revoked: true },
       headers: { 'Cache-Control': 'no-store', 'Content-Type': 'application/json' },
     })
-    expect(shapeSuccess(false).body).toEqual({ changed: true, other_sessions_revoked: false })
+    expect(shapeSuccess(false, false).body).toEqual({
+      changed: true,
+      pending_approval: false,
+      other_sessions_revoked: false,
+    })
+    expect(shapeSuccess(true, false).body).toEqual({
+      changed: true,
+      pending_approval: true,
+      other_sessions_revoked: false,
+    })
+    expect(Object.keys(shapeSuccess(false, true).body)).toEqual([
+      'changed',
+      'pending_approval',
+      'other_sessions_revoked',
+    ])
+  })
+  it('interprets fn_complete_forced_pin_change strictly (anything unexpected is null, never "not pending")', () => {
+    expect(interpretCompleteResult({ pending_approval: true })).toBe(true)
+    expect(interpretCompleteResult({ pending_approval: false })).toBe(false)
+    for (const bad of [
+      null,
+      undefined,
+      [],
+      'true',
+      1,
+      {},
+      { pending_approval: 'true' },
+      { pending_approval: null },
+    ]) {
+      expect(interpretCompleteResult(bad)).toBeNull()
+    }
   })
   it('re-exports the bearer parser used by staff-create', () => {
     expect(extractBearer('Bearer a.b.c')).toBe('a.b.c')

@@ -107,7 +107,24 @@ export function shapeFailure(kind: FailureKind, retryAfterSec?: number): ShapedR
   }
 }
 
-/** Success whitelist: whether the user's other sessions were revoked is the only thing reported. */
-export function shapeSuccess(otherSessionsRevoked: boolean): ShapedResponse {
-  return { status: 200, body: { changed: true, other_sessions_revoked: otherSessionsRevoked }, headers: { ...NO_STORE } }
+/**
+ * fn_complete_forced_pin_change answers {pending_approval: boolean}. Anything else is an infrastructure fault (null), never
+ * guessed: guessing "not pending" would tell a restricted user their account is free.
+ */
+export function interpretCompleteResult(data: unknown): boolean | null {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return null
+  const v = (data as { pending_approval?: unknown }).pending_approval
+  return typeof v === 'boolean' ? v : null
+}
+
+/**
+ * Success whitelist: pending_approval (a flagged account stays without access until a tenant_admin approves) and whether the
+ * user's other sessions were revoked. Nothing else is reported.
+ */
+export function shapeSuccess(pendingApproval: boolean, otherSessionsRevoked: boolean): ShapedResponse {
+  return {
+    status: 200,
+    body: { changed: true, pending_approval: pendingApproval, other_sessions_revoked: otherSessionsRevoked },
+    headers: { ...NO_STORE },
+  }
 }

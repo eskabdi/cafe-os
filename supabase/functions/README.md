@@ -29,7 +29,7 @@ brute-forced offline without the pepper. Rules:
 
 | function | purpose | secrets |
 |---|---|---|
-| `pin-change` | a signed-in PIN staff member changes their own PIN (the only way out of `must_change_pin`), revokes their other sessions | service-role key, `PIN_PEPPER` |
+| `pin-change` | a signed-in PIN staff member changes their own PIN (the only way out of `must_change_pin`; a flagged change then waits for tenant_admin approval), revokes their other sessions | service-role key, `PIN_PEPPER` |
 | `staff-create` | a `users.manage` caller creates a PIN-login staff member (Auth user + profile + PIN, rollback on failure) | service-role key, `PIN_PEPPER` |
 | `staff-roster` | PIN-staff tiles for a registered kiosk (token + `<slug>.cafeos.et`) | service-role key |
 

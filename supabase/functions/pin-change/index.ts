@@ -1,5 +1,5 @@
 // pin-change: a signed-in PIN staff member changes their OWN PIN. This is the only thing a user can do while
-// profile_secrets.must_change_pin is true (the DB denies every permission-checked RPC meanwhile; see migration 0023).
+// profile_secrets.must_change_pin is true (and, after the change, the account stays restricted until a tenant_admin approves) (the DB denies every permission-checked RPC meanwhile; see migration 0023).
 //
 // Flow:
 //   1. verify_jwt (gateway) + auth.getUser(jwt): the user is identified from the JWT ONLY; the body carries no id;
@@ -8,7 +8,9 @@
 //      non-admin member, else the same generic 401 as a wrong PIN; new PIN length must match the role (Cashier 6, others 4;
 //      pinLengthForRole in _shared/pin.ts: the one documented name-keyed rule, not repeated here);
 //   4. fn_verify_pin(profile, HMAC(current_pin)): the same lockout counter as pin-login; uniform failure;
-//   5. fn_set_user_pin(profile, HMAC(new_pin), length): stores the new bcrypt'd digest and CLEARS must_change_pin;
+//   5. fn_complete_forced_pin_change(profile, HMAC(new_pin), length): stores the new bcrypt'd digest. If the account was
+//      flagged (must_change_pin) it becomes pending_approval and every tenant_admin is notified (maker-checker, migration 0024);
+//      otherwise it is a plain voluntary change. Response says which: pending_approval;
 //   6. auth.admin.signOut(jwt, 'others'): every OTHER session of this user ends (a compromised session dies). The session
 //      making the change survives. A failure here is reported as other_sessions_revoked=false, never hidden.
 // Same CORS / no-store / body-size / timing-floor hygiene as pin-login. Nothing sensitive is logged.
@@ -23,6 +25,7 @@ import {
   clientIp,
   createRateLimiter,
   extractBearer,
+  interpretCompleteResult,
   interpretVerifyResult,
   isChangeCandidate,
   parsePinChangeBody,
@@ -73,7 +76,7 @@ async function readLimitedBody(req: Request): Promise<string | null> {
   return new TextDecoder().decode(buf)
 }
 
-type Outcome = { ok: true; othersRevoked: boolean } | { ok: false; kind: FailureKind }
+type Outcome = { ok: true; pendingApproval: boolean; othersRevoked: boolean } | { ok: false; kind: FailureKind }
 
 async function changePin(token: string, input: PinChangeInput): Promise<Outcome> {
   if (!env) return { ok: false, kind: 'server_error' }
@@ -110,13 +113,17 @@ async function changePin(token: string, input: PinChangeInput): Promise<Outcome>
     return { ok: false, kind: 'invalid_credentials' }
   }
 
-  // 4. set the new PIN (clears must_change_pin in the same statement)
-  const set = await admin.rpc('fn_set_user_pin', {
+  // 4. set the new PIN. fn_complete_forced_pin_change decides under the row lock whether the account was flagged: a flagged
+  //    account becomes pending_approval (a tenant_admin must approve before access returns); a voluntary change behaves
+  //    exactly like fn_set_user_pin. Always this function (never fn_set_user_pin) so a pending account cannot skip approval.
+  const set = await admin.rpc('fn_complete_forced_pin_change', {
     p_profile_id: userId,
     p_pin_digest: await computePinDigest(input.new_pin, env.pinPepper),
     p_pin_length: pinLengthForRole(roleName),
   })
   if (set.error) return { ok: false, kind: 'server_error' }
+  const pendingApproval = interpretCompleteResult(set.data)
+  if (pendingApproval === null) return { ok: false, kind: 'server_error' }
 
   // 5. end every OTHER session of this user; the one that just proved the old PIN stays
   let othersRevoked = false
@@ -126,7 +133,7 @@ async function changePin(token: string, input: PinChangeInput): Promise<Outcome>
   } catch {
     console.error('pin-change: revoke_others_failed') // fixed code only
   }
-  return { ok: true, othersRevoked }
+  return { ok: true, pendingApproval, othersRevoked }
 }
 
 Deno.serve(async (req: Request): Promise<Response> => {
@@ -153,7 +160,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   let shaped: ShapedResponse
   try {
     const out = await changePin(token, parsed.value)
-    shaped = out.ok ? shapeSuccess(out.othersRevoked) : shapeFailure(out.kind)
+    shaped = out.ok ? shapeSuccess(out.pendingApproval, out.othersRevoked) : shapeFailure(out.kind)
   } catch {
     console.error('pin-change: unexpected_error')
     shaped = shapeFailure('server_error')
