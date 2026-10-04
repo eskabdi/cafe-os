@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -10,12 +11,17 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { securityPath } from '@/features/pin-change/pin-paths'
+import { usesSupabaseAuthSignIn } from '@/lib/domain/authenticator'
 import { supabase } from '@/lib/supabase/client'
+import { useAuth } from './useAuth'
 
 const MESSAGES = {
   code: 'That code did not work. Enter the current 6-digit code from your authenticator app.',
   noFactor:
     'An authenticator is required for this action. This account has none set up; ask your administrator.',
+  noFactorEligible:
+    'An authenticator is required for this action. Set one up in Security settings, then try again.',
   generic: 'Something went wrong. Please try again.',
 }
 
@@ -29,13 +35,18 @@ export interface StepUpDialogProps {
 /**
  * Step-up for an RPC that answered `mfa_required` (fn_require_step_up / fn_require_aal2): verifies a TOTP code with Supabase Auth, which upgrades
  * the session to aal2. The server re-checks the assurance level on the retried call; this dialog decides nothing itself.
- * An account with no authenticator (PIN-only staff) cannot pass fn_require_aal2: it gets the neutral `noFactor` message, no code input.
+ * An account with no authenticator cannot pass fn_require_aal2 and gets a neutral message, no code input. A Supabase Auth account
+ * (tenant admin or delegate) is pointed to the self-service Security page; PIN-only staff are told to ask their administrator.
  */
 export function StepUpDialog({ open, onVerified, onCancel }: StepUpDialogProps) {
+  const { session, context } = useAuth()
+  const slug = context?.restaurant?.slug
+  const canSetUp = Boolean(slug) && usesSupabaseAuthSignIn(session)
   const [factorId, setFactorId] = useState<string | null>(null)
   const [code, setCode] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [noFactor, setNoFactor] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -43,13 +54,16 @@ export function StepUpDialog({ open, onVerified, onCancel }: StepUpDialogProps) 
     setCode('')
     setError(null)
     setFactorId(null)
+    setNoFactor(false)
     supabase.auth.mfa
       .listFactors()
       .then(({ data, error: factorError }) => {
         if (!active) return
         const totp = data?.totp[0]
-        if (factorError || !totp) setError(MESSAGES.noFactor)
-        else setFactorId(totp.id)
+        if (factorError || !totp) {
+          setNoFactor(true)
+          setError(MESSAGES.noFactor)
+        } else setFactorId(totp.id)
       })
       .catch(() => active && setError(MESSAGES.generic))
     return () => {
@@ -103,8 +117,17 @@ export function StepUpDialog({ open, onVerified, onCancel }: StepUpDialogProps) 
           </div>
           {error && (
             <p id="step-up-error" role="alert" className="text-sm font-medium text-status-error">
-              {error}
+              {noFactor && canSetUp && slug ? MESSAGES.noFactorEligible : error}
             </p>
+          )}
+          {noFactor && canSetUp && slug && (
+            <Link
+              to={securityPath(slug)}
+              onClick={onCancel}
+              className="inline-flex min-h-[44px] items-center text-sm font-medium text-ink underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Open Security settings
+            </Link>
           )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onCancel} disabled={busy}>

@@ -4,9 +4,11 @@ import { useAuth } from '@/features/auth'
 import {
   changePinPath,
   pinApprovalsPath,
+  securityPath,
   sessionTimersPath,
   tenantHomePath,
 } from '@/features/pin-change/pin-paths'
+import { usesSupabaseAuthSignIn } from '@/lib/domain/authenticator'
 import { pinChangeStatusOf } from '@/lib/domain/pin-change'
 import { cn } from '@/lib/utils/cn'
 
@@ -15,9 +17,10 @@ import { cn } from '@/lib/utils/cn'
  *  - "Change PIN" stays visible while the server reports pin_change_status = 'required'
  *  - "PIN approvals" for holders of users.manage, "Session timers" for settings.session_timers (an unrestricted user; a
  *    restricted user holds no permission at all)
+ *  - "Security" (authenticator setup) only for sessions that signed in with Supabase Auth, never for PIN sessions
  */
 export function TenantShell() {
-  const { context, can } = useAuth()
+  const { context, can, session } = useAuth()
   const slug = context?.restaurant?.slug
   if (!slug || !context?.user) return <Outlet />
   const status = pinChangeStatusOf(context)
@@ -46,6 +49,11 @@ export function TenantShell() {
             {status === 'none' && can('settings.session_timers') && (
               <NavLink to={sessionTimersPath(slug)} className={cn(buttonVariants({ variant: 'ghost' }))}>
                 Session timers
+              </NavLink>
+            )}
+            {status === 'none' && usesSupabaseAuthSignIn(session) && (
+              <NavLink to={securityPath(slug)} className={cn(buttonVariants({ variant: 'ghost' }))}>
+                Security
               </NavLink>
             )}
           </nav>

@@ -6,6 +6,7 @@ export const changePinPath = (slug: string) => `/r/${slug}/change-pin`
 export const pinPendingPath = (slug: string) => `/r/${slug}/pin-pending`
 export const pinApprovalsPath = (slug: string) => `/r/${slug}/settings/pin-approvals`
 export const sessionTimersPath = (slug: string) => `/r/${slug}/settings/session-timers`
+export const securityPath = (slug: string) => `/r/${slug}/settings/security`
 
 /** TanStack Query key of the pending-approvals list (invalidated by the notifications listener and after decisions). */
 export const PIN_APPROVALS_KEY = ['pin-approvals'] as const

@@ -5,6 +5,7 @@
 # connect-src covers REST/RPC/Edge Functions (https) and Realtime (wss); img-src covers Storage-hosted logos (same origin).
 # For a self-hosted or local Supabase (e.g. http://127.0.0.1:54321 / ws://127.0.0.1:54321) add that origin to
 # connect-src and img-src for that environment only.
+# The authenticator setup QR (settings/security) is an <img> with a data: URL, covered by img-src 'self' data:; no extra origin.
 # style-src needs 'unsafe-inline' because Radix/shadcn and Framer Motion set inline style attributes and the staff tiles
 # apply a validated role colour via style=; script-src stays strictly 'self' (the Vite build emits no inline script).
 /*

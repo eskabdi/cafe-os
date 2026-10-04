@@ -208,7 +208,7 @@ All of this is UX; the database (`fn_pin_restricted` behind `has_permission` / s
   read (`fn_mark_notification_read`) when it is closed, auto-closes (timers pause while the tab is hidden) or its action is used. On sign-out the listener
   unsubscribes and removes its toasts (shared terminals).
 - **PIN approvals** (`PinApprovalsPage`, `RequirePermission users.manage`): `fn_list_pending_pin_changes`, Approve / Reject with a confirm dialog, success toast +
-  list invalidation. Errors map to neutral copy: `mfa_required` -> "Verify with your authenticator to continue." (no in-page step-up yet), `not_found` -> "no longer
+  list invalidation. Errors map to neutral copy: `mfa_required` -> "Verify with your authenticator to continue." (shown if step-up is cancelled; otherwise the StepUpDialog verifies the code and retries the decision), `not_found` -> "no longer
   waiting" + list refresh, `permission_denied` / `permission_escalation`, `tenant_read_only` / `tenant_suspended`, anything else generic.
 - **Inactivity**: `InactivityGuard` keeps managing restricted users (non-admin role), so the forced and waiting screens sign out on inactivity too.
 - **Retry-After**: `_shared/cors.ts` sends `Access-Control-Expose-Headers: Retry-After` for allow-listed origins, so the browser reads the 429 wait time (fallback 30 s).
@@ -229,4 +229,21 @@ All of this is UX; the database (`fn_pin_restricted` behind `has_permission` / s
   (`fn_update_session_timers`) and "Reset to defaults" with a confirm (`fn_reset_session_timers`, 15 / 30 / 60). `mfa_required` opens `StepUpDialog`
   (TOTP `challengeAndVerify`, aal2) and retries the same action once verified (server gate: `fn_require_aal2`; an account without an authenticator sees "An authenticator is required for this action. This account has none set up; ask your administrator." and cannot proceed); `invalid_input` marks the field named by the error `detail`
   (`RpcError.detail`, kept only when it is a bare identifier); other codes map to neutral copy. Success: toast, cache update, `refreshContext()`.
+
+### SPA: authenticator self-enrollment (Security page)
+- **Route** `/r/:slug/settings/security` (`SecurityPage`, inside RequireAuth -> PinChangeGate -> TenantShell; header link "Security" while `pin_change_status = none`). Shown only to
+  sessions that signed in with Supabase Auth: `usesSupabaseAuthSignIn(session)` (`src/lib/domain/authenticator.ts`) is false when `app_metadata.staff === true` (set by the
+  `staff-create` Edge Function, service role only) or the email is a synthetic `*.staff.cafeos.invalid` address. No role names are involved. PIN sessions get no link and a neutral notice at the URL.
+  UX only: Supabase Auth and `fn_require_aal2` remain the authority.
+- **Enroll**: name (Zod, 1-40 chars, no control/bidi characters, default "Authenticator app") -> unfinished factors from an abandoned attempt are removed -> `auth.mfa.enroll({ factorType: 'totp', friendlyName })`
+  -> QR + setup key + 6-digit input (`autocomplete="one-time-code"`, digits only, Zod `totpCodeSchema`) -> `auth.mfa.challengeAndVerify` (upgrades the session to aal2)
+  -> `auth.refreshSession()` -> `refreshContext()` -> factor list invalidated. Cancel or leaving the page removes the unverified factor.
+- **QR rendering**: the returned `qr_code` (SVG) is turned into an encoded `data:image/svg+xml` URL by `qrImageSrc` and shown in a plain `<img>`: scripts never run inside an SVG loaded
+  as an image, nothing is injected as markup (no `innerHTML` / `dangerouslySetInnerHTML`), and the CSP already allows `img-src data:` (`public/_headers` unchanged, no new origin). A value that is not an SVG
+  document is dropped and only the setup key (text + "Copy key") is shown. The secret and QR live only in component state: never logged, stored or put in the query cache; they are cleared on verify, cancel and unmount.
+- **Remove**: confirm dialog warning that PIN approvals and session timers stop working for the account, then a fresh 6-digit code (`challengeAndVerify` with that factor) and `auth.mfa.unenroll`;
+  then session refresh, `refreshContext()` and list invalidation. There is no "last factor" block (an admin may re-enrol at once).
+- **Errors** are neutral ("That code did not work...", rate limit, generic); Supabase codes are mapped in `authenticator-errors.ts` and never shown, and no assurance-level wording reaches the UI.
+- **StepUpDialog** with no authenticator: a Supabase Auth account sees "Set one up in Security settings" with a link to this page; PIN sessions still see "ask your administrator".
+- Tests: `src/lib/domain/authenticator.test.ts`, `src/features/settings/SecurityPage.test.tsx` (mocked `supabase.auth.mfa`), `src/features/auth/StepUpDialog.test.tsx`, `tests/e2e/security.spec.ts` (page.route mocks).
 - `src/lib/supabase/types.ts` is still the placeholder (no Docker for `supabase gen types`); its `Functions` was hand-extended with the three 0025 RPCs.
