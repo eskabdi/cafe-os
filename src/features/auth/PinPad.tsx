@@ -96,7 +96,7 @@ export function PinPad({
                 ? fixedLength
                   ? 'border-ink bg-ink'
                   : 'border-primary bg-primary'
-                : 'border-slate-400 bg-white',
+                : 'border-slate-500 bg-white',
             )}
           />
         ))}

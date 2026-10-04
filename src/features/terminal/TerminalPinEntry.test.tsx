@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { PIN_LOGIN_MESSAGES } from '@/lib/supabase/pin-login-errors'
+import { TILE_LOGIN_MESSAGES } from '@/lib/supabase/tile-login-messages'
 import type { RosterTile } from '@/lib/supabase/staff-roster'
 import { TerminalPinEntry } from './TerminalPinEntry'
 
@@ -67,7 +67,7 @@ describe('TerminalPinEntry', () => {
       pinLoginTile.mockResolvedValue({ ok: false, reason })
       const { onSignedIn } = setup()
       await user.keyboard('4829{Enter}')
-      expect(await screen.findByRole('alert')).toHaveTextContent(PIN_LOGIN_MESSAGES[reason])
+      expect(await screen.findByRole('alert')).toHaveTextContent(TILE_LOGIN_MESSAGES[reason])
       expect(screen.getByText('0 of 4 digits entered')).toBeInTheDocument()
       expect(onSignedIn).not.toHaveBeenCalled()
     },
@@ -81,7 +81,7 @@ describe('TerminalPinEntry', () => {
     setup()
     await user.keyboard('4829{Enter}')
     const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent(PIN_LOGIN_MESSAGES.server_error)
+    expect(alert).toHaveTextContent(TILE_LOGIN_MESSAGES.server_error)
     expect(alert.textContent).not.toContain('secret')
   })
 

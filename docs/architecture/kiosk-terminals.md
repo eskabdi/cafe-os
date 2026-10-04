@@ -54,13 +54,15 @@ fallback; admin page `/r/:slug/settings/terminals`. The slug is derived with `te
 1. **Gate.** The token lives in `src/lib/utils/kiosk-token.ts` (the only extra `localStorage` user, allowlisted in the forbidden-pattern lint): key
    `cafeos:kiosk:<slug>`, validated as 64 hex, all access in try/catch, never logged, never in a URL, never rendered after its one-time display.
    No token, or `staff-roster` answering 401, shows one neutral screen: "This terminal is not set up. Ask a manager to register it." with links to the
-   username + PIN login (the Cashier) and admin sign-in. A 401 also clears the stored token. Transient failures (429/network/5xx) keep the token and offer a retry.
+   username + PIN login (the Cashier) and admin sign-in. **A 401 does not erase the stored token** (see "Forged / unexpected 401" below); when a token exists the
+   screen offers an explicit "Remove setup from this device" button. Transient failures (429/network/5xx) keep the token and offer a retry; a failed
+   background refetch keeps the previous tiles (and an open PIN pad) on screen.
 2. **Tiles.** Exactly the roster rows, as a `radiogroup` (roving tabindex, arrow/Home/End move focus, Enter/Space/click select, 44px+ targets, visible focus).
    Colour must be strict `#rrggbb` (else a neutral slate) and the foreground is chosen for >= 4.5:1; the icon is looked up in a small lucide allowlist keyed by the
    icon slug on the row, with a generic person fallback. No code knows any role name; admin and 6-digit Cashier are absent only because the roster omits them.
 3. **PIN pad.** Selecting a tile shows a fixed 4-dot pad (`PinPad fixedLength={4}`): dots fill, digits are never echoed, labelled Delete and "Sign in" keys,
    physical keyboard supported. Submit goes to `pin-login` tile path (`pinLoginTile`) and then installs the session like the username path and routes to `/r/<slug>`.
-   Failure always shows the generic `PIN_LOGIN_MESSAGES` text in a `role=alert` using the platform `status-error` token (not the tenant brand colour), clears the PIN.
+   Failure always shows one generic message from `TILE_LOGIN_MESSAGES` (`src/lib/supabase/tile-login-messages.ts`: no username wording, no PIN-length hints; the username `StaffLogin` keeps `PIN_LOGIN_MESSAGES`) in a `role=alert` using the platform `status-error` token (not the tenant brand colour), clears the PIN.
 4. **Shared-device hygiene.** 60 s without activity on the pad (not while a request is in flight) returns to the tiles and drops the PIN; "Not you?" does the same
    and returns focus to the tile; the PIN exists only in the pad's state and is cleared on submit. Nothing person-specific is put in the page title. Signing out
    from the app returns a device that holds a token to the terminal (otherwise to the normal staff login).
@@ -73,3 +75,18 @@ are unchanged and not yet applied here. Arabic numerals only.
 
 Not in this UI yet: forced PIN-change screen and the notification toast. Roster freshness relies on refetch on mount/window focus (no polling); a revoked
 terminal is noticed on its next load, focus or sign-in attempt.
+
+## Review-fix notes (UI)
+
+- **Forged / unexpected 401 (behaviour change).** The terminal used to clear the stored token on any roster 401. It no longer does: a suspended tenant, a
+  gateway/proxy 401 or a forged response would otherwise erase every terminal's setup. The device shows the same neutral screen, keeps the token, and a person
+  can press "Remove setup from this device". Revocation therefore needs no client cooperation (the server already refuses the token).
+- **Bearer credential in localStorage.** The kiosk token is a bearer credential stored in origin-scoped `localStorage` (readable via devtools or XSS on the
+  origin). Mitigations are the CSP in `public/_headers`, revocation and the per-tile PIN lockout. A non-extractable, device-bound key (WebAuthn / signed
+  challenge) is a **follow-up**.
+- **No inactivity sign-out after login (out of scope).** The 60 s idle timer only covers the tile/PIN screen. Signing a user out of the app after inactivity on a
+  shared device is **not built yet** and is a follow-up.
+- **Roster filtering is server-side only.** The client renders every roster row verbatim (tested with rows named "Admin"/"Cashier"); admins and the 6-digit
+  Cashier are excluded by `staff-roster`, never by the UI. Roster name/role text is stripped of control, bidi-override and zero-width characters before rendering.
+- The tile sign-in request aborts after 15 s and shows the generic network message so the idle timer cannot be pinned behind a hung request.
+- The one-time setup code on the Terminals page hides after 3 minutes; on dismiss after a copy the page tries to overwrite the clipboard (best effort).

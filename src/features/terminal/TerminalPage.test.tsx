@@ -1,14 +1,18 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { PIN_LOGIN_MESSAGES } from '@/lib/supabase/pin-login-errors'
+import { TILE_LOGIN_MESSAGES } from '@/lib/supabase/tile-login-messages'
 import { clearKioskToken, getKioskToken, setKioskToken } from '@/lib/utils/kiosk-token'
 import { TerminalPage } from './TerminalPage'
 
 const h = vi.hoisted(() => ({ fetchStaffRoster: vi.fn(), pinLoginTile: vi.fn() }))
-vi.mock('@/lib/supabase/staff-roster', () => ({ fetchStaffRoster: h.fetchStaffRoster }))
+vi.mock('@/lib/supabase/staff-roster', async (importActual) => ({
+  ...(await importActual<Record<string, unknown>>()),
+  fetchStaffRoster: h.fetchStaffRoster,
+}))
+vi.mock('@/lib/supabase/client', () => ({ supabase: {} }))
 vi.mock('@/lib/supabase/pin-login', () => ({ pinLoginTile: h.pinLoginTile }))
 
 const TOKEN = 'ef'.repeat(32)
@@ -78,15 +82,61 @@ describe('TerminalPage', () => {
     expect(screen.queryByRole('link', { name: 'Admin sign-in' })).toBeNull()
   })
 
-  it('on 401 clears the stored token and shows the same neutral screen (no reason)', async () => {
+  it('on 401 shows the neutral screen WITHOUT erasing the token, and offers an explicit removal', async () => {
+    const user = userEvent.setup()
     setKioskToken('demo-cafe', TOKEN)
     h.fetchStaffRoster.mockResolvedValue({ ok: false, reason: 'invalid_kiosk' })
     renderAt()
     expect(
       await screen.findByText('This terminal is not set up. Ask a manager to register it.'),
     ).toBeInTheDocument()
-    expect(getKioskToken('demo-cafe')).toBeNull()
+    expect(getKioskToken('demo-cafe')).toBe(TOKEN)
+    expect(screen.queryByRole('radio')).toBeNull()
     expect(document.body.textContent).not.toMatch(/revoked|expired|suspend/i)
+    await user.click(screen.getByRole('button', { name: 'Remove setup from this device' }))
+    expect(getKioskToken('demo-cafe')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Remove setup from this device' })).toBeNull()
+  })
+
+  it('never shows the tiles for a frame before the unauthorized screen on 401', async () => {
+    setKioskToken('demo-cafe', TOKEN)
+    h.fetchStaffRoster.mockResolvedValue({ ok: false, reason: 'invalid_kiosk' })
+    renderAt()
+    await screen.findByText(/not set up/i, { selector: 'p' })
+    expect(screen.queryByRole('radiogroup')).toBeNull()
+  })
+
+  it('keeps the previous tiles and the open pad when a background refetch fails', async () => {
+    const user = userEvent.setup()
+    setKioskToken('demo-cafe', TOKEN)
+    h.fetchStaffRoster.mockResolvedValueOnce({ ok: true, staff })
+    renderAt()
+    await user.click(await screen.findByRole('radio', { name: /Abebe/ }))
+    await user.keyboard('12')
+    h.fetchStaffRoster.mockResolvedValue({ ok: false, reason: 'network' })
+    act(() => {
+      focusManager.setFocused(false)
+      focusManager.setFocused(true)
+    })
+    await waitFor(() => expect(h.fetchStaffRoster.mock.calls.length).toBeGreaterThan(1))
+    expect(screen.getAllByRole('radio')).toHaveLength(2)
+    expect(screen.getByText('2 of 4 digits entered')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('renders roster rows named Admin or Cashier verbatim (exclusion is server-side, not client filtering)', async () => {
+    setKioskToken('demo-cafe', TOKEN)
+    h.fetchStaffRoster.mockResolvedValue({
+      ok: true,
+      staff: [
+        { id: staff[0]!.id, name: 'Admin', role: 'Cashier', color: null, icon: null },
+        { id: staff[1]!.id, name: 'Cashier', role: 'Admin', color: null, icon: null },
+      ],
+    })
+    renderAt()
+    expect(await screen.findAllByRole('radio')).toHaveLength(2)
+    expect(screen.getByRole('radio', { name: /^Admin/ })).toHaveTextContent('Cashier')
+    expect(screen.getByRole('radio', { name: /^Cashier/ })).toHaveTextContent('Admin')
   })
 
   it('keeps the token and offers a retry on a transient failure', async () => {
@@ -137,7 +187,7 @@ describe('TerminalPage', () => {
     renderAt()
     await user.click(await screen.findByRole('radio', { name: /Abebe/ }))
     await user.keyboard('1111{Enter}')
-    expect(await screen.findByRole('alert')).toHaveTextContent(PIN_LOGIN_MESSAGES.invalid_credentials)
+    expect(await screen.findByRole('alert')).toHaveTextContent(TILE_LOGIN_MESSAGES.invalid_credentials)
     expect(screen.getByRole('radio', { name: /Abebe/ })).toBeChecked()
   })
 

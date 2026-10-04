@@ -1,0 +1,20 @@
+# Security headers for static hosts that read a `_headers` file (Netlify, Cloudflare Pages). Vite copies public/ into dist/.
+# The HOST MUST SERVE THIS FILE (see docs/architecture/tenant-routing.md); it is not enforced by the SPA itself.
+#
+# Replace https://*.supabase.co below with the exact project origin (https://<project-ref>.supabase.co) in production.
+# connect-src covers REST/RPC/Edge Functions (https) and Realtime (wss); img-src covers Storage-hosted logos (same origin).
+# For a self-hosted or local Supabase (e.g. http://127.0.0.1:54321 / ws://127.0.0.1:54321) add that origin to
+# connect-src and img-src for that environment only.
+# style-src needs 'unsafe-inline' because Radix/shadcn and Framer Motion set inline style attributes and the staff tiles
+# apply a validated role colour via style=; script-src stays strictly 'self' (the Vite build emits no inline script).
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.supabase.co; connect-src 'self' https://*.supabase.co wss://*.supabase.co; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()
+
+# The shared terminal (and its dev/preview fallback path) must never be cached: it carries staff names.
+/terminal
+  Cache-Control: no-store
+/r/*
+  Cache-Control: no-store

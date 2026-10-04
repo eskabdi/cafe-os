@@ -3,7 +3,7 @@ import { AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { PinPad } from '@/features/auth/PinPad'
 import { pinLoginTile } from '@/lib/supabase/pin-login'
-import { PIN_LOGIN_MESSAGES } from '@/lib/supabase/pin-login-errors'
+import { TILE_LOGIN_MESSAGES } from '@/lib/supabase/tile-login-messages'
 import type { RosterTile } from '@/lib/supabase/staff-roster'
 import { useIdleTimeout } from './useIdleTimeout'
 
@@ -23,7 +23,7 @@ export interface TerminalPinEntryProps {
 
 /**
  * 4-dot PIN entry for one tile. The PIN lives only in this component's state and is cleared the moment it is submitted.
- * Failure copy is always the generic PIN_LOGIN_MESSAGES text (no lockout counts, no hint whether name or PIN was wrong).
+ * Failure copy is always the generic TILE_LOGIN_MESSAGES text (no lockout counts, no hint whether name or PIN was wrong).
  */
 export function TerminalPinEntry({
   slug,
@@ -53,9 +53,9 @@ export function TerminalPinEntry({
         pin: attempt,
       })
       if (result.ok) onSignedIn()
-      else setError(PIN_LOGIN_MESSAGES[result.reason])
+      else setError(TILE_LOGIN_MESSAGES[result.reason])
     } catch {
-      setError(PIN_LOGIN_MESSAGES.server_error)
+      setError(TILE_LOGIN_MESSAGES.server_error)
     } finally {
       setBusy(false)
     }

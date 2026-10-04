@@ -45,6 +45,15 @@ tenant A cannot read tenant B's session in the same browser. Rules:
   allowed in `script-src`; tenant branding is colours + a Storage path only (CHECK in the DB).
 - Supabase Auth: `site_url`/redirect allow-list must include `https://*.cafeos.et/**` (Auth supports wildcard redirect URLs) and `https://platform.cafeos.et/**`.
 
+## Security headers as code (`public/_headers`)
+`public/_headers` (Netlify / Cloudflare Pages format; Vite copies it into `dist/`) carries the CSP above (`script-src 'self'`; `style-src` also allows
+`'unsafe-inline'` because Radix/shadcn, Framer Motion and the validated role colour on staff tiles use inline `style`), `X-Content-Type-Options`,
+`Referrer-Policy: no-referrer`, `Permissions-Policy`, and `Cache-Control: no-store` for `/terminal` and the `/r/*` fallback. **The static host must serve
+this file**: nothing in the SPA enforces it, and a host that ignores `_headers` (or another format such as Vercel `vercel.json`) needs the same values
+configured natively. `tests/unit/headers.test.ts` parses the file and pins the key directives. Replace the `https://*.supabase.co` wildcard with the exact
+project origin in production, and for a local or self-hosted Supabase (e.g. `http://127.0.0.1:54321`, `ws://127.0.0.1:54321`) add that origin to
+`connect-src` (and `img-src` for Storage logos) in that environment only.
+
 ## Risks and residuals
 | risk | handling |
 |---|---|

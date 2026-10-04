@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { format } from 'date-fns'
@@ -26,6 +26,8 @@ const nameSchema = z
   .min(1, 'Enter a name for the terminal.')
   .max(60, 'Use at most 60 characters.')
 const KIOSKS_KEY = ['kiosks'] as const
+/** The one-time setup code disappears on its own after this long. */
+export const TOKEN_VISIBLE_MS = 3 * 60_000
 
 function when(iso: string | null | undefined): string {
   if (!iso) return 'Never'
@@ -64,6 +66,25 @@ function TerminalsContent() {
   const [deviceSet, setDeviceSet] = useState<boolean>(() => getKioskToken(tenantSlug) !== null)
   const [deviceNote, setDeviceNote] = useState<string | null>(null)
   const [toRevoke, setToRevoke] = useState<KioskDevice | null>(null)
+
+  // Hides the code and, if it was copied, tries to overwrite the clipboard (best effort; may be refused by the browser).
+  const dismissToken = useCallback(() => {
+    setIssued(null)
+    if (copied) {
+      try {
+        void navigator.clipboard.writeText('').catch(() => {})
+      } catch {
+        // clipboard unavailable
+      }
+    }
+    setCopied(false)
+  }, [copied])
+
+  useEffect(() => {
+    if (!issued) return
+    const t = setTimeout(dismissToken, TOKEN_VISIBLE_MS)
+    return () => clearTimeout(t)
+  }, [issued, dismissToken])
 
   const register = useMutation({ mutationFn: (n: string) => registerKiosk(n) })
   const revoke = useMutation({ mutationFn: (id: string) => revokeKiosk(id) })
@@ -184,8 +205,8 @@ function TerminalsContent() {
             Setup code for {issued.name}
           </h2>
           <p className="text-sm text-muted-foreground">
-            This code is shown only once. Set up the terminal now, or copy it and enter it on the device. If
-            it is lost, register a new terminal and revoke this one.
+            This code is shown only once and hides itself after 3 minutes. Set up the terminal now, or copy it
+            and enter it on the device. If it is lost, register a new terminal and revoke this one.
           </p>
           <code
             data-testid="kiosk-token"
@@ -198,13 +219,7 @@ function TerminalsContent() {
               {copied ? 'Copied' : 'Copy code'}
             </Button>
             <Button onClick={setUpThisDevice}>Set this device up</Button>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                setIssued(null)
-                setCopied(false)
-              }}
-            >
+            <Button variant="ghost" onClick={dismissToken}>
               I have saved it
             </Button>
           </div>

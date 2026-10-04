@@ -1,6 +1,6 @@
 import { FunctionsFetchError, FunctionsHttpError } from '@supabase/supabase-js'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fetchStaffRoster, parseRoster } from './staff-roster'
+import { cleanDisplayText, fetchStaffRoster, parseRoster } from './staff-roster'
 
 const h = vi.hoisted(() => ({ invoke: vi.fn() }))
 vi.mock('./client', () => ({ supabase: { functions: { invoke: h.invoke } } }))
@@ -29,6 +29,24 @@ describe('parseRoster', () => {
     expect(parseRoster(null)).toBeNull()
     expect(parseRoster({})).toBeNull()
     expect(parseRoster({ staff: 'x' })).toBeNull()
+  })
+})
+
+describe('display text sanitising', () => {
+  it('strips control, bidi override and zero-width characters and collapses whitespace', () => {
+    expect(cleanDisplayText('  Ab\u202Eebe\u0000 \n\t Ke\u200Bbede\u2066 ')).toBe('Ab ebe Ke bede')
+    expect(cleanDisplayText('Wai\u0007ter')).toBe('Wai ter')
+    expect(cleanDisplayText('Plain Name')).toBe('Plain Name')
+  })
+
+  it('applies to roster rows and drops a name that is only invisible characters', () => {
+    const staff = parseRoster({
+      staff: [
+        { id: ID, name: 'Dawit\u202E  Haile', role: 'Run\u0000ner\u200F', color: null, icon: null },
+        { id: ID, name: '\u202E\u200B  ', role: 'X', color: null, icon: null },
+      ],
+    })
+    expect(staff).toEqual([{ id: ID, name: 'Dawit Haile', role: 'Run ner', color: null, icon: null }])
   })
 })
 

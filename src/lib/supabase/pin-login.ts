@@ -32,12 +32,32 @@ export function pinLogin(req: PinLoginRequest): Promise<PinLoginResult> {
 }
 
 /** Calls the pin-login Edge Function (kiosk tile path) and, on success, installs the returned session. */
-export function pinLoginTile(req: PinLoginTileRequest): Promise<PinLoginResult> {
-  return invokePinLogin(req)
+export function pinLoginTile(req: PinLoginTileRequest, timeoutMs = TILE_LOGIN_TIMEOUT_MS): Promise<PinLoginResult> {
+  return invokePinLogin(req, timeoutMs)
 }
 
-async function invokePinLogin(body: PinLoginRequest | PinLoginTileRequest): Promise<PinLoginResult> {
-  const { data, error } = await supabase.functions.invoke('pin-login', { body })
+/** A shared terminal must never hang behind a stuck request (the idle timer is paused while one is in flight). */
+export const TILE_LOGIN_TIMEOUT_MS = 15_000
+
+async function invokePinLogin(body: PinLoginRequest | PinLoginTileRequest, timeoutMs?: number): Promise<PinLoginResult> {
+  const controller = timeoutMs ? new AbortController() : null
+  let timedOut = false
+  const timer = controller
+    ? setTimeout(() => {
+        timedOut = true
+        controller.abort()
+      }, timeoutMs)
+    : undefined
+  let data: unknown
+  let error: unknown
+  try {
+    ;({ data, error } = await supabase.functions.invoke('pin-login', controller ? { body, signal: controller.signal } : { body }))
+  } catch {
+    return { ok: false, reason: timedOut ? 'network' : 'server_error' }
+  } finally {
+    clearTimeout(timer)
+  }
+  if (timedOut) return { ok: false, reason: 'network' }
   if (error) {
     if (error instanceof FunctionsHttpError) {
       const status = (error.context as { status?: number } | undefined)?.status ?? 500

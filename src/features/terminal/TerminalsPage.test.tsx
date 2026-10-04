@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
@@ -161,5 +161,55 @@ describe('TerminalsPage', () => {
     )
     await waitFor(() => expect(h.revokeKiosk).toHaveBeenCalledWith(KIOSK_ID))
     await waitFor(() => expect(h.listKiosks).toHaveBeenCalledTimes(2))
+  })
+
+  it('overwrites the clipboard on dismiss after a copy', async () => {
+    const user = userEvent.setup()
+    h.registerKiosk.mockResolvedValue({ id: KIOSK_ID, name: 'X', token: TOKEN })
+    renderPage()
+    await user.type(await screen.findByLabelText('Terminal name'), 'X')
+    await user.click(screen.getByRole('button', { name: 'Register terminal' }))
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    await user.click(await screen.findByRole('button', { name: 'Copy code' }))
+    await user.click(screen.getByRole('button', { name: 'I have saved it' }))
+    expect(writeText).toHaveBeenLastCalledWith('')
+    expect(screen.queryByTestId('kiosk-token')).toBeNull()
+  })
+
+  it('never throws when the clipboard cannot be overwritten', async () => {
+    const user = userEvent.setup()
+    h.registerKiosk.mockResolvedValue({ id: KIOSK_ID, name: 'X', token: TOKEN })
+    renderPage()
+    await user.type(await screen.findByLabelText('Terminal name'), 'X')
+    await user.click(screen.getByRole('button', { name: 'Register terminal' }))
+    const writeText = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValue(new Error('denied'))
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    await user.click(await screen.findByRole('button', { name: 'Copy code' }))
+    await user.click(screen.getByRole('button', { name: 'I have saved it' }))
+    expect(screen.queryByTestId('kiosk-token')).toBeNull()
+  })
+
+  it('auto-hides the token after 3 minutes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      h.registerKiosk.mockResolvedValue({ id: KIOSK_ID, name: 'X', token: TOKEN })
+      renderPage()
+      await user.type(await screen.findByLabelText('Terminal name'), 'X')
+      await user.click(screen.getByRole('button', { name: 'Register terminal' }))
+      expect(await screen.findByTestId('kiosk-token')).toBeInTheDocument()
+      act(() => {
+        vi.advanceTimersByTime(179_000)
+      })
+      expect(screen.getByTestId('kiosk-token')).toBeInTheDocument()
+      act(() => {
+        vi.advanceTimersByTime(2_000)
+      })
+      expect(screen.queryByTestId('kiosk-token')).toBeNull()
+      expect(document.body.textContent).not.toContain(TOKEN)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

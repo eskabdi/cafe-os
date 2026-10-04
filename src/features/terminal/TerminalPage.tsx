@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
-import { fetchStaffRoster, type RosterResult } from '@/lib/supabase/staff-roster'
+import { fetchStaffRoster, RosterError, type RosterTile } from '@/lib/supabase/staff-roster'
 import { isValidSlug } from '@/lib/utils/host'
 import { clearKioskToken, getKioskToken } from '@/lib/utils/kiosk-token'
 import { StaffTileGrid } from './StaffTileGrid'
@@ -31,31 +31,36 @@ export function TerminalPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [returnFocusId, setReturnFocusId] = useState<string | null>(null)
 
-  const roster = useQuery<RosterResult>({
+  const roster = useQuery<RosterTile[], RosterError>({
     queryKey: ['staff-roster', slug],
     enabled: Boolean(slug && token),
     retry: false,
     staleTime: 0,
     gcTime: 0, // names of staff are not kept around once the terminal is left
     refetchOnWindowFocus: true, // picks up a revocation without polling
-    queryFn: () => {
+    queryFn: async () => {
       if (!slug || !token) throw new Error('unreachable')
-      return fetchStaffRoster({ restaurant_slug: slug, kiosk_token: token })
+      const res = await fetchStaffRoster({ restaurant_slug: slug, kiosk_token: token })
+      // Throwing keeps the previous data in the cache, so a failed background refetch never discards tiles mid-entry.
+      if (!res.ok) throw new RosterError(res.reason)
+      return res.staff
     },
   })
 
-  const invalid = roster.data && !roster.data.ok && roster.data.reason === 'invalid_kiosk'
-  useEffect(() => {
-    if (invalid && slug) {
-      clearKioskToken(slug)
-      setToken(null)
-      setSelectedId(null)
-    }
-  }, [invalid, slug])
+  const removeSetup = () => {
+    if (slug) clearKioskToken(slug)
+    setToken(null)
+    setSelectedId(null)
+  }
 
-  if (!slug || !token) return <TerminalUnauthorized slug={slug} />
+  // A 401 never erases the stored token (a suspended tenant or a gateway 401 would otherwise wipe every terminal):
+  // the same neutral screen is shown and a manual "Remove setup" is offered. Derived from the error, so no flash.
+  const notRegistered = roster.error?.reason === 'invalid_kiosk'
+  if (!slug || !token || notRegistered) {
+    return <TerminalUnauthorized slug={slug} onRemoveSetup={slug && token ? removeSetup : undefined} />
+  }
 
-  if (roster.isPending) {
+  if (!roster.data && roster.isPending) {
     return (
       <TerminalShell slug={slug}>
         <p role="status" className="pt-8 text-center text-sm text-muted-foreground">
@@ -65,7 +70,7 @@ export function TerminalPage() {
     )
   }
 
-  if (roster.isError || !roster.data || !roster.data.ok) {
+  if (!roster.data) {
     return (
       <TerminalShell slug={slug}>
         <section className="mx-auto max-w-md space-y-3 pt-8 text-center">
@@ -80,7 +85,7 @@ export function TerminalPage() {
     )
   }
 
-  const staff = roster.data.staff
+  const staff = roster.data
   const selected = staff.find((t) => t.id === selectedId) ?? null
 
   const back = () => {

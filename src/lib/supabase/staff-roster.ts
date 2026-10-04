@@ -20,15 +20,36 @@ export interface RosterTile {
 }
 
 export type RosterFailure = 'invalid_kiosk' | 'rate_limited' | 'network' | 'server_error'
+/** Thrown by query functions so react-query keeps the last good roster when a refetch fails. */
+export class RosterError extends Error {
+  readonly reason: RosterFailure
+  constructor(reason: RosterFailure) {
+    super(reason)
+    this.name = 'RosterError'
+    this.reason = reason
+  }
+}
 export type RosterResult = { ok: true; staff: RosterTile[] } | { ok: false; reason: RosterFailure }
+
+/**
+ * Display text from the server is untrusted: strip control characters (C0/C1, line/paragraph separators), bidi
+ * embedding/override/isolate marks and zero-width characters, then collapse whitespace. React escapes the result.
+ */
+export function cleanDisplayText(value: string): string {
+  return value
+    // eslint-disable-next-line no-control-regex -- stripping control characters is the purpose
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 // Lenient per row: a malformed row is dropped rather than failing the whole terminal.
 const tileSchema = z.object({
   id: z.string().regex(UUID),
-  name: z.string().min(1).max(121),
-  role: z.string().max(60),
+  name: z.string().max(240).transform(cleanDisplayText).pipe(z.string().min(1).max(121)),
+  role: z.string().max(120).transform(cleanDisplayText).pipe(z.string().max(60)),
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().catch(null),
   icon: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/).nullable().catch(null),
 })

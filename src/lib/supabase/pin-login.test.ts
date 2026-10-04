@@ -75,7 +75,7 @@ describe('pinLoginTile', () => {
     h.invoke.mockResolvedValue({ data: { access_token: 'a', refresh_token: 'r', expires_in: 3600 }, error: null })
     h.setSession.mockResolvedValue({ error: null })
     await expect(pinLoginTile(tile)).resolves.toEqual({ ok: true })
-    expect(h.invoke).toHaveBeenCalledWith('pin-login', { body: tile })
+    expect(h.invoke).toHaveBeenCalledWith('pin-login', { body: tile, signal: expect.any(AbortSignal) })
     expect(h.setSession).toHaveBeenCalledWith({ access_token: 'a', refresh_token: 'r' })
   })
 
@@ -88,5 +88,21 @@ describe('pinLoginTile', () => {
   it('maps network failures', async () => {
     h.invoke.mockResolvedValue({ data: null, error: new FunctionsFetchError(new Error('offline')) })
     await expect(pinLoginTile(tile)).resolves.toEqual({ ok: false, reason: 'network' })
+  })
+
+  it('aborts a hung request after the timeout and reports a network failure', async () => {
+    vi.useFakeTimers()
+    try {
+      h.invoke.mockImplementation(
+        (_name: string, opts: { signal: AbortSignal }) =>
+          new Promise((_resolve, reject) => opts.signal.addEventListener('abort', () => reject(new Error('aborted')))),
+      )
+      const p = pinLoginTile(tile, 15_000)
+      await vi.advanceTimersByTimeAsync(15_000)
+      await expect(p).resolves.toEqual({ ok: false, reason: 'network' })
+      expect(h.setSession).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
