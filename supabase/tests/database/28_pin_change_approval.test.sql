@@ -494,6 +494,37 @@ select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (selec
 select is(tests.run(format($q$select public.fn_reject_pin_change(%L)$q$, (select kitchen from _f))), 'P0001|mfa_required|', 'PIN delegate on aal2: reject -> mfa_required');
 select tests.clear_auth();
 select is((select pin_change_pending from public.profile_secrets where profile_id = (select kitchen from _f)), true, 'nothing decided by the aal2 PIN delegate');
+-- aal2 needs a LIVE authenticator (0028, L1): the token keeps its aal2 claim after the factor is removed, the database no longer honours it
+select tests.add_verified_factor((select admin from _f));
+select tests.aal2_token((select admin from _f));
+select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, gen_random_uuid())), 'P0001|not_found|', 'aal2 token + verified factor: the gate is open (an unknown id reaches the lookup)');
+select tests.clear_auth();
+delete from auth.mfa_factors where user_id = (select admin from _f);   -- auth.mfa.unenroll from another session
+select tests.aal2_token((select admin from _f));   -- another live token, still aal2
+select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select kitchen from _f))), 'P0001|mfa_required|', 'aal2 token, authenticator removed: approve -> mfa_required');
+select is(tests.run(format($q$select public.fn_reject_pin_change(%L)$q$, (select kitchen from _f))), 'P0001|mfa_required|', 'aal2 token, authenticator removed: reject -> mfa_required');
+select is(tests.run('select public.fn_approve_pin_change(null)'), 'P0001|mfa_required|', 'still checked before validation (null id)');
+select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, gen_random_uuid())), 'P0001|mfa_required|', 'and before the lookup (unknown id: no existence signal)');
+select tests.clear_auth();
+select tests.add_factor((select admin from _f), 'totp', 'unverified');
+select tests.aal2_token((select admin from _f));
+select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select kitchen from _f))), 'P0001|mfa_required|', 'only an unverified factor: approve -> mfa_required');
+select is(tests.run(format($q$select public.fn_reject_pin_change(%L)$q$, (select kitchen from _f))), 'P0001|mfa_required|', 'only an unverified factor: reject -> mfa_required');
+select tests.clear_auth();
+select tests.aal2_token((select kitchen from _f));
+select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select waiter from _f))), 'P0001|permission_denied|', 'permission is checked before aal2');
+select tests.clear_auth();
+update public.restaurants set status = 'past_due' where id = (select a from _f);
+select tests.aal2_token((select admin from _f));
+select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select kitchen from _f))), 'P0001|tenant_read_only|', 'tenant status is checked before aal2');
+select tests.clear_auth();
+update public.restaurants set status = (select v from _n where k = 'ts_status') where id = (select a from _f);
+select is((select pin_change_pending from public.profile_secrets where profile_id = (select kitchen from _f)), true, 'every refusal left the request pending');
+select is((select count(*)::int from public.audit_logs where event in ('auth.pin_change_approved', 'auth.pin_change_rejected') and (new_data ->> 'profile_id') = (select kitchen::text from _f)), 0, 'and audited no decision');
+select tests.add_verified_factor((select admin from _f));
+select tests.aal2_token((select admin from _f));
+select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, gen_random_uuid())), 'P0001|not_found|', 're-enrolled: the same kind of token passes the gate again');
+select tests.clear_auth();
 select tests.aal2((select admin from _f));   -- the tenant_admin (password account) on an aal2 session
 select is(public.fn_approve_pin_change((select kitchen from _f)) ->> 'status', 'approved', 'tenant_admin (password account) on an aal2 session: approve succeeds');
 select tests.clear_auth();
@@ -532,6 +563,30 @@ select ok(not exists (select 1 from public.audit_logs where event like 'auth.pin
 select ok(not exists (select 1 from public.user_notifications where kind like 'security.pin_change_%' and payload::text ~* '(pin_hash|digest|token|secret|[0-9a-f]{64}|\$2[aby]\$)'), 'pin_change notifications carry no secret');
 select ok(not exists (select 1 from public.audit_logs where event like 'auth.pin_%' and (new_data::text ~ '(2749|5183|8264|9146|3175|3856|7391|6428|834921)')), 'and no PIN value');
 select ok(not (select string_agg(prosrc, ' ') ~* 'pin_hash\s*,\s*''' from pg_proc where proname in ('fn_list_pending_pin_changes', 'fn_get_session_context') and pronamespace = 'public'::regnamespace), 'neither list nor context read pin_hash');
+
+-- ═════════ docs/architecture/deploy-checklist.md item 17: the lockout query (keep the body identical to the document) ═════════
+create function tests.lockout_slugs() returns text language sql stable as $f$
+  select string_agg(q.slug, ',' order by q.slug) from (
+    select r.id, r.slug
+    from public.restaurants r
+    where not exists (
+      select 1
+      from public.profiles p
+      join public.roles ro on ro.id = p.role_id and ro.restaurant_id = p.restaurant_id and ro.system_key = 'tenant_admin'
+      join auth.mfa_factors f on f.user_id = p.id and f.status = 'verified' and f.factor_type = 'totp'
+      where p.restaurant_id = r.id and p.is_active)
+  ) q where q.slug in ('central-cafe', 'second-cafe') $f$;
+grant execute on function tests.lockout_slugs() to public;
+delete from auth.mfa_factors;
+select is(tests.lockout_slugs(), 'central-cafe,second-cafe', 'lockout query: tenants whose tenant_admins have no verified TOTP factor are returned');
+select tests.add_verified_factor((select admin from _f));
+select is(tests.lockout_slugs(), 'second-cafe', 'a verified TOTP factor on one tenant_admin removes that tenant');
+select tests.add_factor((select b_admin from _f), 'totp', 'unverified');
+select tests.add_verified_factor((select b_waiter from _f));
+select is(tests.lockout_slugs(), 'second-cafe', 'an unverified factor, or a verified one held by a non-admin, does not count');
+select tests.add_verified_factor((select b_admin from _f));
+select is(tests.lockout_slugs(), null, 'once every tenant has a verified TOTP admin: no rows');
+delete from auth.mfa_factors;
 
 select * from finish();
 rollback;

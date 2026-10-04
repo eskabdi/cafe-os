@@ -18,11 +18,7 @@ grant all on _f to public;
 grant execute on all functions in schema tests to public;
 create temp table _n (k text primary key, v text);
 grant all on _n to public;
-create function tests.aal2(p_user uuid) returns void language plpgsql as $$
-begin
-  perform tests.authenticate_as(p_user);
-  perform set_config('request.jwt.claims', json_build_object('sub', p_user, 'role', 'authenticated', 'aud', 'authenticated', 'aal', 'aal2')::text, true);
-end $$;
+-- tests.aal2(user) (00_helpers) = aal2 token + verified factor (both needed, 0028); tests.aal2_token(user) = the claim alone
 create function tests.timers(p_rid uuid) returns text language sql stable security definer set search_path = '' as $$
   select s.idle_warning_seconds || '/' || s.signout_seconds || '/' || s.pin_pad_idle_seconds
   from public.restaurant_session_settings s where s.restaurant_id = p_rid $$;
@@ -67,6 +63,7 @@ select ok(not has_function_privilege('authenticated', 'public.fn_require_aal2()'
       and not has_function_privilege('anon', 'public.fn_require_aal2()', 'execute'), 'fn_require_aal2: internal (no client EXECUTE)');
 select ok((select prosrc ~ 'fn_require_aal2' and prosrc !~ 'fn_require_step_up' from pg_proc where proname = 'fn_store_session_timers' and pronamespace = 'public'::regnamespace), 'fn_store_session_timers requires aal2 (not the factor-dependent step-up)');
 select ok((select prosrc ~ 'auth_method' from pg_proc where proname = 'fn_require_aal2' and pronamespace = 'public'::regnamespace), 'fn_require_aal2 refuses PIN profiles (0027, H1)');
+select ok((select prosrc ~ 'auth\.mfa_factors' and prosrc ~ '''verified''' from pg_proc where proname = 'fn_require_aal2' and pronamespace = 'public'::regnamespace), 'fn_require_aal2 requires a verified factor (0028, L1)');
 select is((select module from public.permissions where key = 'settings.session_timers'), 'settings', 'permission settings.session_timers exists (module settings)');
 select is((select count(*)::int from public.roles r where r.system_key = 'tenant_admin'
              and not exists (select 1 from public.role_permissions rp join public.permissions pm on pm.id = rp.permission_id
