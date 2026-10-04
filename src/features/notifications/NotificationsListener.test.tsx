@@ -84,6 +84,12 @@ function renderListener(over: Partial<AuthValue> = {}) {
 const push = (n: UserNotification) => act(() => h.handlers?.onInsert(n))
 const toastOf = (text: string) => screen.getByText(text).closest('[data-sonner-toast]') as HTMLElement
 
+// jsdom lacks pointer capture; Sonner calls it on pointerdown inside a toast.
+if (!Element.prototype.setPointerCapture) {
+  Element.prototype.setPointerCapture = () => {}
+  Element.prototype.releasePointerCapture = () => {}
+}
+
 beforeEach(() => {
   h.fetchUnread.mockReset().mockResolvedValue([])
   h.unsubscribe.mockReset()
@@ -185,11 +191,7 @@ describe('NotificationsListener', () => {
     await push(
       note('security.concurrent_login_blocked', about(STAFF, evil, { kiosk_name: '<script>x</script>' })),
     )
-    const toast = await waitFor(() =>
-      toastOf(
-        `${'<img src=x onerror="alert(1)"><b>Bold</b>'.slice(0, 59)}… was blocked from signing in on a second device`,
-      ),
-    )
+    const toast = await waitFor(() => toastOf(`${evil} was blocked from signing in on a second device`))
     expect(toast.querySelector('img, b, script')).toBeNull()
     expect(document.querySelector('img')).toBeNull()
     expect(screen.getByText('Terminal: <script>x</script>')).toBeInTheDocument()
