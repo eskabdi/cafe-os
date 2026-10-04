@@ -1,14 +1,16 @@
 -- Maker-checker for a forced PIN change (migration 0024): state machine (required -> pending_approval -> approved | rejected),
--- the single restriction predicate, approve/reject/list RPCs (tenant from identity, users.manage, step-up, no oracle, never the
--- subject), service-only completion, notifications, audit rows free of secrets, session-context fields.
+-- the single restriction predicate, approve/reject/list RPCs (tenant from identity, users.manage, step-up, tenant status
+-- past_due / suspended, no oracle, never the subject), service-only completion, notifications, audit rows free of secrets,
+-- session-context fields.
 begin;
-select plan(183);
+select plan(207);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
        tests.user_id('selam', 'central-cafe') admin, tests.user_id('dawit', 'central-cafe') admin2,
        tests.user_id('yonas', 'central-cafe') waiter, tests.user_id('meron', 'central-cafe') deleg,
        tests.user_id('abebe', 'central-cafe') kitchen, tests.user_id('hanna', 'central-cafe') cashier,
+       tests.user_id('sara', 'central-cafe') pastry,
        tests.user_id('owner', 'second-cafe') b_admin, tests.user_id('waiter', 'second-cafe') b_waiter;
 grant all on _f to public;
 grant execute on all functions in schema tests to public;
@@ -299,6 +301,78 @@ select tests.clear_auth();
 select is(tests.n_notes('security.pin_change_approved', (select waiter from _f)), 1, 'still one approved notification');
 select is((select count(*)::int from public.audit_logs where event = 'auth.pin_change_approved'), 1, 'still one audit row');
 
+-- ═════════ tenant status: deciding is a write (past_due -> tenant_read_only, suspended -> tenant_suspended) ═════════
+-- fn_tenant_status_guard(true) is called twice on purpose: by each wrapper and by the shared body behind them. Through the public
+-- API either layer therefore masks a missing guard in the other, so each layer is also proven on its own below.
+-- A pending change of its own (sara, Pastry: used nowhere else in this file), so no other section's state, counts or notifications move.
+select tests.authenticate_as_service_role();
+select public.fn_staff_login_blocked((select pastry from _f));
+select public.fn_complete_forced_pin_change((select pastry from _f), tests.pin_digest('3856'), 4);
+select tests.clear_auth();
+select is((select pin_change_pending and not must_change_pin from public.profile_secrets where profile_id = (select pastry from _f)), true, '(a Pastry staff member now awaits approval)');
+insert into _n select 'ts_requested_at', pin_change_requested_at::text from public.profile_secrets where profile_id = (select pastry from _f);
+insert into _n select 'ts_status', status from public.restaurants where id = (select a from _f);
+
+-- past_due: read-only. An aal2 tenant_admin holding users.manage is refused before anything is read or written.
+update public.restaurants set status = 'past_due' where id = (select a from _f);
+insert into _n select 'ts_audit_pd', count(*)::text from public.audit_logs where restaurant_id = (select a from _f);
+select tests.aal2((select admin from _f));
+select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select pastry from _f))), 'P0001|tenant_read_only|', 'past_due: approve refused (tenant_read_only), even for an aal2 tenant_admin');
+select is(tests.run(format($q$select public.fn_reject_pin_change(%L)$q$, (select pastry from _f))), 'P0001|tenant_read_only|', 'past_due: reject refused (tenant_read_only)');
+select tests.clear_auth();
+-- the shared body refuses on its own too: called directly (internal: owner role + an aal2 tenant_admin's claims, as for fn_require_aal2 above)
+select set_config('request.jwt.claims', json_build_object('sub', (select admin from _f), 'role', 'authenticated', 'aud', 'authenticated', 'aal', 'aal2')::text, true);
+select is(tests.run(format($q$select public.fn_decide_pin_change(%L, true)$q$, (select pastry from _f))), 'P0001|tenant_read_only|', 'past_due: fn_decide_pin_change(approve) refuses on its own');
+select is(tests.run(format($q$select public.fn_decide_pin_change(%L, false)$q$, (select pastry from _f))), 'P0001|tenant_read_only|', 'past_due: fn_decide_pin_change(reject) refuses on its own');
+select set_config('request.jwt.claims', '', true);
+select is((select pin_change_pending and not must_change_pin and pin_change_requested_at::text = (select v from _n where k = 'ts_requested_at') from public.profile_secrets where profile_id = (select pastry from _f)), true, 'past_due: the request is still pending, request time untouched');
+select is((select count(*)::int from public.audit_logs where restaurant_id = (select a from _f)), (select v::int from _n where k = 'ts_audit_pd'), 'past_due: no audit row was written');
+
+-- suspended: no access at all, and the refusal says why (tenant_suspended, not a bare permission_denied)
+update public.restaurants set status = 'suspended', suspended_at = now(), suspension_reason = 'test', status_before_suspension = 'past_due' where id = (select a from _f);
+insert into _n select 'ts_audit_su', count(*)::text from public.audit_logs where restaurant_id = (select a from _f);
+select tests.aal2((select admin from _f));
+select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select pastry from _f))), 'P0001|tenant_suspended|', 'suspended: approve refused (tenant_suspended), even for an aal2 tenant_admin');
+select is(tests.run(format($q$select public.fn_reject_pin_change(%L)$q$, (select pastry from _f))), 'P0001|tenant_suspended|', 'suspended: reject refused (tenant_suspended)');
+select tests.clear_auth();
+select set_config('request.jwt.claims', json_build_object('sub', (select admin from _f), 'role', 'authenticated', 'aud', 'authenticated', 'aal', 'aal2')::text, true);
+select is(tests.run(format($q$select public.fn_decide_pin_change(%L, true)$q$, (select pastry from _f))), 'P0001|tenant_suspended|', 'suspended: fn_decide_pin_change(approve) refuses on its own');
+select is(tests.run(format($q$select public.fn_decide_pin_change(%L, false)$q$, (select pastry from _f))), 'P0001|tenant_suspended|', 'suspended: fn_decide_pin_change(reject) refuses on its own');
+select set_config('request.jwt.claims', '', true);
+select is((select pin_change_pending and not must_change_pin and pin_change_requested_at::text = (select v from _n where k = 'ts_requested_at') from public.profile_secrets where profile_id = (select pastry from _f)), true, 'suspended: the request is still pending, request time untouched');
+select is((select count(*)::int from public.audit_logs where restaurant_id = (select a from _f)), (select v::int from _n where k = 'ts_audit_su'), 'suspended: no audit row was written');
+
+-- Each wrapper also refuses on its own: take the shared body away from them (owner EXECUTE revoked, restored below), so only a
+-- wrapper's own fn_tenant_status_guard(true) can still produce the refusal. The control (tenant writable again) proves the body
+-- really is unreachable: an unguarded wrapper would die right there with 42501.
+update public.restaurants set status = (select v from _n where k = 'ts_status'), suspended_at = null, suspension_reason = null, status_before_suspension = null where id = (select a from _f);
+insert into _n select 'ts_acl', (select string_agg(a::text, ',' order by a::text) from pg_proc p, unnest(p.proacl) a where p.oid = 'public.fn_decide_pin_change(uuid,boolean)'::regprocedure);
+revoke execute on function public.fn_decide_pin_change(uuid, boolean) from current_user;
+select tests.aal2((select admin from _f));
+select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select pastry from _f))), '42501|permission denied for function fn_decide_pin_change|', '(control) writable tenant: fn_approve_pin_change cannot reach the shared body');
+select is(tests.run(format($q$select public.fn_reject_pin_change(%L)$q$, (select pastry from _f))), '42501|permission denied for function fn_decide_pin_change|', '(control) writable tenant: nor can fn_reject_pin_change');
+select tests.clear_auth();
+update public.restaurants set status = 'past_due' where id = (select a from _f);
+select tests.aal2((select admin from _f));
+select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select pastry from _f))), 'P0001|tenant_read_only|', 'past_due: fn_approve_pin_change refuses on its own');
+select is(tests.run(format($q$select public.fn_reject_pin_change(%L)$q$, (select pastry from _f))), 'P0001|tenant_read_only|', 'past_due: fn_reject_pin_change refuses on its own');
+select tests.clear_auth();
+update public.restaurants set status = 'suspended', suspended_at = now(), suspension_reason = 'test', status_before_suspension = 'past_due' where id = (select a from _f);
+select tests.aal2((select admin from _f));
+select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select pastry from _f))), 'P0001|tenant_suspended|', 'suspended: fn_approve_pin_change refuses on its own');
+select is(tests.run(format($q$select public.fn_reject_pin_change(%L)$q$, (select pastry from _f))), 'P0001|tenant_suspended|', 'suspended: fn_reject_pin_change refuses on its own');
+select tests.clear_auth();
+grant execute on function public.fn_decide_pin_change(uuid, boolean) to current_user;
+update public.restaurants set status = (select v from _n where k = 'ts_status'), suspended_at = null, suspension_reason = null, status_before_suspension = null where id = (select a from _f);
+select is((select string_agg(a::text, ',' order by a::text) from pg_proc p, unnest(p.proacl) a where p.oid = 'public.fn_decide_pin_change(uuid,boolean)'::regprocedure), (select v from _n where k = 'ts_acl'), 'the shared body''s privileges are exactly as they were');
+select is((select status = (select v from _n where k = 'ts_status') and suspended_at is null and suspension_reason is null and status_before_suspension is null from public.restaurants where id = (select a from _f)), true, 'tenant status restored (suspension fields cleared)');
+-- control: with the status restored the very same call succeeds, so every refusal above was the tenant status and nothing else
+select tests.aal2((select admin from _f));
+select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select pastry from _f))), 'ok:1', 'restored: the same approve now succeeds');
+select tests.clear_auth();
+select is((select not pin_change_pending and not must_change_pin and pin_change_requested_at is null from public.profile_secrets where profile_id = (select pastry from _f)), true, 'restored: the request is decided (released) by that call');
+select is((select count(*)::int from public.audit_logs where event = 'auth.pin_change_approved' and actor_id = (select admin from _f) and (new_data ->> 'profile_id') = (select pastry::text from _f)), 1, 'restored: and audited exactly once, with the tenant_admin as actor');
+
 -- ═════════ reject, resubmit, admin-set PIN ═════════
 select tests.authenticate_as_service_role();
 select public.fn_staff_login_blocked((select waiter from _f));
@@ -404,7 +478,7 @@ delete from public.profile_secrets where profile_id = (select admin from _f);
 -- ═════════ no secrets anywhere ═════════
 select ok(not exists (select 1 from public.audit_logs where event like 'auth.pin_change_%' and new_data::text ~* '(pin_hash|digest|token|secret|[0-9a-f]{64}|\$2[aby]\$)'), 'pin_change audit rows carry no secret');
 select ok(not exists (select 1 from public.user_notifications where kind like 'security.pin_change_%' and payload::text ~* '(pin_hash|digest|token|secret|[0-9a-f]{64}|\$2[aby]\$)'), 'pin_change notifications carry no secret');
-select ok(not exists (select 1 from public.audit_logs where event like 'auth.pin_%' and (new_data::text ~ '(2749|5183|8264|9146|3175|7391|6428|834921)')), 'and no PIN value');
+select ok(not exists (select 1 from public.audit_logs where event like 'auth.pin_%' and (new_data::text ~ '(2749|5183|8264|9146|3175|3856|7391|6428|834921)')), 'and no PIN value');
 select ok(not (select string_agg(prosrc, ' ') ~* 'pin_hash\s*,\s*''' from pg_proc where proname in ('fn_list_pending_pin_changes', 'fn_get_session_context') and pronamespace = 'public'::regnamespace), 'neither list nor context read pin_hash');
 
 select * from finish();
