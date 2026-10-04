@@ -2,7 +2,7 @@
 -- the single restriction predicate, approve/reject/list RPCs (tenant from identity, users.manage, step-up, no oracle, never the
 -- subject), service-only completion, notifications, audit rows free of secrets, session-context fields.
 begin;
-select plan(154);
+select plan(175);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -44,6 +44,17 @@ select ok(not has_function_privilege('authenticated', 'public.fn_pin_restricted(
       and not has_function_privilege('anon', 'public.fn_pin_restricted(uuid)', 'execute'), 'fn_pin_restricted: internal');
 select ok(not has_function_privilege('authenticated', 'public.fn_decide_pin_change(uuid,boolean)', 'execute')
       and not has_function_privilege('anon', 'public.fn_decide_pin_change(uuid,boolean)', 'execute'), 'fn_decide_pin_change: internal (only the two wrappers are public)');
+select ok(not has_function_privilege('authenticated', 'public.fn_require_aal2()', 'execute')
+      and not has_function_privilege('anon', 'public.fn_require_aal2()', 'execute'), 'fn_require_aal2: internal (no client EXECUTE), like fn_require_step_up');
+select ok((select p.prosecdef and p.proconfig @> array['search_path=""'] from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname = 'fn_require_aal2'), 'fn_require_aal2: security definer with an empty search_path');
+select ok((select prosrc ~ 'fn_require_aal2' and prosrc !~ 'fn_require_step_up' from pg_proc where proname = 'fn_decide_pin_change' and pronamespace = 'public'::regnamespace), 'fn_decide_pin_change requires aal2 (not the factor-dependent step-up)');
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated","aal":"aal1"}', true);
+select is(tests.run('select public.fn_require_aal2()'), 'P0001|mfa_required|', 'fn_require_aal2: aal1 -> mfa_required');
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
+select is(tests.run('select public.fn_require_aal2()'), 'P0001|mfa_required|', 'fn_require_aal2: no aal claim -> mfa_required');
+select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated","aal":"aal2"}', true);
+select is(tests.run('select public.fn_require_aal2()'), 'ok:1', 'fn_require_aal2: aal2 passes');
+select set_config('request.jwt.claims', '', true);
 select ok(has_function_privilege('authenticated', 'public.fn_approve_pin_change(uuid)', 'execute')
       and has_function_privilege('authenticated', 'public.fn_reject_pin_change(uuid)', 'execute')
       and has_function_privilege('authenticated', 'public.fn_list_pending_pin_changes()', 'execute'), 'approve / reject / list: authenticated');
@@ -183,7 +194,7 @@ select is((select string_agg(e ->> 'profile_id', ',') from jsonb_array_elements(
 select tests.clear_auth();
 
 -- ═════════ approve / reject: authorisation, oracle, self ═════════
-select tests.authenticate_as((select admin from _f));
+select tests.aal2((select admin from _f));
 select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select admin from _f))), 'P0001|permission_denied|', 'the approver is never the subject (own id)');
 select is(tests.run(format($q$select public.fn_reject_pin_change(%L)$q$, (select admin from _f))), 'P0001|permission_denied|', 'nor reject own id');
 select is(tests.run('select public.fn_approve_pin_change(null)'), 'P0001|invalid_input|', 'null id: invalid_input');
@@ -193,7 +204,7 @@ select is(tests.oracle($q$select public.fn_approve_pin_change({id})$q$, (select 
 select is(tests.oracle($q$select public.fn_reject_pin_change({id})$q$, (select kitchen from _f)), 'P0001|not_found|', 'reject(not pending) likewise');
 select is(tests.oracle($q$select public.fn_approve_pin_change({id})$q$, (select admin2 from _f)), 'P0001|not_found|', 'approve(another admin id): not_found as well');
 select tests.clear_auth();
-select tests.authenticate_as((select b_admin from _f));
+select tests.aal2((select b_admin from _f));
 select is(tests.oracle($q$select public.fn_approve_pin_change({id})$q$, (select waiter from _f)), 'P0001|not_found|', 'cross-tenant: B admin approving A''s pending id = unknown id');
 select is(tests.oracle($q$select public.fn_reject_pin_change({id})$q$, (select waiter from _f)), 'P0001|not_found|', 'cross-tenant reject likewise');
 select tests.clear_auth();
@@ -217,7 +228,7 @@ select tests.authenticate_as_service_role();
 select public.fn_staff_login_blocked((select cashier from _f));
 select public.fn_complete_forced_pin_change((select cashier from _f), tests.pin_digest('834921'), 6);
 select tests.clear_auth();
-select tests.authenticate_as((select deleg from _f));
+select tests.aal2((select deleg from _f));
 select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select cashier from _f))), 'P0001|permission_escalation|', 'delegate cannot approve a role whose rights it does not hold');
 select tests.clear_auth();
 select is((select pin_change_pending from public.profile_secrets where profile_id = (select cashier from _f)), true, 'cashier still pending');
@@ -303,6 +314,46 @@ select is((select not pin_change_pending and not must_change_pin and pin_change_
 select tests.authenticate_as((select waiter from _f));
 select ok(public.has_permission('orders.create'), 'access back');
 select tests.clear_auth();
+
+-- ═════════ aal2 gate (0026): a PIN-only delegate holding users.manage may not decide; an authenticator may ═════════
+select tests.authenticate_as_service_role();
+select public.fn_staff_login_blocked((select kitchen from _f));
+select public.fn_complete_forced_pin_change((select kitchen from _f), tests.pin_digest('4608'), 4);
+select tests.clear_auth();
+select is((select pin_change_pending from public.profile_secrets where profile_id = (select kitchen from _f)), true, '(kitchen staff now awaits approval)');
+-- the delegate role covers the kitchen role, so only the aal2 gate stands between the delegate and the decision
+insert into public.role_permissions (role_id, permission_id, restaurant_id)
+  select (select id from public.roles where restaurant_id = (select a from _f) and name = 'HR Lead'), rp.permission_id, rp.restaurant_id
+  from public.role_permissions rp join public.profiles p on p.role_id = rp.role_id where p.id = (select kitchen from _f)
+  on conflict do nothing;
+insert into public.role_station_access (role_id, station_id, restaurant_id)
+  select (select id from public.roles where restaurant_id = (select a from _f) and name = 'HR Lead'), rsa.station_id, rsa.restaurant_id
+  from public.role_station_access rsa join public.profiles p on p.role_id = rsa.role_id where p.id = (select kitchen from _f)
+  on conflict do nothing;
+select tests.authenticate_as((select deleg from _f));   -- aal1 session, no authenticator: a PIN-only delegate
+select ok(public.has_permission('users.manage'), '(the PIN delegate holds users.manage)');
+select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select kitchen from _f))), 'P0001|mfa_required|', 'PIN delegate (aal1, no factor) with users.manage: approve -> mfa_required');
+select is(tests.run(format($q$select public.fn_reject_pin_change(%L)$q$, (select kitchen from _f))), 'P0001|mfa_required|', 'PIN delegate: reject -> mfa_required');
+select is(tests.run('select public.fn_approve_pin_change(null)'), 'P0001|mfa_required|', 'aal2 is checked before input validation (null id -> mfa_required, not invalid_input)');
+select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, gen_random_uuid())), 'P0001|mfa_required|', 'and before the lookup (unknown id -> mfa_required: no existence signal for aal1)');
+select ok(jsonb_array_length(public.fn_list_pending_pin_changes()) >= 1, 'the delegate can still LIST (read needs no aal2)');
+select tests.clear_auth();
+select tests.authenticate_as((select admin2 from _f));   -- tenant_admin without any authenticator, aal1
+select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select kitchen from _f))), 'P0001|mfa_required|', 'tenant_admin without an authenticator (aal1): approve -> mfa_required (no pass for users without a factor)');
+select is(tests.run(format($q$select public.fn_reject_pin_change(%L)$q$, (select kitchen from _f))), 'P0001|mfa_required|', 'tenant_admin without an authenticator: reject -> mfa_required');
+select tests.clear_auth();
+select is((select pin_change_pending from public.profile_secrets where profile_id = (select kitchen from _f)), true, 'nothing was decided without aal2');
+select is((select count(*)::int from public.audit_logs where event in ('auth.pin_change_approved', 'auth.pin_change_rejected') and (new_data ->> 'profile_id') = (select kitchen::text from _f)), 0, 'and nothing was audited as a decision');
+select tests.aal2((select deleg from _f));   -- the same delegate with an authenticator (aal2)
+select is(public.fn_approve_pin_change((select kitchen from _f)) ->> 'status', 'approved', 'delegate on an aal2 session: approve succeeds');
+select tests.clear_auth();
+select is((select not pin_change_pending and not must_change_pin from public.profile_secrets where profile_id = (select kitchen from _f)), true, 'kitchen staff released');
+select is((select count(*)::int from public.audit_logs where event = 'auth.pin_change_approved' and actor_id = (select deleg from _f)), 1, 'audited with the delegate as actor');
+select tests.aal2((select deleg from _f));
+select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select kitchen from _f))), 'P0001|not_found|', 'aal2 replay: not_found (idempotent-safe)');
+select tests.clear_auth();
+delete from public.role_station_access where role_id = (select id from public.roles where restaurant_id = (select a from _f) and name = 'HR Lead');
+delete from public.role_permissions where role_id = (select id from public.roles where restaurant_id = (select a from _f) and name = 'HR Lead') and permission_id not in (select id from public.permissions where key in ('users.manage', 'users.view'));
 
 -- ═════════ concurrency primitive: the decision locks the row ═════════
 select ok((select prosrc ~* 'for update of ps' from pg_proc where proname = 'fn_decide_pin_change' and pronamespace = 'public'::regnamespace), 'approve/reject lock the secret row (FOR UPDATE) before deciding');
