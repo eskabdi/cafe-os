@@ -65,6 +65,7 @@ export function corsHeaders(allowedOrigin: string | null): Record<string, string
     'Access-Control-Allow-Origin': allowedOrigin,
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info',
+    'Access-Control-Expose-Headers': 'Retry-After',
     'Access-Control-Max-Age': '600',
   }
 }
