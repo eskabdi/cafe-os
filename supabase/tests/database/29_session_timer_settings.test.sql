@@ -275,6 +275,45 @@ select tests.authenticate_as((select waiter from _f));
 select is(tests.run('select public.fn_reset_session_timers()'), 'P0001|permission_denied|', 'reset: staff denied');
 select tests.clear_auth();
 
+-- ═════════ aal2 needs a LIVE authenticator (0028, L1) ═════════
+-- Timers are the defaults 15/30/60 here (reset above); every refusal must leave them and the audit untouched.
+insert into _n select 'ev_l1', tests.n_events((select a from _f))::text;
+insert into _n select 'st_l1', status from public.restaurants where id = (select a from _f);
+select tests.aal2((select admin from _f));
+select is(public.fn_update_session_timers(15, 30, 60) ->> 'signout_seconds', '30', 'aal2 token + verified factor: update passes the gate (same values, nothing changes)');
+select is(public.fn_reset_session_timers() ->> 'signout_seconds', '30', 'reset passes too');
+select tests.clear_auth();
+delete from auth.mfa_factors where user_id = (select admin from _f);   -- auth.mfa.unenroll from another session
+select tests.aal2_token((select admin from _f));   -- another live token, still aal2
+select is(tests.run('select public.fn_update_session_timers(20, 45, 90)'), 'P0001|mfa_required|', 'aal2 token, authenticator removed: update -> mfa_required');
+select is(tests.run('select public.fn_reset_session_timers()'), 'P0001|mfa_required|', 'aal2 token, authenticator removed: reset -> mfa_required');
+select is(tests.run('select public.fn_update_session_timers(1, 2, 3)'), 'P0001|mfa_required|', 'aal2 is still checked before validation');
+select is(public.fn_get_session_timers() ->> 'signout_seconds', '30', 'reading needs no authenticator');
+select tests.clear_auth();
+select tests.add_factor((select admin from _f), 'totp', 'unverified');
+select tests.aal2_token((select admin from _f));
+select is(tests.run('select public.fn_update_session_timers(20, 45, 90)'), 'P0001|mfa_required|', 'only an unverified factor: update -> mfa_required');
+select is(tests.run('select public.fn_reset_session_timers()'), 'P0001|mfa_required|', 'only an unverified factor: reset -> mfa_required');
+select tests.clear_auth();
+select is(tests.n_factors((select admin2 from _f), 'verified') > 0, true, '(precondition) admin2 holds a verified factor');
+select tests.aal2_token((select admin from _f));
+select is(tests.run('select public.fn_update_session_timers(20, 45, 90)'), 'P0001|mfa_required|', 'another user''s verified factor does not count');
+select tests.clear_auth();
+select tests.aal2_token((select waiter from _f));
+select is(tests.run('select public.fn_update_session_timers(20, 45, 90)'), 'P0001|permission_denied|', 'permission is checked before aal2');
+select tests.clear_auth();
+update public.restaurants set status = 'past_due' where id = (select a from _f);
+select tests.aal2_token((select admin from _f));
+select is(tests.run('select public.fn_update_session_timers(20, 45, 90)'), 'P0001|tenant_read_only|', 'tenant status is checked before aal2');
+select tests.clear_auth();
+update public.restaurants set status = (select v from _n where k = 'st_l1') where id = (select a from _f);
+select is(tests.timers((select a from _f)), '15/30/60', 'every refusal left the timers untouched');
+select is(tests.n_events((select a from _f)), (select v::int from _n where k = 'ev_l1'), 'and wrote no audit event');
+select tests.add_verified_factor((select admin from _f));
+select tests.aal2_token((select admin from _f));
+select is(public.fn_update_session_timers(15, 30, 60) ->> 'signout_seconds', '30', 're-enrolled: the same kind of token passes again');
+select tests.clear_auth();
+
 -- ═════════ PIN-restricted users keep the timers ═════════
 select tests.aal2((select admin from _f));
 select public.fn_update_session_timers(12, 40, 75);
