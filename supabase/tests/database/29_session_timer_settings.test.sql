@@ -4,7 +4,7 @@
 -- tenant status, cross-tenant isolation, service-only kiosk bootstrap returning the kiosk tenant's own pin_pad_idle_seconds,
 -- service_role holds no direct privilege on the table (the definer RPCs are the only readers/writers).
 begin;
-select plan(157);
+select plan(161);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -66,6 +66,7 @@ select ok((select bool_and(p.prosecdef and p.proconfig @> array['search_path=""'
 select ok(not has_function_privilege('authenticated', 'public.fn_require_aal2()', 'execute')
       and not has_function_privilege('anon', 'public.fn_require_aal2()', 'execute'), 'fn_require_aal2: internal (no client EXECUTE)');
 select ok((select prosrc ~ 'fn_require_aal2' and prosrc !~ 'fn_require_step_up' from pg_proc where proname = 'fn_store_session_timers' and pronamespace = 'public'::regnamespace), 'fn_store_session_timers requires aal2 (not the factor-dependent step-up)');
+select ok((select prosrc ~ 'auth_method' from pg_proc where proname = 'fn_require_aal2' and pronamespace = 'public'::regnamespace), 'fn_require_aal2 refuses PIN profiles (0027, H1)');
 select is((select module from public.permissions where key = 'settings.session_timers'), 'settings', 'permission settings.session_timers exists (module settings)');
 select is((select count(*)::int from public.roles r where r.system_key = 'tenant_admin'
              and not exists (select 1 from public.role_permissions rp join public.permissions pm on pm.id = rp.permission_id
@@ -215,8 +216,13 @@ select is(tests.run('select public.fn_reset_session_timers()'), 'P0001|mfa_requi
 select is(public.fn_get_session_timers() ->> 'signout_seconds', '45', 'the PIN delegate can still READ the timers');
 select tests.clear_auth();
 select is(tests.timers((select a from _f)), '20/45/90', 'and nothing changed');
-select tests.aal2((select waiter2 from _f));
-select is(public.fn_update_session_timers(25, 50, 90) ->> 'idle_warning_seconds', '25', 'the permission is grantable: a Waiter holding it may update');
+select tests.aal2((select waiter2 from _f));   -- H1: the PIN delegate enrolled its OWN TOTP through GoTrue and holds an aal2 JWT
+select is(tests.run('select public.fn_update_session_timers(25, 50, 90)'), 'P0001|mfa_required|', 'PIN delegate on a self-enrolled aal2 session: update -> mfa_required');
+select is(tests.run('select public.fn_reset_session_timers()'), 'P0001|mfa_required|', 'PIN delegate on aal2: reset -> mfa_required');
+select tests.clear_auth();
+select is(tests.timers((select a from _f)), '20/45/90', 'the aal2 PIN delegate changed nothing');
+select tests.aal2((select admin from _f));
+select is(public.fn_update_session_timers(25, 50, 90) ->> 'idle_warning_seconds', '25', 'tenant_admin (password account) on aal2 updates; the permission itself is grantable but a PIN holder never passes aal2');
 select tests.clear_auth();
 delete from public.role_permissions where role_id = (select r_waiter from _f) and permission_id = (select id from public.permissions where key = 'settings.session_timers');
 

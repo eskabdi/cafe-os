@@ -108,7 +108,7 @@ User request (2026-10-04): the inactivity sign-out and the PIN-pad idle timer ar
   (default 30: sign-out, counted in TOTAL from the last activity, so the warning is visible for `signout - idle_warning` seconds), `pin_pad_idle_seconds`
   (default 60: kiosk PIN pad back to the tiles). Bounds (DB CHECK and RPC validation): `5 <= idle_warning < signout`, `15 <= signout <= 900`, `15 <= pin_pad <= 300`.
 - Edited with `fn_update_session_timers(p_idle_warning_seconds, p_signout_seconds, p_pin_pad_idle_seconds)` / `fn_reset_session_timers()`: permission
-  `settings.session_timers` (tenant_admin always; grantable), aal2 (`fn_require_aal2`, 0026; no pass without an authenticator), writable tenant; audited with old/new values.
+  `settings.session_timers` (tenant_admin always; grantable), aal2 (`fn_require_aal2`, 0026/0027; no pass without an authenticator, none for PIN accounts), writable tenant; audited with old/new values.
 - The signed-in SPA reads them from `fn_get_session_context().session_timers` (or `fn_get_session_timers()`), for every tenant user including one whose PIN
   change is required/pending (the timers must keep running then). The kiosk reads `pin_pad_idle_seconds` from the `staff-roster` response; it belongs to the
   token's tenant. Clients should still clamp to the same bounds and fall back to the defaults (15 / 30 / 60) when the field is missing.

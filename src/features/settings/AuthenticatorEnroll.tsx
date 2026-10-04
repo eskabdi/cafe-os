@@ -40,17 +40,25 @@ export function AuthenticatorEnroll({ onEnrolled }: AuthenticatorEnrollProps) {
   const [code, setCode] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // true only between a verified code and the end of onEnrolled: the secret is already dropped, so the start form is
+  // shown disabled with its own label instead of flashing "Starting…"
+  const [finishing, setFinishing] = useState(false)
   const [copied, setCopied] = useState(false)
   const pendingId = useRef<string | null>(null)
   const alive = useRef(true)
+  // true while challengeAndVerify is awaiting: an unmount then must NOT discard the factor (the code may be accepted)
+  const inFlight = useRef(false)
 
   useEffect(() => {
     alive.current = true
     return () => {
       alive.current = false
-      // leaving the page mid-setup drops the secret with the state and removes the unfinished factor
-      if (pendingId.current) void discardUnverified(pendingId.current)
-      pendingId.current = null
+      // leaving the page mid-setup drops the secret with the state and removes the unfinished factor, unless a verify is
+      // in flight: that call decides the factor's fate (verify() discards it after unmount when the code is refused)
+      if (pendingId.current && !inFlight.current) {
+        void discardUnverified(pendingId.current)
+        pendingId.current = null
+      }
     }
   }, [])
 
@@ -108,6 +116,8 @@ export function AuthenticatorEnroll({ onEnrolled }: AuthenticatorEnrollProps) {
     }
     setBusy(true)
     setError(null)
+    inFlight.current = true
+    let verified = false
     try {
       const { error: verifyError } = await supabase.auth.mfa.challengeAndVerify({
         factorId: pending.factorId,
@@ -118,14 +128,37 @@ export function AuthenticatorEnroll({ onEnrolled }: AuthenticatorEnrollProps) {
         setError(verifyErrorMessage(verifyError))
         return
       }
-      // verified: forget the secret before anything else happens
-      pendingId.current = null
-      setPending(null)
-      await onEnrolled()
+      verified = true
     } catch {
       setError(AUTHENTICATOR_MESSAGES.generic)
     } finally {
+      inFlight.current = false
+      if (!verified && !alive.current && pendingId.current) {
+        // left the page while verifying and the code was not accepted: the unfinished factor is still ours to remove
+        const id = pendingId.current
+        pendingId.current = null
+        void discardUnverified(id)
+      }
+    }
+    if (!verified) {
       if (alive.current) setBusy(false)
+      return
+    }
+    // verified: forget the secret before anything else happens
+    pendingId.current = null
+    if (alive.current) {
+      setFinishing(true)
+      setPending(null)
+    }
+    try {
+      await onEnrolled()
+    } catch {
+      // the authenticator is enrolled; a refresh failure in the caller must not read as a failed enrollment
+    } finally {
+      if (alive.current) {
+        setFinishing(false)
+        setBusy(false)
+      }
     }
   }
 
@@ -163,7 +196,7 @@ export function AuthenticatorEnroll({ onEnrolled }: AuthenticatorEnrollProps) {
         </div>
         {errorEl}
         <Button type="submit" disabled={busy}>
-          {busy ? 'Starting…' : 'Set up authenticator'}
+          {finishing ? 'Finishing…' : busy ? 'Starting…' : 'Set up authenticator'}
         </Button>
       </form>
     )

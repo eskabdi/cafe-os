@@ -31,7 +31,7 @@ export const authenticatorNameSchema = z
   .min(1)
   .max(40)
   // eslint-disable-next-line no-control-regex -- rejecting control characters is the point
-  .regex(/^[^\u0000-\u001f\u007f‪-‮⁦-⁩]+$/)
+  .regex(/^[^\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]+$/)
 
 export const DEFAULT_AUTHENTICATOR_NAME = 'Authenticator app'
 

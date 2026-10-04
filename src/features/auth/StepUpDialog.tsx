@@ -59,8 +59,13 @@ export function StepUpDialog({ open, onVerified, onCancel }: StepUpDialogProps) 
       .listFactors()
       .then(({ data, error: factorError }) => {
         if (!active) return
-        const totp = data?.totp[0]
-        if (factorError || !totp) {
+        if (factorError || !data) {
+          // the lookup itself failed: we do not know the account has no authenticator, so no "set one up" prompt
+          setError(MESSAGES.generic)
+          return
+        }
+        const totp = data.totp[0]
+        if (!totp) {
           setNoFactor(true)
           setError(MESSAGES.noFactor)
         } else setFactorId(totp.id)

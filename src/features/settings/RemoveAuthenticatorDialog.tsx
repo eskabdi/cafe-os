@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -24,14 +24,19 @@ export interface RemoveAuthenticatorDialogProps {
 }
 
 /**
- * Confirm + verify + remove. Removing a verified authenticator needs a fresh code first (Supabase Auth requires the
- * upgraded session for it), so the code is checked with the authenticator being removed, then the factor is deleted.
+ * Confirm + verify + remove. The "fresh code" step is a UX guard only (it confirms the person at the keyboard holds the
+ * authenticator being removed): Supabase Auth, not this dialog, decides whether the unenroll is allowed (it only needs an
+ * aal2 session, which an earlier code may already provide), and nothing in the database trusts that a fresh code was entered.
  */
 export function RemoveAuthenticatorDialog({ factor, onCancel, onRemoved }: RemoveAuthenticatorDialogProps) {
   const [code, setCode] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const factorId = factor?.id ?? null
+  // keep the last non-null name while the dialog animates closed (factor becomes null the moment it is dismissed)
+  const lastName = useRef('')
+  if (factor) lastName.current = factor.name
+  const factorName = factor?.name ?? lastName.current
 
   useEffect(() => {
     setCode('')
@@ -76,7 +81,7 @@ export function RemoveAuthenticatorDialog({ factor, onCancel, onRemoved }: Remov
             <DialogTitle>Remove this authenticator?</DialogTitle>
             <DialogDescription>
               Without an authenticator, approving PIN changes and changing the session timers will stop
-              working for this account until you set one up again. Enter a code from &ldquo;{factor?.name}
+              working for this account until you set one up again. Enter a code from &ldquo;{factorName}
               &rdquo; to confirm.
             </DialogDescription>
           </DialogHeader>

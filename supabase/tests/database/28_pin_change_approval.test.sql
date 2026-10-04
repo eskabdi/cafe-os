@@ -2,7 +2,7 @@
 -- the single restriction predicate, approve/reject/list RPCs (tenant from identity, users.manage, step-up, no oracle, never the
 -- subject), service-only completion, notifications, audit rows free of secrets, session-context fields.
 begin;
-select plan(175);
+select plan(183);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -53,8 +53,17 @@ select is(tests.run('select public.fn_require_aal2()'), 'P0001|mfa_required|', '
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
 select is(tests.run('select public.fn_require_aal2()'), 'P0001|mfa_required|', 'fn_require_aal2: no aal claim -> mfa_required');
 select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated","aal":"aal2"}', true);
-select is(tests.run('select public.fn_require_aal2()'), 'ok:1', 'fn_require_aal2: aal2 passes');
+select is(tests.run('select public.fn_require_aal2()'), 'P0001|mfa_required|', 'fn_require_aal2: aal2 but NO profile row -> mfa_required (fail closed)');
 select set_config('request.jwt.claims', '', true);
+-- (the helper is internal: called directly as the owner role with the claims a real session would carry)
+select set_config('request.jwt.claims', json_build_object('sub', (select admin from _f), 'role', 'authenticated', 'aud', 'authenticated', 'aal', 'aal2')::text, true);
+select is(tests.run('select public.fn_require_aal2()'), 'ok:1', 'fn_require_aal2: aal2 + password profile (tenant_admin) passes');
+select set_config('request.jwt.claims', json_build_object('sub', (select admin from _f), 'role', 'authenticated', 'aud', 'authenticated', 'aal', 'aal1')::text, true);
+select is(tests.run('select public.fn_require_aal2()'), 'P0001|mfa_required|', 'fn_require_aal2: aal1 + password profile -> mfa_required (unchanged)');
+select set_config('request.jwt.claims', json_build_object('sub', (select waiter from _f), 'role', 'authenticated', 'aud', 'authenticated', 'aal', 'aal2')::text, true);
+select is(tests.run('select public.fn_require_aal2()'), 'P0001|mfa_required|', 'fn_require_aal2 (H1): aal2 + PIN profile -> mfa_required (a PIN session that enrolled its own TOTP is not enough)');
+select set_config('request.jwt.claims', '', true);
+select ok((select prosrc ~ 'auth_method' and prosrc ~ 'auth\.uid' from pg_proc where proname = 'fn_require_aal2' and pronamespace = 'public'::regnamespace), 'fn_require_aal2 reads auth_method of the caller''s own profile (id = auth.uid())');
 select ok(has_function_privilege('authenticated', 'public.fn_approve_pin_change(uuid)', 'execute')
       and has_function_privilege('authenticated', 'public.fn_reject_pin_change(uuid)', 'execute')
       and has_function_privilege('authenticated', 'public.fn_list_pending_pin_changes()', 'execute'), 'approve / reject / list: authenticated');
@@ -229,8 +238,18 @@ select public.fn_staff_login_blocked((select cashier from _f));
 select public.fn_complete_forced_pin_change((select cashier from _f), tests.pin_digest('834921'), 6);
 select tests.clear_auth();
 select tests.aal2((select deleg from _f));
-select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select cashier from _f))), 'P0001|permission_escalation|', 'delegate cannot approve a role whose rights it does not hold');
+select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select cashier from _f))), 'P0001|mfa_required|', 'PIN delegate on an aal2 session (self-enrolled TOTP, H1): mfa_required before the role check');
 select tests.clear_auth();
+-- defence in depth: the role-coverage check still holds for any aal2 password caller (simulated; owner-only, rolled back)
+alter table public.profiles disable trigger trg_guard_profile_auth_method;
+update public.profiles set auth_method = 'password' where id = (select deleg from _f);
+alter table public.profiles enable trigger trg_guard_profile_auth_method;
+select tests.aal2((select deleg from _f));
+select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select cashier from _f))), 'P0001|permission_escalation|', 'a password caller on aal2 that does not hold the role''s rights: permission_escalation');
+select tests.clear_auth();
+alter table public.profiles disable trigger trg_guard_profile_auth_method;
+update public.profiles set auth_method = 'pin' where id = (select deleg from _f);
+alter table public.profiles enable trigger trg_guard_profile_auth_method;
 select is((select pin_change_pending from public.profile_secrets where profile_id = (select cashier from _f)), true, 'cashier still pending');
 select tests.authenticate_as((select cashier from _f));
 select is(public.fn_get_session_context() ->> 'pin_change_status', 'pending_approval', 'cashier context: pending_approval');
@@ -344,12 +363,17 @@ select is(tests.run(format($q$select public.fn_reject_pin_change(%L)$q$, (select
 select tests.clear_auth();
 select is((select pin_change_pending from public.profile_secrets where profile_id = (select kitchen from _f)), true, 'nothing was decided without aal2');
 select is((select count(*)::int from public.audit_logs where event in ('auth.pin_change_approved', 'auth.pin_change_rejected') and (new_data ->> 'profile_id') = (select kitchen::text from _f)), 0, 'and nothing was audited as a decision');
-select tests.aal2((select deleg from _f));   -- the same delegate with an authenticator (aal2)
-select is(public.fn_approve_pin_change((select kitchen from _f)) ->> 'status', 'approved', 'delegate on an aal2 session: approve succeeds');
+select tests.aal2((select deleg from _f));   -- H1: the PIN delegate enrolled its OWN TOTP through GoTrue and holds an aal2 JWT
+select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select kitchen from _f))), 'P0001|mfa_required|', 'PIN delegate on a self-enrolled aal2 session: approve -> mfa_required');
+select is(tests.run(format($q$select public.fn_reject_pin_change(%L)$q$, (select kitchen from _f))), 'P0001|mfa_required|', 'PIN delegate on aal2: reject -> mfa_required');
+select tests.clear_auth();
+select is((select pin_change_pending from public.profile_secrets where profile_id = (select kitchen from _f)), true, 'nothing decided by the aal2 PIN delegate');
+select tests.aal2((select admin from _f));   -- the tenant_admin (password account) on an aal2 session
+select is(public.fn_approve_pin_change((select kitchen from _f)) ->> 'status', 'approved', 'tenant_admin (password account) on an aal2 session: approve succeeds');
 select tests.clear_auth();
 select is((select not pin_change_pending and not must_change_pin from public.profile_secrets where profile_id = (select kitchen from _f)), true, 'kitchen staff released');
-select is((select count(*)::int from public.audit_logs where event = 'auth.pin_change_approved' and actor_id = (select deleg from _f)), 1, 'audited with the delegate as actor');
-select tests.aal2((select deleg from _f));
+select is((select count(*)::int from public.audit_logs where event = 'auth.pin_change_approved' and actor_id = (select admin from _f) and (new_data ->> 'profile_id') = (select kitchen::text from _f)), 1, 'audited with the tenant_admin as actor');
+select tests.aal2((select admin from _f));
 select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select kitchen from _f))), 'P0001|not_found|', 'aal2 replay: not_found (idempotent-safe)');
 select tests.clear_auth();
 delete from public.role_station_access where role_id = (select id from public.roles where restaurant_id = (select a from _f) and name = 'HR Lead');

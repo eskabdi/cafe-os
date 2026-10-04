@@ -184,8 +184,9 @@ test('an email sign-in sets up an authenticator, then removes it after a code', 
   // right code: session refreshed, context reloaded, secret gone, factor listed as active
   await page.getByLabel('Authentication code').fill('123456')
   await page.getByRole('button', { name: 'Verify and finish' }).click()
-  await expect(page.getByText('Authenticator app', { exact: true }).first()).toBeVisible()
-  await expect(page.getByText('Active')).toBeVisible()
+  const factorRow = page.getByRole('listitem').filter({ hasText: 'Authenticator app' })
+  await expect(factorRow).toHaveCount(1)
+  await expect(factorRow).toContainText('Active')
   await expect(page.getByTestId('authenticator-key')).toHaveCount(0)
   await expect(page.locator('body')).not.toContainText(SECRET)
   expect(m.refreshCalls).toBeGreaterThan(0)
@@ -201,7 +202,7 @@ test('an email sign-in sets up an authenticator, then removes it after a code', 
   await dialog.getByRole('button', { name: 'Remove authenticator' }).click()
   await expect(page.getByRole('button', { name: 'Set up authenticator' })).toBeVisible()
   expect(m.removed).toEqual(['f-new'])
-  expect(m.verifyBodies.length).toBeGreaterThanOrEqual(3)
+  expect(m.verifyBodies.length).toBe(3)
 })
 
 test('a PIN session has no Security link and sees a notice at the URL', async ({ page }) => {

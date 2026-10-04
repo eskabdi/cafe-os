@@ -168,7 +168,7 @@ sequenceDiagram
   `has_permission` / `has_station_access` / `current_station_ids` and the session context). A tenant_admin (or a delegate with `users.manage` who covers the subject's role) decides:
   `fn_approve_pin_change(profile)` clears the pending state (audit `auth.pin_change_approved`, subject notified `security.pin_change_approved`), `fn_reject_pin_change(profile)` sets
   `must_change_pin = true` again (audit `auth.pin_change_rejected`, subject notified `security.pin_change_rejected`, a new change is needed). Both need `users.manage` and a real authenticator
-  (`fn_require_aal2`, 0026: `mfa_required` unless the session is aal2; PIN-only staff and admins without a factor never pass, so a PIN delegate holding the permission cannot decide; the tenant_admin or a Supabase Auth delegate with an authenticator does), take the tenant from the identity, lock the row, are never allowed on yourself, and answer
+  (`fn_require_aal2`, 0026 + 0027: `mfa_required` unless the session is aal2 **and** the caller's own profile has `auth_method <> 'pin'`; a PIN staff member holds a real GoTrue session and could enrol a TOTP factor through `auth.mfa.enroll` / `challengeAndVerify` and reach aal2 on their own, so the PIN account type, not the JWT, is the authoritative refusal; a missing profile row fails closed; admins without a factor never pass either; only the tenant_admin on an aal2 session decides), take the tenant from the identity, lock the row, are never allowed on yourself, and answer
   `not_found` identically for unknown, foreign-tenant and not-pending ids (replays are `not_found` too). `fn_list_pending_pin_changes()` feeds the approval screen (own tenant only).
   States: `none` -> `required` (blocked login) -> `pending_approval` (pin-change) -> `none` (approve) or `required` (reject). A PIN change while already pending stays pending (no bypass);
   an exposed PIN again while pending (blocked login) returns to `required`; an admin-set PIN (`fn_set_user_pin`) leaves nobody pending; a voluntary change (no flag) needs no approval.
@@ -227,7 +227,7 @@ All of this is UX; the database (`fn_pin_restricted` behind `has_permission` / s
 - **Settings page** `/r/:slug/settings/session-timers` (`SessionTimersPage`, `RequirePermission settings.session_timers`, header link): react-hook-form +
   zod (`sessionTimersFormSchema`, same bounds as the server, preview only), live explanation of the warning window, Save
   (`fn_update_session_timers`) and "Reset to defaults" with a confirm (`fn_reset_session_timers`, 15 / 30 / 60). `mfa_required` opens `StepUpDialog`
-  (TOTP `challengeAndVerify`, aal2) and retries the same action once verified (server gate: `fn_require_aal2`; an account without an authenticator sees "An authenticator is required for this action. This account has none set up; ask your administrator." and cannot proceed); `invalid_input` marks the field named by the error `detail`
+  (TOTP `challengeAndVerify`, aal2) and retries the same action once verified (server gate: `fn_require_aal2`, which also refuses every PIN profile even at aal2; an account without an authenticator sees "An authenticator is required for this action. This account has none set up; ask your administrator." and cannot proceed); `invalid_input` marks the field named by the error `detail`
   (`RpcError.detail`, kept only when it is a bare identifier); other codes map to neutral copy. Success: toast, cache update, `refreshContext()`.
 
 ### SPA: authenticator self-enrollment (Security page)
@@ -237,11 +237,11 @@ All of this is UX; the database (`fn_pin_restricted` behind `has_permission` / s
   UX only: Supabase Auth and `fn_require_aal2` remain the authority.
 - **Enroll**: name (Zod, 1-40 chars, no control/bidi characters, default "Authenticator app") -> unfinished factors from an abandoned attempt are removed -> `auth.mfa.enroll({ factorType: 'totp', friendlyName })`
   -> QR + setup key + 6-digit input (`autocomplete="one-time-code"`, digits only, Zod `totpCodeSchema`) -> `auth.mfa.challengeAndVerify` (upgrades the session to aal2)
-  -> `auth.refreshSession()` -> `refreshContext()` -> factor list invalidated. Cancel or leaving the page removes the unverified factor.
+  -> `auth.refreshSession()` -> `refreshContext()` -> factor list invalidated. Cancel or leaving the page removes the unverified factor, except while a code check is in flight (the verify call then decides the factor's fate).
 - **QR rendering**: the returned `qr_code` (SVG) is turned into an encoded `data:image/svg+xml` URL by `qrImageSrc` and shown in a plain `<img>`: scripts never run inside an SVG loaded
-  as an image, nothing is injected as markup (no `innerHTML` / `dangerouslySetInnerHTML`), and the CSP already allows `img-src data:` (`public/_headers` unchanged, no new origin). A value that is not an SVG
+  as an image, nothing is injected as markup (no `innerHTML` / `dangerouslySetInnerHTML`), and the CSP already allows `img-src data:` (no directive changed, no new origin). A value that is not an SVG
   document is dropped and only the setup key (text + "Copy key") is shown. The secret and QR live only in component state: never logged, stored or put in the query cache; they are cleared on verify, cancel and unmount.
-- **Remove**: confirm dialog warning that PIN approvals and session timers stop working for the account, then a fresh 6-digit code (`challengeAndVerify` with that factor) and `auth.mfa.unenroll`;
+- **Remove**: confirm dialog warning that PIN approvals and session timers stop working for the account, then a 6-digit code (`challengeAndVerify` with that factor) and `auth.mfa.unenroll`. The "fresh code" is a **UX guard only** (it confirms the person at the keyboard holds the authenticator): Supabase Auth decides whether the unenroll is allowed (an aal2 session suffices) and no database rule depends on it;
   then session refresh, `refreshContext()` and list invalidation. There is no "last factor" block (an admin may re-enrol at once).
 - **Errors** are neutral ("That code did not work...", rate limit, generic); Supabase codes are mapped in `authenticator-errors.ts` and never shown, and no assurance-level wording reaches the UI.
 - **StepUpDialog** with no authenticator: a Supabase Auth account sees "Set one up in Security settings" with a link to this page; PIN sessions still see "ask your administrator".

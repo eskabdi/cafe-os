@@ -84,12 +84,22 @@ describe('StepUpDialog', () => {
     expect(screen.getByRole('button', { name: 'Verify' })).toBeDisabled()
   })
 
-  it('a failing factor lookup shows the same neutral message (never a pass)', async () => {
+  it('a failing factor lookup shows the generic message (never a pass)', async () => {
     h.listFactors.mockResolvedValue({ data: null, error: new Error('boom') })
     const { onVerified } = renderDialog()
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'An authenticator is required for this action.',
-    )
+    expect(await screen.findByRole('alert')).toHaveTextContent('Something went wrong. Please try again.')
+    expect(screen.getByRole('button', { name: 'Verify' })).toBeDisabled()
+    expect(onVerified).not.toHaveBeenCalled()
+  })
+
+  it('a password session whose factor lookup fails gets no "set one up" prompt or link', async () => {
+    h.listFactors.mockResolvedValue({ data: null, error: new Error('boom') })
+    const { onVerified } = renderDialog(passwordSession)
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Something went wrong. Please try again.')
+    expect(alert.textContent).not.toMatch(/set one up|security settings/i)
+    expect(screen.queryByRole('link', { name: /security/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Verify' })).toBeDisabled()
     expect(onVerified).not.toHaveBeenCalled()
   })
 

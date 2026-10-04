@@ -34,7 +34,7 @@ describe('code and name schemas', () => {
     expect(authenticatorNameSchema.parse('  Phone ')).toBe('Phone')
     expect(authenticatorNameSchema.safeParse('   ').success).toBe(false)
     expect(authenticatorNameSchema.safeParse('x'.repeat(41)).success).toBe(false)
-    expect(authenticatorNameSchema.safeParse('a‮b').success).toBe(false)
+    expect(authenticatorNameSchema.safeParse('a\u202eb').success).toBe(false)
     expect(authenticatorNameSchema.safeParse('a\nb').success).toBe(false)
   })
 })
