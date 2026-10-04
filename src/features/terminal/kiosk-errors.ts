@@ -1,8 +1,12 @@
-/** Neutral, safe copy for kiosk-admin RPC failures (machine codes from rpc-conventions; nothing else is surfaced). */
+/**
+ * Neutral, safe copy for kiosk-admin RPC failures (machine codes from rpc-conventions; nothing else is surfaced).
+ * `mfa_required` normally opens the step-up dialog instead; its copy is what the admin sees if they cancel it or the
+ * retried request is refused again (same wording as the other step-up pages, no assurance-level vocabulary).
+ */
 export function kioskErrorMessage(code: string | undefined): string {
   switch (code) {
     case 'mfa_required':
-      return 'Please confirm it is you with your second sign-in step, then try again.'
+      return 'Verify with your authenticator to continue.'
     case 'permission_denied':
       return 'You do not have permission to do that.'
     case 'kiosk_limit_reached':

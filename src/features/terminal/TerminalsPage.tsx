@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { RequirePermission, useAuth } from '@/features/auth'
+import { RequirePermission, StepUpDialog, useAuth } from '@/features/auth'
 import { listKiosks, registerKiosk, revokeKiosk, RpcError, type KioskDevice } from '@/lib/supabase/rpc'
 import { clearKioskToken, getKioskToken, setKioskToken } from '@/lib/utils/kiosk-token'
 import { kioskErrorMessage } from './kiosk-errors'
@@ -38,6 +38,9 @@ function when(iso: string | null | undefined): string {
 function codeOf(e: unknown): string | undefined {
   return e instanceof RpcError ? e.code : undefined
 }
+
+/** The request to run again once the authenticator code is verified: exactly what was refused (same name / same id). */
+type PendingAction = { kind: 'register'; name: string } | { kind: 'revoke'; id: string }
 
 /** Tenant settings > Terminals. Gate is UX only: fn_list/register/revoke_kiosk and RLS enforce kiosks.manage server-side. */
 export function TerminalsPage() {
@@ -66,6 +69,8 @@ function TerminalsContent() {
   const [deviceSet, setDeviceSet] = useState<boolean>(() => getKioskToken(tenantSlug) !== null)
   const [deviceNote, setDeviceNote] = useState<string | null>(null)
   const [toRevoke, setToRevoke] = useState<KioskDevice | null>(null)
+  // Held only while the step-up dialog is open (component state: never stored, logged or rendered), cleared the moment it closes.
+  const [stepUpFor, setStepUpFor] = useState<PendingAction | null>(null)
 
   // Hides the code and, if it was copied, tries to overwrite the clipboard (best effort; may be refused by the browser).
   const dismissToken = useCallback(() => {
@@ -86,8 +91,42 @@ function TerminalsContent() {
     return () => clearTimeout(t)
   }, [issued, dismissToken])
 
-  const register = useMutation({ mutationFn: (n: string) => registerKiosk(n) })
+  // gcTime 0: the response holds the one-time token and the variables hold the typed name. A finished mutation that is no
+  // longer observed (see the reset() in runRegister) leaves the TanStack cache at once; the default would keep it for 5 minutes.
+  const register = useMutation({ mutationFn: (n: string) => registerKiosk(n), gcTime: 0 })
   const revoke = useMutation({ mutationFn: (id: string) => revokeKiosk(id) })
+
+  // `retry` is true only for the single re-run that follows a verified step-up. If that is refused again the admin sees
+  // the message instead of being asked again, so nothing can loop without the admin acting (even if the dialog misbehaved).
+  const runRegister = async (n: string, retry = false) => {
+    setActionError(null)
+    try {
+      const res = await register.mutateAsync(n)
+      setIssued({ name: res.name, token: res.token })
+      setCopied(false)
+      setDeviceNote(null)
+      setName('')
+      void qc.invalidateQueries({ queryKey: KIOSKS_KEY })
+    } catch (err) {
+      const code = codeOf(err)
+      if (code === 'mfa_required' && !retry) setStepUpFor({ kind: 'register', name: n })
+      else setActionError(kioskErrorMessage(code))
+    } finally {
+      register.reset() // success or refusal: stop observing, so the mutation (token, name) is not kept anywhere
+    }
+  }
+
+  const runRevoke = async (id: string, retry = false) => {
+    setActionError(null)
+    try {
+      await revoke.mutateAsync(id)
+      void qc.invalidateQueries({ queryKey: KIOSKS_KEY })
+    } catch (err) {
+      const code = codeOf(err)
+      if (code === 'mfa_required' && !retry) setStepUpFor({ kind: 'revoke', id })
+      else setActionError(kioskErrorMessage(code))
+    }
+  }
 
   const onRegister = async (e: FormEvent) => {
     e.preventDefault()
@@ -98,17 +137,7 @@ function TerminalsContent() {
       return
     }
     setNameError(null)
-    try {
-      const res = await register.mutateAsync(parsed.data)
-      register.reset()
-      setIssued({ name: res.name, token: res.token })
-      setCopied(false)
-      setDeviceNote(null)
-      setName('')
-      void qc.invalidateQueries({ queryKey: KIOSKS_KEY })
-    } catch (err) {
-      setActionError(kioskErrorMessage(codeOf(err)))
-    }
+    await runRegister(parsed.data)
   }
 
   const copy = async () => {
@@ -130,15 +159,9 @@ function TerminalsContent() {
 
   const confirmRevoke = async () => {
     if (!toRevoke) return
-    setActionError(null)
-    try {
-      await revoke.mutateAsync(toRevoke.id)
-      void qc.invalidateQueries({ queryKey: KIOSKS_KEY })
-    } catch (err) {
-      setActionError(kioskErrorMessage(codeOf(err)))
-    } finally {
-      setToRevoke(null)
-    }
+    const id = toRevoke.id
+    setToRevoke(null) // close the confirmation first so a step-up dialog never opens on top of it
+    await runRevoke(id)
   }
 
   const removeFromDevice = () => {
@@ -303,6 +326,20 @@ function TerminalsContent() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <StepUpDialog
+        open={stepUpFor !== null}
+        onCancel={() => {
+          setStepUpFor(null)
+          setActionError(kioskErrorMessage('mfa_required'))
+        }}
+        onVerified={() => {
+          const action = stepUpFor
+          setStepUpFor(null)
+          if (!action) return
+          void (action.kind === 'register' ? runRegister(action.name, true) : runRevoke(action.id, true))
+        }}
+      />
     </main>
   )
 }
