@@ -33,7 +33,7 @@ select is((select string_agg(name, ',' order by name) from _fn
            where name in ('fn_set_user_pin', 'fn_verify_pin', 'fn_register_pin_failure', 'fn_user_auth_method', 'fn_write_audit', 'fn_write_admin_audit',
                           'fn_seed_tenant_defaults', 'fn_next_number', 'fn_tenant_status_guard', 'fn_idempotency_begin', 'fn_idempotency_complete', 'fn_pin_eligible',
                           'fn_pin_restricted', 'fn_complete_forced_pin_change', 'fn_decide_pin_change', 'fn_staff_login_blocked',
-                          'fn_store_session_timers', 'fn_session_timers_json', 'fn_create_session_settings', 'fn_kiosk_terminal_bootstrap')
+                          'fn_store_session_timers', 'fn_require_aal2', 'fn_session_timers_json', 'fn_create_session_settings', 'fn_kiosk_terminal_bootstrap')
              and (has_function_privilege('authenticated', oid, 'execute') or has_function_privilege('anon', oid, 'execute'))),
           null, 'PIN, audit, seeding, counter, idempotency and session-timer internal functions are not client-executable');
 select is((select string_agg(name, ',' order by name) from _fn where prorettype = 'trigger'::regtype

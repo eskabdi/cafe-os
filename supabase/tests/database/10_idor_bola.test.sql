@@ -169,6 +169,8 @@ end $$;
 -- ═════════ tenant A admin against tenant B ═════════
 grant execute on all functions in schema tests to public;  -- default privileges no longer grant PUBLIC execute
 select tests.authenticate_as((select a_admin from _f));
+-- approve/reject PIN change need aal2 (0026): the admin acts on an authenticator session so the oracle probes reach the lookup
+select set_config('request.jwt.claims', json_build_object('sub', (select a_admin from _f), 'role', 'authenticated', 'aud', 'authenticated', 'aal', 'aal2')::text, true) is not null as aal2_session;
 select is(tests.leaks_read((select a from _f)), '', 'A admin: no row of any other tenant is readable in any tenant table');
 select is(tests.leaks_write((select b from _f)), '', 'A admin: no delete/insert/update reaches tenant B in any tenant table');
 select is(tests.unexpected_inserts((select a from _f)), '', 'A admin: no INSERT grant outside the insertable-table allowlist (own tenant)');

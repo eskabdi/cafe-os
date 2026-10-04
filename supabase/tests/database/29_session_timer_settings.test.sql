@@ -4,7 +4,7 @@
 -- tenant status, cross-tenant isolation, service-only kiosk bootstrap returning the kiosk tenant's own pin_pad_idle_seconds,
 -- service_role holds no direct privilege on the table (the definer RPCs are the only readers/writers).
 begin;
-select plan(145);
+select plan(157);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -63,6 +63,9 @@ select ok(has_function_privilege('service_role', 'public.fn_kiosk_terminal_boots
 select ok((select bool_and(p.prosecdef and p.proconfig @> array['search_path=""']) from pg_proc p where p.pronamespace = 'public'::regnamespace
            and p.proname in ('fn_get_session_timers', 'fn_update_session_timers', 'fn_reset_session_timers', 'fn_store_session_timers',
                              'fn_session_timers_json', 'fn_create_session_settings', 'fn_kiosk_terminal_bootstrap')), 'all seven: security definer, empty search_path');
+select ok(not has_function_privilege('authenticated', 'public.fn_require_aal2()', 'execute')
+      and not has_function_privilege('anon', 'public.fn_require_aal2()', 'execute'), 'fn_require_aal2: internal (no client EXECUTE)');
+select ok((select prosrc ~ 'fn_require_aal2' and prosrc !~ 'fn_require_step_up' from pg_proc where proname = 'fn_store_session_timers' and pronamespace = 'public'::regnamespace), 'fn_store_session_timers requires aal2 (not the factor-dependent step-up)');
 select is((select module from public.permissions where key = 'settings.session_timers'), 'settings', 'permission settings.session_timers exists (module settings)');
 select is((select count(*)::int from public.roles r where r.system_key = 'tenant_admin'
              and not exists (select 1 from public.role_permissions rp join public.permissions pm on pm.id = rp.permission_id
@@ -141,7 +144,7 @@ select ok(not (public.fn_get_session_context() ? 'session_timers'), 'and its ses
 select tests.clear_auth();
 
 -- ═════════ update: happy path, audit, replay ═════════
-select tests.authenticate_as((select admin from _f));
+select tests.aal2((select admin from _f));
 select is(public.fn_update_session_timers(20, 45, 90), '{"idle_warning_seconds": 20, "signout_seconds": 45, "pin_pad_idle_seconds": 90}'::jsonb, 'tenant_admin updates: returns the stored values');
 select tests.clear_auth();
 select is(tests.timers((select a from _f)), '20/45/90', 'stored');
@@ -154,7 +157,7 @@ select is((select new_data from public.audit_logs where event = 'settings.sessio
 select is((select actor_id from public.audit_logs where event = 'settings.session_timers_updated' and restaurant_id = (select a from _f)), (select admin from _f), 'audit actor = the admin');
 select is((select count(*)::int from public.audit_logs where table_name = 'restaurant_session_settings' and action = 'update' and restaurant_id = (select a from _f) and actor_id = (select admin from _f)), 1, 'and the row audit trigger recorded the change');
 select is((select old_data ->> 'signout_seconds' || '>' || (new_data ->> 'signout_seconds') from public.audit_logs where table_name = 'restaurant_session_settings' and action = 'update' and restaurant_id = (select a from _f)), '30>45', 'row audit carries changed columns old/new');
-select tests.authenticate_as((select admin from _f));
+select tests.aal2((select admin from _f));
 select is(public.fn_update_session_timers(20, 45, 90), '{"idle_warning_seconds": 20, "signout_seconds": 45, "pin_pad_idle_seconds": 90}'::jsonb, 'replay with the same values: same answer');
 select tests.clear_auth();
 select is(tests.n_events((select a from _f)), 1, 'replay writes no second event');
@@ -165,7 +168,7 @@ select is(public.fn_get_session_timers() ->> 'signout_seconds', '45', 'and so do
 select tests.clear_auth();
 
 -- ═════════ validation ═════════
-select tests.authenticate_as((select admin from _f));
+select tests.aal2((select admin from _f));
 select is(tests.run('select public.fn_update_session_timers(4, 30, 60)'), 'P0001|invalid_input|idle_warning_seconds', 'idle_warning 4: invalid_input idle_warning_seconds');
 select is(tests.run('select public.fn_update_session_timers(null, 30, 60)'), 'P0001|invalid_input|idle_warning_seconds', 'idle_warning null');
 select is(tests.run('select public.fn_update_session_timers(30, 30, 60)'), 'P0001|invalid_input|idle_warning_seconds', 'idle_warning = signout');
@@ -205,13 +208,20 @@ select is(tests.timers((select a from _f)), '20/45/90', 'denied callers changed 
 -- grantable through the matrix
 insert into public.role_permissions (role_id, permission_id, restaurant_id)
   select (select r_waiter from _f), id, (select a from _f) from public.permissions where key = 'settings.session_timers';
-select tests.authenticate_as((select waiter2 from _f));
+select tests.authenticate_as((select waiter2 from _f));   -- PIN-only staff delegate: aal1, no authenticator
+select ok(public.has_permission('settings.session_timers'), '(the PIN delegate holds settings.session_timers)');
+select is(tests.run('select public.fn_update_session_timers(25, 50, 90)'), 'P0001|mfa_required|', 'PIN delegate holding the permission (aal1, no factor): update -> mfa_required');
+select is(tests.run('select public.fn_reset_session_timers()'), 'P0001|mfa_required|', 'PIN delegate: reset -> mfa_required');
+select is(public.fn_get_session_timers() ->> 'signout_seconds', '45', 'the PIN delegate can still READ the timers');
+select tests.clear_auth();
+select is(tests.timers((select a from _f)), '20/45/90', 'and nothing changed');
+select tests.aal2((select waiter2 from _f));
 select is(public.fn_update_session_timers(25, 50, 90) ->> 'idle_warning_seconds', '25', 'the permission is grantable: a Waiter holding it may update');
 select tests.clear_auth();
 delete from public.role_permissions where role_id = (select r_waiter from _f) and permission_id = (select id from public.permissions where key = 'settings.session_timers');
 
 -- ═════════ cross-tenant ═════════
-select tests.authenticate_as((select b_admin from _f));
+select tests.aal2((select b_admin from _f));
 select is(public.fn_update_session_timers(10, 120, 45), '{"idle_warning_seconds": 10, "signout_seconds": 120, "pin_pad_idle_seconds": 45}'::jsonb, 'tenant B admin updates B');
 select is(public.fn_get_session_timers() ->> 'signout_seconds', '120', 'B reads B''s values');
 select tests.clear_auth();
@@ -235,6 +245,15 @@ select is(tests.run('select public.fn_update_session_timers(10, 20, 30)'), 'P000
 select set_config('app.tenant_admin_mfa_required', 'off', true);
 select tests.clear_auth();
 select is(tests.timers((select a from _f)), '25/50/90', 'nothing changed without step-up');
+select tests.authenticate_as((select admin2 from _f));   -- tenant_admin with NO authenticator, plain aal1, GUC off
+select is(tests.run('select public.fn_update_session_timers(10, 20, 30)'), 'P0001|mfa_required|', 'tenant_admin without any authenticator (aal1): update -> mfa_required (no pass without a factor)');
+select is(tests.run('select public.fn_reset_session_timers()'), 'P0001|mfa_required|', 'reset likewise');
+select is(tests.run('select public.fn_update_session_timers(1, 2, 3)'), 'P0001|mfa_required|', 'aal2 is checked before validation (invalid values on aal1 -> mfa_required, not invalid_input)');
+select tests.clear_auth();
+select is(tests.timers((select a from _f)), '25/50/90', 'and nothing changed');
+select tests.aal2((select admin2 from _f));
+select is(public.fn_update_session_timers(25, 50, 90) ->> 'signout_seconds', '50', 'the same tenant_admin on an aal2 session succeeds');
+select tests.clear_auth();
 select tests.aal2((select admin from _f));
 select is(public.fn_update_session_timers(10, 20, 30) ->> 'pin_pad_idle_seconds', '30', 'aal2 session: update succeeds');
 

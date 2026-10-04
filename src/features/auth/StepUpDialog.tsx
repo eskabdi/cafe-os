@@ -14,7 +14,8 @@ import { supabase } from '@/lib/supabase/client'
 
 const MESSAGES = {
   code: 'That code did not work. Enter the current 6-digit code from your authenticator app.',
-  noFactor: 'No authenticator app is set up for this account. Ask your administrator.',
+  noFactor:
+    'An authenticator is required for this action. This account has none set up; ask your administrator.',
   generic: 'Something went wrong. Please try again.',
 }
 
@@ -26,8 +27,9 @@ export interface StepUpDialogProps {
 }
 
 /**
- * Step-up for an RPC that answered `mfa_required` (fn_require_step_up): verifies a TOTP code with Supabase Auth, which upgrades
+ * Step-up for an RPC that answered `mfa_required` (fn_require_step_up / fn_require_aal2): verifies a TOTP code with Supabase Auth, which upgrades
  * the session to aal2. The server re-checks the assurance level on the retried call; this dialog decides nothing itself.
+ * An account with no authenticator (PIN-only staff) cannot pass fn_require_aal2: it gets the neutral `noFactor` message, no code input.
  */
 export function StepUpDialog({ open, onVerified, onCancel }: StepUpDialogProps) {
   const [factorId, setFactorId] = useState<string | null>(null)
