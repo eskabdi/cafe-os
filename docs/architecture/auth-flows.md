@@ -215,3 +215,17 @@ All of this is UX; the database (`fn_pin_restricted` behind `has_permission` / s
   does not yet, so production falls back to the 30 s default (safe, just less precise).
 - Tests: `src/lib/supabase/{pin-change,notifications}.test.ts`, `src/features/pin-change/*.test.tsx`, `src/features/notifications/*.test.ts(x)`,
   `src/app/pin-change-flow.test.tsx` (real route tree, mocked Realtime), `tests/e2e/pin-change.spec.ts` (page.route + mocked Realtime WebSocket).
+
+### SPA: per-tenant session timers (migration 0025)
+- **Inactivity**: `InactivityGuard` reads `session_timers` from `fn_get_session_context` (lenient parse: a malformed value never blocks sign-in).
+  Warning after `idle_warning_seconds`, sign-out at `signout_seconds` in total, so the "Still there?" dialog is visible for `signout - warn` seconds
+  (`inactivityMsFromTimers`: clamped to 5 <= warn < signout, 15 <= signout <= 900; if either field is missing both fall back to 15 / 30). The DEV-only
+  Playwright override still wins in dev builds. Other devices pick up a change on their next session-context load (no live push of settings).
+- **Terminal**: the PIN-pad idle timer comes from the staff-roster response `{staff, pin_pad_idle_seconds}` (`parsePinPadIdleSeconds`, then
+  `pinPadIdleMs`: clamped 15..300 s, 60 s when absent, e.g. an Edge Function deployed before 0025).
+- **Settings page** `/r/:slug/settings/session-timers` (`SessionTimersPage`, `RequirePermission settings.session_timers`, header link): react-hook-form +
+  zod (`sessionTimersFormSchema`, same bounds as the server, preview only), live explanation of the warning window, Save
+  (`fn_update_session_timers`) and "Reset to defaults" with a confirm (`fn_reset_session_timers`, 15 / 30 / 60). `mfa_required` opens `StepUpDialog`
+  (TOTP `challengeAndVerify`, aal2) and retries the same action once verified; `invalid_input` marks the field named by the error `detail`
+  (`RpcError.detail`, kept only when it is a bare identifier); other codes map to neutral copy. Success: toast, cache update, `refreshContext()`.
+- `src/lib/supabase/types.ts` is still the placeholder (no Docker for `supabase gen types`); its `Functions` was hand-extended with the three 0025 RPCs.
