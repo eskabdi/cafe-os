@@ -84,8 +84,16 @@ terminal is noticed on its next load, focus or sign-in attempt.
 - **Bearer credential in localStorage.** The kiosk token is a bearer credential stored in origin-scoped `localStorage` (readable via devtools or XSS on the
   origin). Mitigations are the CSP in `public/_headers`, revocation and the per-tile PIN lockout. A non-extractable, device-bound key (WebAuthn / signed
   challenge) is a **follow-up**.
-- **No inactivity sign-out after login (out of scope).** The 60 s idle timer only covers the tile/PIN screen. Signing a user out of the app after inactivity on a
-  shared device is **not built yet** and is a follow-up.
+- **Inactivity sign-out after login.** `InactivityGuard` (mounted once inside `AuthProvider`, `src/features/auth`) ends the session of every signed-in
+  tenant user whose role is not the `tenant_admin` system role (decided from `role.system_key` in the server-derived session context, never a role name) and
+  who is not a platform admin. Constants are in `src/features/auth/inactivity.ts`: `IDLE_MS = 30_000` (a "Still there?" `alertdialog` appears, focus on
+  Continue, countdown in a `role=status` text) and `WARN_MS = 30_000` (sign-out), i.e. **60 s of inactivity in total**. Activity = pointerdown, keydown,
+  touchstart, wheel, visibility return; only Continue answers the warning. Deadlines use `Date.now()`, so a tablet that slept signs out on the first tick or
+  visibility event after waking; an in-flight mutation counts as activity. Sign-out calls `supabase.auth.signOut()` (deletes the server session, freeing the
+  one-session rule at once), clears the TanStack Query cache and routes to the terminal when the device holds a kiosk token, otherwise to `/r/<slug>/login`.
+  Tabs of one browser sync through an optional `BroadcastChannel` (activity resets the others; a sign-out signs the rest out). This is UX/hygiene: the server
+  session limits stay the authority, and the timings are single constants so they can become per-tenant settings. The PIN-pad idle timer (60 s back to the
+  tiles) is a separate, unchanged timer. Playwright shortens the timings through `window.__CAFEOS_INACTIVITY__`, honoured only when `import.meta.env.DEV`.
 - **Roster filtering is server-side only.** The client renders every roster row verbatim (tested with rows named "Admin"/"Cashier"); admins and the 6-digit
   Cashier are excluded by `staff-roster`, never by the UI. Roster name/role text is stripped of control, bidi-override and zero-width characters before rendering.
 - The tile sign-in request aborts after 15 s and shows the generic network message so the idle timer cannot be pinned behind a hung request.
