@@ -1,4 +1,4 @@
-# RLS matrix (migrations 0007 + 0010 + 0022 + 0023 + 0024 + 0025 + 0026; 83 policies; RLS enabled AND forced on every public table)
+# RLS matrix (migrations 0007 + 0010 + 0022 + 0023 + 0024 + 0025 + 0026 + 0027 + 0028; 83 policies; RLS enabled AND forced on every public table)
 
 Helpers (SECURITY DEFINER, empty search_path, identity from `profiles` via `auth.uid()`, never from JWT claims):
 `current_restaurant_id()`, `current_user_id()`, `current_role_id()`, `has_permission(key)`, `has_station_access(station_id)` (RPC use), `current_station_ids()` (policies; one InitPlan per statement),
@@ -91,3 +91,4 @@ execute by default and a role-global default privilege now prevents it for FUTUR
   (clients re-read `fn_get_session_context()` / `fn_get_session_timers()`). Suspended/cancelled tenants read nothing (helper resolves NULL).
 - 0026 (mandatory aal2): no table, policy or grant change (83 policies). `fn_require_aal2()` is a new internal function (no client EXECUTE); the PIN-change decision and the session-timer writes call it instead of `fn_require_step_up()`, so these two actions need an aal2 session and PIN-only staff cannot perform them even when a role holds the permission.
 - 0027 (aal2 not for PIN accounts, H1): no table, policy or grant change. `fn_require_aal2()` is redefined (same signature, still no client EXECUTE) to also refuse callers whose profile has `auth_method = 'pin'` or that have no profile, so a PIN session that enrols its own TOTP factor and reaches aal2 still gets `mfa_required`.
+- 0028 (aal2 needs a live authenticator, L1): no table, policy or grant change (83 policies). `fn_require_aal2()` is redefined (same signature, STABLE, empty search_path, same owner-only ACL) to also require a verified `auth.mfa_factors` row for `auth.uid()`, so an aal2 token that outlives a removed authenticator gets `mfa_required`; `session_timers` writes and PIN-change decisions are therefore also gated by a live factor.
