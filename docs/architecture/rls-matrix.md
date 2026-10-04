@@ -86,5 +86,6 @@ execute by default and a role-global default privilege now prevents it for FUTUR
   unchanged (recipient-only, no `has_permission`), so a restricted user still reads their own notifications (asserted in `28_pin_change_approval`). The same tenant-membership-only residual as 0023 applies.
 
 - 0025 (per-tenant session timers): `restaurant_session_settings` (1 SELECT policy `restaurant_id = current_restaurant_id()`; 83 policies in total). Column-level SELECT grant
-  only (no table-level privilege, no INSERT/UPDATE/DELETE for any client role, not even tenant_admin); writes only through the definer RPCs. Not published to Realtime
+  only (no table-level privilege, no INSERT/UPDATE/DELETE for any client role, not even tenant_admin); `service_role` holds NO privilege on it either (exception to the
+  blanket service_role table grant of 0009: the Edge Functions reach the timers only through the definer RPC `fn_kiosk_terminal_bootstrap`; asserted in `29_session_timer_settings`); writes only through the definer RPCs. Not published to Realtime
   (clients re-read `fn_get_session_context()` / `fn_get_session_timers()`). Suspended/cancelled tenants read nothing (helper resolves NULL).

@@ -1,9 +1,10 @@
 -- Per-tenant session timer settings (migration 0025): table + RLS + grants, one row per tenant (backfill, provisioning, any
 -- restaurants insert), CHECK bounds, fn_get/update/reset_session_timers (tenant from identity, settings.session_timers, step-up,
 -- invalid_input with field, audit with old/new, replay), session-context session_timers, PIN-restricted users keep the timers,
--- tenant status, cross-tenant isolation, service-only kiosk bootstrap returning the kiosk tenant's own pin_pad_idle_seconds.
+-- tenant status, cross-tenant isolation, service-only kiosk bootstrap returning the kiosk tenant's own pin_pad_idle_seconds,
+-- service_role holds no direct privilege on the table (the definer RPCs are the only readers/writers).
 begin;
-select plan(138);
+select plan(145);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -68,6 +69,16 @@ select is((select count(*)::int from public.roles r where r.system_key = 'tenant
                              where rp.role_id = r.id and pm.key = 'settings.session_timers')), 0, 'every tenant_admin role holds it (trg_grant_new_permission)');
 select is((select count(*)::int from public.role_permissions rp join public.permissions pm on pm.id = rp.permission_id
            join public.roles r on r.id = rp.role_id where pm.key = 'settings.session_timers' and r.system_key is null), 0, 'no non-admin role holds it by default');
+
+-- ═════════ service_role: no direct access (definer RPCs only) ═════════
+select ok(not has_table_privilege('service_role', 'public.restaurant_session_settings', 'select,insert,update,delete,truncate,references,trigger')
+      and not has_any_column_privilege('service_role', 'public.restaurant_session_settings', 'select,insert,update,references'), 'service_role: no table or column privilege at all');
+select tests.authenticate_as_service_role();
+select is(tests.run('select * from public.restaurant_session_settings'), '42501|permission denied for table restaurant_session_settings|', 'service_role: no direct SELECT');
+select is(tests.run(format($q$insert into public.restaurant_session_settings (restaurant_id) values (%L)$q$, (select a from _f))), '42501|permission denied for table restaurant_session_settings|', 'service_role: no direct INSERT');
+select is(tests.run('update public.restaurant_session_settings set signout_seconds = 900'), '42501|permission denied for table restaurant_session_settings|', 'service_role: no direct UPDATE');
+select is(tests.run('delete from public.restaurant_session_settings'), '42501|permission denied for table restaurant_session_settings|', 'service_role: no direct DELETE');
+select tests.clear_auth();
 
 -- ═════════ defaults, backfill, new tenants ═════════
 select is((select count(*)::int from public.restaurants r where not exists (select 1 from public.restaurant_session_settings s where s.restaurant_id = r.id)), 0, 'backfill: every existing tenant has a row');
@@ -262,6 +273,8 @@ select tests.authenticate_as((select waiter from _f));
 select is(public.fn_get_session_context() ->> 'pin_change_status', 'pending_approval', '(waiter now awaits approval)');
 select is(public.fn_get_session_timers() ->> 'signout_seconds', '40', 'restricted (pending_approval): fn_get_session_timers still works');
 select is(public.fn_get_session_context() #>> '{session_timers,idle_warning_seconds}', '12', 'restricted (pending_approval): session_timers still in the context');
+select is((select count(*)::int from public.restaurant_session_settings), 1, 'restricted (pending_approval): the own row is still readable');
+select is(tests.run('update public.restaurant_session_settings set signout_seconds = 900'), '42501|permission denied for table restaurant_session_settings|', 'restricted: still no direct UPDATE');
 select tests.clear_auth();
 -- the restricted user holds no permission, even when the role holds settings.session_timers
 insert into public.role_permissions (role_id, permission_id, restaurant_id)
