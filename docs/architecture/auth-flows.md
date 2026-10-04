@@ -179,3 +179,39 @@ sequenceDiagram
   next login is blocked); (2) a staff member who closed the browser without signing out is blocked for up to 2 hours (or until they sign out elsewhere), and then must change their PIN
   (user-decided; their manager is notified); (3) a person who knows the PIN can trigger the forced change of that account (a nuisance, bounded by the per-user throttle);
   (4) `auth.sessions` semantics and `signOut(jwt, 'others')` were verified against the documented GoTrue schema only, not against a running GoTrue.
+
+### SPA: forced PIN change, approval and notifications (UI)
+All of this is UX; the database (`fn_pin_restricted` behind `has_permission` / station access / RLS) is the ceiling.
+- **Routes** (behind `RequireAuth` -> `PinChangeGate` -> `TenantShell`): `/r/:slug/change-pin`, `/r/:slug/pin-pending`, `/r/:slug/settings/pin-approvals`.
+  `PinChangeGate` reads `pin_change_status` from `fn_get_session_context` (`pinChangeStatusOf`: missing = `none`, `must_change_pin` alone = `required`;
+  an unknown status fails the zod parse, the context shows "Could not load your account" instead of guessing) and redirects with the identity's slug
+  (never the URL slug): `required` -> change-pin from every tenant route, `pending_approval` -> pin-pending, `none` -> the two forced routes bounce home.
+  A `pending_approval -> required` transition (rejection) passes `{pinChangeRejected: true}` so Change PIN shows a neutral explanation.
+- **Header** (`TenantShell`): persistent "Change PIN" button while `required`; "PIN approvals" link when `can('users.manage')` and not restricted.
+- **Change PIN** (`ChangePinPage`): three steps (current, new, confirm) on the existing `PinPad` in fixed-length mode with `pin_length` (4, or 6 for the
+  Cashier exception, decided server-side; no length is guessed if it is missing). Digits are never rendered (dots + count). Local zod checks only: length,
+  new != current, confirm == new; weak-PIN and role length stay server-side. The PINs move to a ref that the mutation clears as it starts (never
+  `variables` in the TanStack cache), and component state is wiped before the request is awaited. Every failure restarts at step 1. Copy is neutral and
+  never mentions locks or attempts left (`pinChangeMessage`). On 429 the pad stays disabled for `Retry-After` seconds (clamped 1..900, default 30).
+  Success shows "Your PIN has been changed" (+ "Sign out on any other device" when `other_sessions_revoked` is false); Continue refreshes the context and
+  the gate moves on (pending screen when `pending_approval`). Client: `src/lib/supabase/pin-change.ts` (explicit `Authorization: Bearer <access token>`,
+  15 s timeout, zod-checked body, whitelisted error codes).
+- **Waiting screen** (`PinPendingPage`): sign out and a user-initiated "Check again". Live transitions come from the notifications listener, which calls
+  `refreshContext()` on `security.pin_change_approved` / `security.pin_change_rejected` (and on a `concurrent_login_blocked` about the user). `refreshContext()`
+  for the same user is a background reload, so the screen does not unmount behind a loading state.
+- **Notifications** (`NotificationsListener`, mounted in the router root for any signed-in tenant user): initial fetch of up to 10 unread own rows
+  (`user_notifications`, RLS: recipient only) on mount and on every Realtime (re)subscription, plus a Realtime `INSERT` subscription filtered
+  `recipient_id=eq.<uid>` (uid must be a UUID; no polling). Rows are zod-validated and must match the user and be unread; duplicates are shown once. Fixed copy per kind
+  (`notification-copy.ts`); payload values (`user_name`, `kiosk_name`) are plain text only (strings, control/bidi characters removed, capped at 60) and React renders them
+  as text. Unknown kinds are ignored (no toast, not marked read). Admin copy: "X was blocked from signing in on a second device" (+ terminal name) and
+  "X changed their PIN and is waiting for your approval" with a "Review" action to the approvals page (also invalidates the approvals list). A toast marks its row
+  read (`fn_mark_notification_read`) when it is closed, auto-closes (timers pause while the tab is hidden) or its action is used. On sign-out the listener
+  unsubscribes and removes its toasts (shared terminals).
+- **PIN approvals** (`PinApprovalsPage`, `RequirePermission users.manage`): `fn_list_pending_pin_changes`, Approve / Reject with a confirm dialog, success toast +
+  list invalidation. Errors map to neutral copy: `mfa_required` -> "Verify with your authenticator to continue." (no in-page step-up yet), `not_found` -> "no longer
+  waiting" + list refresh, `permission_denied` / `permission_escalation`, `tenant_read_only` / `tenant_suspended`, anything else generic.
+- **Inactivity**: `InactivityGuard` keeps managing restricted users (non-admin role), so the forced and waiting screens sign out on inactivity too.
+- **Known gap**: the browser can read `Retry-After` cross-origin only if the function sends `Access-Control-Expose-Headers: Retry-After`; `_shared/cors.ts`
+  does not yet, so production falls back to the 30 s default (safe, just less precise).
+- Tests: `src/lib/supabase/{pin-change,notifications}.test.ts`, `src/features/pin-change/*.test.tsx`, `src/features/notifications/*.test.ts(x)`,
+  `src/app/pin-change-flow.test.tsx` (real route tree, mocked Realtime), `tests/e2e/pin-change.spec.ts` (page.route + mocked Realtime WebSocket).
