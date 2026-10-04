@@ -157,11 +157,25 @@ sequenceDiagram
     EF->>EF: parse, weak-PIN policy, new != current, throttle
     EF->>DB: profile + role name lookup; length check (4, Cashier 6)
     EF->>DB: fn_verify_pin(profile, HMAC(current)) (shared lockout)
-    EF->>DB: fn_set_user_pin(profile, HMAC(new), length) (clears must_change_pin)
+    EF->>DB: fn_complete_forced_pin_change(profile, HMAC(new), length) (flagged => pending_approval + notify tenant_admins)
     EF->>GT: admin.signOut(jwt, 'others') (end every other session)
-    EF-->>S: {changed: true, other_sessions_revoked}
+    EF-->>S: {changed: true, pending_approval, other_sessions_revoked}
 ```
-- **Residual risks:** (1) two simultaneous correct-PIN logins can both pass the check before either session exists (check and mint are separate steps; the
+- **Maker-checker (migration 0024, user decision 2026-10-04).** A forced change does NOT restore access: `fn_complete_forced_pin_change` stores the new PIN, clears
+  `must_change_pin`, sets `profile_secrets.pin_change_pending = true` (+ `pin_change_requested_at`), notifies every active tenant_admin of the tenant
+  (`security.pin_change_pending_approval`, payload `{profile_id, user_name, at}`, deduped per admin and subject for 5 minutes) and audits `auth.pin_change_requested`.
+  The user stays restricted exactly as before (`fn_pin_restricted(user) = must_change_pin or pin_change_pending`, tenant_admin exempt, is the single predicate behind
+  `has_permission` / `has_station_access` / `current_station_ids` and the session context). A tenant_admin (or a delegate with `users.manage` who covers the subject's role) decides:
+  `fn_approve_pin_change(profile)` clears the pending state (audit `auth.pin_change_approved`, subject notified `security.pin_change_approved`), `fn_reject_pin_change(profile)` sets
+  `must_change_pin = true` again (audit `auth.pin_change_rejected`, subject notified `security.pin_change_rejected`, a new change is needed). Both need `users.manage` and step-up
+  (`fn_require_step_up`: `mfa_required` for an admin with a verified factor on an aal1 session), take the tenant from the identity, lock the row, are never allowed on yourself, and answer
+  `not_found` identically for unknown, foreign-tenant and not-pending ids (replays are `not_found` too). `fn_list_pending_pin_changes()` feeds the approval screen (own tenant only).
+  States: `none` -> `required` (blocked login) -> `pending_approval` (pin-change) -> `none` (approve) or `required` (reject). A PIN change while already pending stays pending (no bypass);
+  an exposed PIN again while pending (blocked login) returns to `required`; an admin-set PIN (`fn_set_user_pin`) leaves nobody pending; a voluntary change (no flag) needs no approval.
+  `fn_get_session_context()` adds `pin_change_status` (`none|required|pending_approval`) and `pin_length` (4; 6 for Cashier via `fn_pin_length_for_role_name`); `must_change_pin` is true only while `required`.
+  The pin-change function answers `{changed, pending_approval, other_sessions_revoked}`. A restricted user can still read and mark read their own notifications (recipient-only policy, no `has_permission`).
+- **Residual risks:** (0) with a single tenant_admin who is unavailable a pending member waits (an admin can also set a PIN through the staff tools); the approver is not required to be a different person than the one whose
+  rights cover the subject (any covering `users.manage` holder may approve); (1) two simultaneous correct-PIN logins can both pass the check before either session exists (check and mint are separate steps; the
   next login is blocked); (2) a staff member who closed the browser without signing out is blocked for up to 2 hours (or until they sign out elsewhere), and then must change their PIN
   (user-decided; their manager is notified); (3) a person who knows the PIN can trigger the forced change of that account (a nuisance, bounded by the per-user throttle);
   (4) `auth.sessions` semantics and `signOut(jwt, 'others')` were verified against the documented GoTrue schema only, not against a running GoTrue.

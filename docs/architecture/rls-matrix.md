@@ -1,4 +1,4 @@
-# RLS matrix (migrations 0007 + 0010 + 0022 + 0023; 82 policies; RLS enabled AND forced on every public table)
+# RLS matrix (migrations 0007 + 0010 + 0022 + 0023 + 0024; 82 policies; RLS enabled AND forced on every public table)
 
 Helpers (SECURITY DEFINER, empty search_path, identity from `profiles` via `auth.uid()`, never from JWT claims):
 `current_restaurant_id()`, `current_user_id()`, `current_role_id()`, `has_permission(key)`, `has_station_access(station_id)` (RPC use), `current_station_ids()` (policies; one InitPlan per statement),
@@ -78,3 +78,8 @@ execute by default and a role-global default privilege now prevents it for FUTUR
   **Retention:** notifications are operational messages, not an audit trail (the audit row `auth.concurrent_login_blocked` is). Keep 90 days: a platform maintenance job
   running as the table owner may `delete from public.user_notifications where created_at < now() - interval '90 days'` (no job exists yet; no client can delete). Until then rows accumulate at most one set per user per 5 minutes.
   `has_permission` / `has_station_access` / `current_station_ids` additionally answer nothing while `profile_secrets.must_change_pin` is true (tenant_admin exempt); every policy/RPC that goes through those helpers denies. Residual (same tenant only, non-sensitive config): tenant-membership-only SELECT policies (roles, role_permissions own role, permissions, stations, categories, payment_methods, table_areas, expense_categories, restaurants) and RPCs gated only by `fn_tenant_status_guard` stay readable until the PIN is changed.
+
+- 0024 (maker-checker for a forced PIN change): no new table and no new policy (82). `profile_secrets` (RLS on, no policy, no client grant) gains `pin_change_pending` and `pin_change_requested_at`
+  (CHECK: never together with `must_change_pin`). `has_permission` / `has_station_access` / `current_station_ids` now use the single helper `fn_pin_restricted(user)` =
+  `must_change_pin or pin_change_pending` (tenant_admin exempt), so every policy that goes through them denies a user who is waiting for approval. `user_notifications_select` is
+  unchanged (recipient-only, no `has_permission`), so a restricted user still reads their own notifications (asserted in `28_pin_change_approval`). The same tenant-membership-only residual as 0023 applies.

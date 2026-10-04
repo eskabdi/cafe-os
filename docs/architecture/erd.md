@@ -31,7 +31,7 @@ erDiagram
     restaurants ||--o{ tenant_counters : numbers
     profiles { uuid id PK "= auth.users.id" text auth_method "password (tenant_admin) | pin (staff)" text first_name text middle_name text last_name text short_name "generated first+middle" bool identity_rotation_pending "demoted admin awaiting synthetic identity" }
     user_notifications { uuid id PK uuid restaurant_id uuid recipient_id text kind "security.concurrent_login_blocked" jsonb payload "no secrets" timestamptz created_at timestamptz read_at "only mutable column" }
-    profile_secrets { uuid profile_id PK text pin_hash smallint pin_length bool must_change_pin "forced PIN change; has_permission denies while true" }
+    profile_secrets { uuid profile_id PK text pin_hash smallint pin_length bool must_change_pin "forced PIN change; has_permission denies while true" bool pin_change_pending "changed, awaiting tenant_admin approval; also restricted; never with must_change_pin" timestamptz pin_change_requested_at }
     roles { uuid id PK text system_key "null | tenant_admin" boolean is_system }
     restaurants { uuid id PK text slug UK text status "trialing|active|past_due|suspended|cancelled" jsonb branding "CHECK hex colours + storage path" }
 ```
@@ -92,3 +92,5 @@ exceptions (tenant-root and actor FKs): `21_validation_invariants`.
 
 Migration 0023: `profile_secrets.must_change_pin boolean`, table `user_notifications` (unique `(restaurant_id, id)`, composite FK `(restaurant_id, recipient_id)` to `profiles`, RESTRICT),
 read-only reference to `auth.sessions` (GoTrue) by the service-only `fn_staff_has_active_session`.
+
+Migration 0024: `profile_secrets.pin_change_pending boolean not null default false`, `pin_change_requested_at timestamptz`, CHECK `not (must_change_pin and pin_change_pending)`; new `user_notifications.kind` values `security.pin_change_pending_approval|approved|rejected`. No new table.

@@ -31,3 +31,6 @@ Do these BEFORE a hosted project takes real users. Items marked (manual) cannot 
     live session could look stale. Verify once on the hosted project: sign in as PIN staff on device A, attempt the same login on device B => the normal "Could not sign in" answer, a notification for the
     user and the tenant admin, and the user is routed to the PIN change screen; after the change, device A is signed out. Verify the Realtime publication lists `user_notifications` with its column list.
     Optional retention job: delete `user_notifications` older than 90 days (rls-matrix.md).
+13. **PIN change approval (0024):** deploy the updated `pin-change` Edge Function together with the migration (the old function calls `fn_set_user_pin`, which clears a flag without approval, and does not return `pending_approval`).
+    Verify once on the hosted project: block a PIN user (second device login), change the PIN => response `pending_approval: true`, every tenant_admin gets a `security.pin_change_pending_approval` notification, the user
+    still sees no data; an admin with MFA approves from an aal2 session (an aal1 session gets `mfa_required`) => access returns; reject => the user must change the PIN again. Make sure every tenant keeps at least one reachable active tenant_admin.
