@@ -69,7 +69,9 @@ fallback; admin page `/r/:slug/settings/terminals`. The slug is derived with `te
    from the app returns a device that holds a token to the terminal (otherwise to the normal staff login).
 5. **Admin Terminals page** (UX gate `can('kiosks.manage')`; the RPCs and RLS are the real check). Lists `fn_list_kiosks`; `fn_register_kiosk(name)` shows the raw
    token once (kept only in component state, not in the query cache) with Copy and "Set this device up" (stores it in this browser); "I have saved it" discards it.
-   Revoke asks for confirmation (`fn_revoke_kiosk`). A `mfa_required` answer is shown as a neutral "confirm with your second sign-in step" message.
+   Revoke asks for confirmation (`fn_revoke_kiosk`). A `mfa_required` answer opens `StepUpDialog` (see auth-flows.md, Step-up); once the authenticator code is verified the same request runs once more
+   (Register: the same name; Revoke: the same terminal, wired defensively because `fn_revoke_kiosk` needs no step-up today). Cancelling, or a second `mfa_required` after that retry, shows the neutral
+   "Verify with your authenticator to continue." and the page waits for the admin to press the button again. The one-time code and the pending name stay in component state (register mutation: `gcTime: 0` + `reset()`).
 
 Typography: the terminal UI is English only for now and uses the existing Inter stack; the Amharic typography rules (Tayitu.ttf primary, Jiret.ttf secondary)
 are unchanged and not yet applied here. Arabic numerals only.

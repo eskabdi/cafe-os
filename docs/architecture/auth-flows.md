@@ -213,6 +213,10 @@ All of this is UX; the database (`fn_pin_restricted` behind `has_permission` / s
 - **Inactivity**: `InactivityGuard` keeps managing restricted users (non-admin role), so the forced and waiting screens sign out on inactivity too.
 - **Retry-After**: `_shared/cors.ts` sends `Access-Control-Expose-Headers: Retry-After` for allow-listed origins, so the browser reads the 429 wait time (fallback 30 s).
 - **Step-up**: the PIN approvals page opens `StepUpDialog` on `mfa_required` and retries the same decision after verification. Cancelling shows the neutral message and decides nothing.
+  The Session timers page (same save or reset) and the Terminals page (Register retries the same trimmed name, Revoke the same terminal id) do the same. Of the two kiosk RPCs only `fn_register_kiosk`
+  calls `fn_require_step_up()`; `fn_revoke_kiosk` never does (kiosk-terminals.md), so the Revoke wiring is defensive and unreachable against the current database. The Terminals page retries exactly once per
+  verification: a second `mfa_required` shows the neutral message and waits for the admin to press the button again, so no dialog can re-open and re-run on its own (tested with a dialog that verifies by itself).
+  The one-time setup code and the pending name live only in component state; the register mutation uses `gcTime: 0` and `reset()`, so neither stays in the TanStack mutation cache after the request settles.
 - **Cache hygiene**: `AuthProvider` clears the TanStack query cache whenever the signed-in user changes or signs out; a failed same-user context refresh keeps the previous ready context.
 - Tests: `src/lib/supabase/{pin-change,notifications}.test.ts`, `src/features/pin-change/*.test.tsx`, `src/features/notifications/*.test.ts(x)`,
   `src/app/pin-change-flow.test.tsx` (real route tree, mocked Realtime), `tests/e2e/pin-change.spec.ts` (page.route + mocked Realtime WebSocket).
