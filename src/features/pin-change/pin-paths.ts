@@ -1,4 +1,4 @@
-import type { PinChangeStatus } from '@/lib/supabase/rpc'
+import type { PinChangeStatus } from '@/lib/domain/pin-change'
 
 // Paths are built from the identity's own tenant slug (session context), never from the URL slug.
 export const tenantHomePath = (slug: string) => `/r/${slug}`

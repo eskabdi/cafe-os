@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '@/features/auth'
-import { pinChangeStatusOf } from '@/lib/supabase/rpc'
+import { pinChangeStatusOf } from '@/lib/domain/pin-change'
 import { pinGateTarget, type PinGateState } from './pin-paths'
 
 /**

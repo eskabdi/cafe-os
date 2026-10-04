@@ -2,7 +2,7 @@ import { Link, NavLink, Outlet } from 'react-router-dom'
 import { buttonVariants } from '@/components/ui/button'
 import { useAuth } from '@/features/auth'
 import { changePinPath, pinApprovalsPath, tenantHomePath } from '@/features/pin-change/pin-paths'
-import { pinChangeStatusOf } from '@/lib/supabase/rpc'
+import { pinChangeStatusOf } from '@/lib/domain/pin-change'
 import { cn } from '@/lib/utils/cn'
 
 /**

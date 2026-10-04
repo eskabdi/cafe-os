@@ -93,14 +93,6 @@ const sessionContextSchema = z
   })
   .nullable()
 export type SessionContext = NonNullable<z.infer<typeof sessionContextSchema>>
-export type PinChangeStatus = 'none' | 'required' | 'pending_approval'
-
-/** The account's PIN-change state as the server reported it (UX only; the database is what restricts the account). */
-export function pinChangeStatusOf(ctx: Pick<SessionContext, 'pin_change_status' | 'must_change_pin'> | null | undefined): PinChangeStatus {
-  if (!ctx) return 'none'
-  if (ctx.pin_change_status) return ctx.pin_change_status
-  return ctx.must_change_pin ? 'required' : 'none'
-}
 
 /** Server-derived identity (profile, role, permissions, station access, tenant status). Never from JWT claims. */
 export async function getSessionContext(): Promise<SessionContext | null> {
