@@ -89,6 +89,20 @@ afterEach(() => {
 })
 
 describe('InactivityGuard', () => {
+  it.each(['required', 'pending_approval'] as const)(
+    'still signs out a user on the forced PIN screens (status %s)',
+    async (status) => {
+      renderGuard(
+        value({ pin_change_status: status, must_change_pin: status === 'required', permissions: [] }),
+      )
+      await advance(16_000)
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+      await advance(15_000)
+      expect(signOut).toHaveBeenCalledTimes(1)
+      expect(screen.getByTestId('where')).toHaveTextContent('/r/demo-cafe/login')
+    },
+  )
+
   it('shows nothing before 15s, then a focused alertdialog with a countdown', async () => {
     renderGuard()
     await advance(14_000)
