@@ -237,7 +237,9 @@ describe('SessionTimersPage', () => {
     await waitFor(() => expect(field(/Show the warning after/).value).toBe('20'))
     await user.click(screen.getByRole('button', { name: 'Save' }))
     const dialog = await screen.findByRole('dialog', { name: 'Verify it is you' })
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent('No authenticator app is set up')
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'An authenticator is required for this action',
+    )
     expect(within(dialog).getByRole('button', { name: 'Verify' })).toBeDisabled()
   })
 })
