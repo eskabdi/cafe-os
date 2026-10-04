@@ -25,16 +25,17 @@ select is((select string_agg(name, ',' order by name) from _fn where has_functio
 select is((select string_agg(name, ',' order by name) from _fn where has_function_privilege('anon', oid, 'execute')),
           'fn_resolve_tenant_slug', 'anon may execute only fn_resolve_tenant_slug (fn_err is authenticated/service_role only)');
 select is((select string_agg(name, ',' order by name) from _fn where has_function_privilege('authenticated', oid, 'execute')),
-          'current_restaurant_id,current_role_id,current_station_ids,current_tenant_writable,current_user_id,fn_approve_pin_change,fn_change_user_role,fn_create_staff_profile,fn_err,fn_get_open_day,fn_get_restaurant_settings,fn_get_session_context,fn_list_kiosks,fn_list_pending_pin_changes,fn_mark_notification_read,fn_prepare_staff_creation,fn_provision_tenant,fn_reactivate_tenant,fn_register_kiosk,fn_reject_pin_change,fn_reset_pin_lockout,fn_resolve_tenant_slug,fn_revoke_kiosk,fn_suspend_tenant,fn_update_role_permissions,has_permission,has_station_access,is_order_owner,is_platform_admin,is_platform_super_admin,is_tenant_admin',
+          'current_restaurant_id,current_role_id,current_station_ids,current_tenant_writable,current_user_id,fn_approve_pin_change,fn_change_user_role,fn_create_staff_profile,fn_err,fn_get_open_day,fn_get_restaurant_settings,fn_get_session_context,fn_get_session_timers,fn_list_kiosks,fn_list_pending_pin_changes,fn_mark_notification_read,fn_prepare_staff_creation,fn_provision_tenant,fn_reactivate_tenant,fn_register_kiosk,fn_reject_pin_change,fn_reset_pin_lockout,fn_reset_session_timers,fn_resolve_tenant_slug,fn_revoke_kiosk,fn_suspend_tenant,fn_update_role_permissions,fn_update_session_timers,has_permission,has_station_access,is_order_owner,is_platform_admin,is_platform_super_admin,is_tenant_admin',
           'authenticated executes exactly the reviewed RPC + RLS helper list (update this list consciously)');
 select is((select string_agg(name, ',' order by name) from _fn where has_function_privilege('authenticated', oid, 'execute') and has_function_privilege('anon', oid, 'execute')
            and name not in ('fn_resolve_tenant_slug')), null, 'nothing anon can run beyond the allowlist is also open to authenticated');
 select is((select string_agg(name, ',' order by name) from _fn
            where name in ('fn_set_user_pin', 'fn_verify_pin', 'fn_register_pin_failure', 'fn_user_auth_method', 'fn_write_audit', 'fn_write_admin_audit',
                           'fn_seed_tenant_defaults', 'fn_next_number', 'fn_tenant_status_guard', 'fn_idempotency_begin', 'fn_idempotency_complete', 'fn_pin_eligible',
-                          'fn_pin_restricted', 'fn_complete_forced_pin_change', 'fn_decide_pin_change', 'fn_staff_login_blocked')
+                          'fn_pin_restricted', 'fn_complete_forced_pin_change', 'fn_decide_pin_change', 'fn_staff_login_blocked',
+                          'fn_store_session_timers', 'fn_session_timers_json', 'fn_create_session_settings', 'fn_kiosk_terminal_bootstrap')
              and (has_function_privilege('authenticated', oid, 'execute') or has_function_privilege('anon', oid, 'execute'))),
-          null, 'PIN, audit, seeding, counter and idempotency functions are not client-executable');
+          null, 'PIN, audit, seeding, counter, idempotency and session-timer internal functions are not client-executable');
 select is((select string_agg(name, ',' order by name) from _fn where prorettype = 'trigger'::regtype
            and (has_function_privilege('authenticated', oid, 'execute') or has_function_privilege('anon', oid, 'execute'))),
           null, 'trigger functions are not client-executable');
@@ -57,7 +58,7 @@ select is((select string_agg(name, ',' order by name) from _fn
           null, 'no client-callable definer function returns rows or table row types');
 select is((select string_agg(name, ',' order by name) from _fn
            where has_function_privilege('authenticated', oid, 'execute') and prorettype in ('jsonb'::regtype, 'json'::regtype, 'text'::regtype, 'record'::regtype)),
-          'fn_approve_pin_change,fn_change_user_role,fn_create_staff_profile,fn_get_open_day,fn_get_restaurant_settings,fn_get_session_context,fn_list_kiosks,fn_list_pending_pin_changes,fn_mark_notification_read,fn_prepare_staff_creation,fn_provision_tenant,fn_reactivate_tenant,fn_register_kiosk,fn_reject_pin_change,fn_reset_pin_lockout,fn_resolve_tenant_slug,fn_revoke_kiosk,fn_suspend_tenant,fn_update_role_permissions',
+          'fn_approve_pin_change,fn_change_user_role,fn_create_staff_profile,fn_get_open_day,fn_get_restaurant_settings,fn_get_session_context,fn_get_session_timers,fn_list_kiosks,fn_list_pending_pin_changes,fn_mark_notification_read,fn_prepare_staff_creation,fn_provision_tenant,fn_reactivate_tenant,fn_register_kiosk,fn_reject_pin_change,fn_reset_pin_lockout,fn_reset_session_timers,fn_resolve_tenant_slug,fn_revoke_kiosk,fn_suspend_tenant,fn_update_role_permissions,fn_update_session_timers',
           'the set of client-callable functions returning free-form json/text is the reviewed one');
 select is((select string_agg(name, ',' order by name) from _fn where prorettype = 'public.profile_secrets'::regtype or proargnames @> array['pin_hash']
            or (name <> 'fn_audit_row' and prosrc ~* '''pin_hash''') or prosrc ~* 'returning\s+(ps\.)?pin_hash' or prosrc ~* 'to_jsonb\(\s*(ps|profile_secrets)'),
@@ -108,7 +109,7 @@ select is((select string_agg(t, ',') from tests.tenant_tables() t
 select is((select string_agg(t, ',') from tests.tenant_tables() t
            where exists (select 1 from pg_attribute a where a.attrelid = ('public.' || t)::regclass and a.attname = 'restaurant_id' and not a.attnotnull)),
           'admin_audit_log', 'restaurant_id is NOT NULL on every tenant table (admin_audit_log: platform jobs have none)');
-select is((select count(*)::int from pg_policies where schemaname = 'public'), 82, 'policy count matches docs/architecture/rls-matrix.md (update the doc when policies change)');
+select is((select count(*)::int from pg_policies where schemaname = 'public'), 83, 'policy count matches docs/architecture/rls-matrix.md (update the doc when policies change)');
 
 -- ═════════ views, materialized views, foreign tables ═════════
 select is((select string_agg(c.relname, ',') from pg_class c

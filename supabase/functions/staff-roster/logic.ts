@@ -66,7 +66,41 @@ export function shapeTiles(data: unknown): Tile[] | null {
   return out
 }
 
-export type FailureKind = 'invalid_kiosk' | 'invalid_request' | 'rate_limited' | 'payload_too_large' | 'method_not_allowed' | 'forbidden_origin' | 'server_error'
+/**
+ * PIN-pad idle timer (seconds without activity on the pad before the kiosk drops the PIN and returns to the tiles). Per tenant,
+ * stored in public.restaurant_session_settings (migration 0025); the bounds mirror its CHECK (15..300) and the default mirrors its
+ * column default (60). Anything that is not an integer inside the bounds (missing, string, float, NaN, out of range) is replaced by
+ * the default: a malformed value can never disable or shorten the timer below the platform floor.
+ */
+export const PIN_PAD_IDLE_DEFAULT_SECONDS = 60
+export const PIN_PAD_IDLE_MIN_SECONDS = 15
+export const PIN_PAD_IDLE_MAX_SECONDS = 300
+
+export function normalizePinPadIdleSeconds(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= PIN_PAD_IDLE_MIN_SECONDS && value <= PIN_PAD_IDLE_MAX_SECONDS
+    ? value
+    : PIN_PAD_IDLE_DEFAULT_SECONDS
+}
+
+export interface Roster {
+  staff: Tile[]
+  pin_pad_idle_seconds: number
+}
+
+/**
+ * Shapes the answer of fn_kiosk_terminal_bootstrap: NULL (invalid kiosk) or {staff: [...], pin_pad_idle_seconds}.
+ * Returns null unless the payload is an object whose `staff` is an array (=> 401 invalid_kiosk); the tiles go through the
+ * shapeTiles whitelist and the timer through normalizePinPadIdleSeconds. Every other field is dropped.
+ */
+export function shapeRoster(data: unknown): Roster | null {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return null
+  const r = data as Record<string, unknown>
+  const staff = shapeTiles(r.staff)
+  if (staff === null) return null
+  return { staff, pin_pad_idle_seconds: normalizePinPadIdleSeconds(r.pin_pad_idle_seconds) }
+}
+
+export type FailureKind ='invalid_kiosk' | 'invalid_request' | 'rate_limited' | 'payload_too_large' | 'method_not_allowed' | 'forbidden_origin' | 'server_error'
 
 export interface ShapedResponse {
   status: number
@@ -101,6 +135,10 @@ export function shapeFailure(kind: FailureKind, retryAfterSec?: number): ShapedR
   }
 }
 
-export function shapeSuccess(tiles: Tile[]): ShapedResponse {
-  return { status: 200, body: { staff: tiles }, headers: { ...PRIVATE_HEADERS } }
+export function shapeSuccess(roster: Roster): ShapedResponse {
+  return {
+    status: 200,
+    body: { staff: roster.staff, pin_pad_idle_seconds: normalizePinPadIdleSeconds(roster.pin_pad_idle_seconds) },
+    headers: { ...PRIVATE_HEADERS },
+  }
 }

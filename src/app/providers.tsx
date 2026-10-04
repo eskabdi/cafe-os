@@ -16,7 +16,8 @@ export function Providers({ children }: { children: ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       {children}
-      <Toaster richColors closeButton />
+      {/* Timers pause while the tab is hidden, so an auto-closed (= marked read) notification was actually on screen. */}
+      <Toaster richColors closeButton pauseWhenPageIsHidden />
     </QueryClientProvider>
   )
 }

@@ -21,6 +21,8 @@ erDiagram
     profiles ||--o| profile_secrets : "PIN hash (staff only)"
     profiles ||--o{ user_notifications : "recipient (composite FK)"
     restaurants ||--o{ user_notifications : scopes
+    restaurants ||--|| restaurant_session_settings : "timers (1:1, PK = restaurant_id)"
+    profiles ||--o{ restaurant_session_settings : "updated_by (composite FK)"
     restaurants ||--o{ roles : defines
     roles ||--o{ role_permissions : grants
     permissions ||--o{ role_permissions : "global catalog"
@@ -33,6 +35,7 @@ erDiagram
     user_notifications { uuid id PK uuid restaurant_id uuid recipient_id text kind "security.concurrent_login_blocked" jsonb payload "no secrets" timestamptz created_at timestamptz read_at "only mutable column" }
     profile_secrets { uuid profile_id PK text pin_hash smallint pin_length bool must_change_pin "forced PIN change; has_permission denies while true" bool pin_change_pending "changed, awaiting tenant_admin approval; also restricted; never with must_change_pin" timestamptz pin_change_requested_at }
     roles { uuid id PK text system_key "null | tenant_admin" boolean is_system }
+    restaurant_session_settings { uuid restaurant_id PK "FK restaurants RESTRICT" int idle_warning_seconds "default 15; 5 <= x < signout" int signout_seconds "default 30; 15..900; total from last activity" int pin_pad_idle_seconds "default 60; 15..300" uuid updated_by timestamptz updated_at }
     restaurants { uuid id PK text slug UK text status "trialing|active|past_due|suspended|cancelled" jsonb branding "CHECK hex colours + storage path" }
 ```
 
@@ -94,3 +97,8 @@ Migration 0023: `profile_secrets.must_change_pin boolean`, table `user_notificat
 read-only reference to `auth.sessions` (GoTrue) by the service-only `fn_staff_has_active_session`.
 
 Migration 0024: `profile_secrets.pin_change_pending boolean not null default false`, `pin_change_requested_at timestamptz`, CHECK `not (must_change_pin and pin_change_pending)`; new `user_notifications.kind` values `security.pin_change_pending_approval|approved|rejected`. No new table.
+
+Migration 0025: table `restaurant_session_settings` (1:1 with `restaurants`, PK = `restaurant_id` FK RESTRICT; composite FK `(restaurant_id, updated_by)` to `profiles`,
+RESTRICT, indexed). One row per tenant: backfilled for existing tenants and created by the `restaurants` AFTER INSERT trigger `trg_create_session_settings`
+(covers `fn_provision_tenant`). CHECKs: `5 <= idle_warning_seconds < signout_seconds`, `signout_seconds between 15 and 900`, `pin_pad_idle_seconds between 15 and 300`.
+New permission `settings.session_timers`.

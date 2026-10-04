@@ -10,7 +10,8 @@ link). Tenant = `<slug>.cafeos.et`; the device additionally holds a secret token
 2. The admin registers and sets the device up from **Settings > Terminals** (see UI flow below). The device keeps the token in origin-scoped storage.
 3. The kiosk page calls `staff-roster` with `{restaurant_slug (from the hostname), kiosk_token}`. The service role resolves hash -> kiosk (not revoked) ->
    tenant, requires the tenant's slug to equal the claimed one and the tenant not to be suspended/cancelled, refreshes `last_seen_at` (throttled
-   1/min, not audited) and returns tiles: `id`, short name (first + middle), role label, colour, icon. Any failure = the same `401 invalid_kiosk`.
+   1/min, not audited) and returns `{staff: [tiles], pin_pad_idle_seconds}`: tiles = `id`, short name (first + middle), role label, colour, icon; `pin_pad_idle_seconds` =
+   the tenant's PIN-pad idle timer (0025, integer 15..300, default 60). Any failure = the same `401 invalid_kiosk`.
 4. A tile tap + 4-digit PIN goes to `pin-login` (tile path: `{restaurant_slug, kiosk_token, profile_id, pin}`). The DB re-validates kiosk and profile
    (`fn_kiosk_tile_eligible`) and `fn_verify_pin` verifies the peppered digest; same lockout (3/6/9) and the same generic 401 as every other failure.
 5. Revocation: `fn_revoke_kiosk(id)` (idempotent, audited, tenant-scoped; foreign and unknown ids both `not_found`). It takes effect on the next call:
@@ -98,3 +99,18 @@ terminal is noticed on its next load, focus or sign-in attempt.
   Cashier are excluded by `staff-roster`, never by the UI. Roster name/role text is stripped of control, bidi-override and zero-width characters before rendering.
 - The tile sign-in request aborts after 15 s and shows the generic network message so the idle timer cannot be pinned behind a hung request.
 - The one-time setup code on the Terminals page hides after 3 minutes; on dismiss after a copy the page tries to overwrite the clipboard (best effort).
+
+## Per-tenant timers (migration 0025)
+
+User request (2026-10-04): the inactivity sign-out and the PIN-pad idle timer are per-tenant settings, edited by the tenant admin.
+
+- Stored in `restaurant_session_settings` (one row per tenant): `idle_warning_seconds` (default 15: the "Still there?" dialog appears), `signout_seconds`
+  (default 30: sign-out, counted in TOTAL from the last activity, so the warning is visible for `signout - idle_warning` seconds), `pin_pad_idle_seconds`
+  (default 60: kiosk PIN pad back to the tiles). Bounds (DB CHECK and RPC validation): `5 <= idle_warning < signout`, `15 <= signout <= 900`, `15 <= pin_pad <= 300`.
+- Edited with `fn_update_session_timers(p_idle_warning_seconds, p_signout_seconds, p_pin_pad_idle_seconds)` / `fn_reset_session_timers()`: permission
+  `settings.session_timers` (tenant_admin always; grantable), step-up like `fn_register_kiosk`, writable tenant; audited with old/new values.
+- The signed-in SPA reads them from `fn_get_session_context().session_timers` (or `fn_get_session_timers()`), for every tenant user including one whose PIN
+  change is required/pending (the timers must keep running then). The kiosk reads `pin_pad_idle_seconds` from the `staff-roster` response; it belongs to the
+  token's tenant. Clients should still clamp to the same bounds and fall back to the defaults (15 / 30 / 60) when the field is missing.
+- `InactivityGuard`'s constants (`IDLE_MS = 15_000`, `WARN_MS = 15_000`) map to `idle_warning_seconds * 1000` and `(signout_seconds - idle_warning_seconds) * 1000`.
+- Changes take effect for a signed-in device on its next session-context fetch (no Realtime push); a kiosk on its next roster fetch.

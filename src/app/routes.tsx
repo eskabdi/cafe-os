@@ -9,6 +9,9 @@ import {
   TenantAdminLoginPage,
   TenantLoginPage,
 } from '@/features/auth'
+import { NotificationsListener } from '@/features/notifications'
+import { ChangePinPage, PinApprovalsPage, PinChangeGate, PinPendingPage } from '@/features/pin-change'
+import { TenantShell } from '@/features/tenant/TenantShell'
 import { TerminalPage, TerminalsPage, terminalPath } from '@/features/terminal'
 import { getKioskToken } from '@/lib/utils/kiosk-token'
 import { HomePage } from './HomePage'
@@ -29,6 +32,7 @@ function Root() {
   return (
     <AuthProvider>
       <InactivityGuard />
+      <NotificationsListener />
       <Suspense fallback={<Loading />}>
         <Outlet />
       </Suspense>
@@ -70,9 +74,23 @@ export const routes: RouteObject[] = [
           {
             element: <TenantGuard />,
             children: [
-              { path: 'settings/terminals', element: <TerminalsPage /> },
-              { index: true, element: <TenantRoutes /> },
-              { path: '*', element: <TenantRoutes /> },
+              {
+                // Forced PIN change / maker-checker routing (UX only; the database restricts the account).
+                element: <PinChangeGate />,
+                children: [
+                  {
+                    element: <TenantShell />,
+                    children: [
+                      { path: 'change-pin', element: <ChangePinPage /> },
+                      { path: 'pin-pending', element: <PinPendingPage /> },
+                      { path: 'settings/terminals', element: <TerminalsPage /> },
+                      { path: 'settings/pin-approvals', element: <PinApprovalsPage /> },
+                      { index: true, element: <TenantRoutes /> },
+                      { path: '*', element: <TenantRoutes /> },
+                    ],
+                  },
+                ],
+              },
             ],
           },
         ],

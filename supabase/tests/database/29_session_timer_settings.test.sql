@@ -3,7 +3,7 @@
 -- invalid_input with field, audit with old/new, replay), session-context session_timers, PIN-restricted users keep the timers,
 -- tenant status, cross-tenant isolation, service-only kiosk bootstrap returning the kiosk tenant's own pin_pad_idle_seconds.
 begin;
-select plan(118);
+select plan(138);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -96,7 +96,6 @@ begin
   return tests.run(format('update public.restaurant_session_settings set %s where restaurant_id = %L', p, (select v from _n where k = 'c')));
 end $$;
 grant execute on function tests.set_c(text) to public;
-select is(tests.set_c('idle_warning_seconds = 4'), '23514|new row for relation "restaurant_session_settings" violates check constraint "restaurant_session_settings_warning_check"|Failing row contains (<uuid>, 4, 30, 60, null, ' || '') = false, false, '(placeholder)');
 select matches(tests.set_c('idle_warning_seconds = 4'), '^23514\|.*restaurant_session_settings_warning_check', 'CHECK: idle_warning < 5 refused');
 select matches(tests.set_c('idle_warning_seconds = 30'), '^23514\|.*restaurant_session_settings_warning_check', 'CHECK: idle_warning = signout refused');
 select matches(tests.set_c('idle_warning_seconds = 31'), '^23514\|.*restaurant_session_settings_warning_check', 'CHECK: idle_warning > signout refused');

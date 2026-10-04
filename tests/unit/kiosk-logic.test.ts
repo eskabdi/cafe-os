@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { KIOSK_TOKEN_RE, kioskTokenHash } from '../../supabase/functions/_shared/kiosk'
 import {
+  PIN_PAD_IDLE_DEFAULT_SECONDS,
+  PIN_PAD_IDLE_MAX_SECONDS,
+  PIN_PAD_IDLE_MIN_SECONDS,
   PRIVATE_HEADERS,
+  normalizePinPadIdleSeconds,
   parseRosterBody,
   shapeFailure,
+  shapeRoster,
   shapeSuccess,
   shapeTiles,
 } from '../../supabase/functions/staff-roster/logic'
@@ -93,7 +98,7 @@ describe('responses', () => {
       shapeFailure('invalid_request'),
       shapeFailure('rate_limited', 5),
       shapeFailure('server_error'),
-      shapeSuccess([]),
+      shapeSuccess({ staff: [], pin_pad_idle_seconds: 60 }),
     ]) {
       expect(r.headers['Cache-Control']).toBe('no-store')
       expect(r.headers['X-Robots-Tag']).toBe('noindex, nofollow')
@@ -104,8 +109,98 @@ describe('responses', () => {
     expect(shapeFailure('forbidden_origin')).toEqual(shapeFailure('invalid_kiosk'))
     expect(shapeFailure('invalid_kiosk')).toMatchObject({ status: 401, body: { error: 'invalid_kiosk' } })
   })
-  it('success carries only the staff array', () => {
-    expect(shapeSuccess([]).body).toEqual({ staff: [] })
+  it('success carries only the staff array and the PIN-pad idle timer', () => {
+    expect(shapeSuccess({ staff: [], pin_pad_idle_seconds: 90 }).body).toEqual({
+      staff: [],
+      pin_pad_idle_seconds: 90,
+    })
+    expect(Object.keys(shapeSuccess({ staff: [], pin_pad_idle_seconds: 90 }).body)).toEqual([
+      'staff',
+      'pin_pad_idle_seconds',
+    ])
+  })
+  it('success re-normalises the timer (defence in depth)', () => {
+    expect(shapeSuccess({ staff: [], pin_pad_idle_seconds: 5 }).body).toEqual({
+      staff: [],
+      pin_pad_idle_seconds: 60,
+    })
+  })
+})
+
+describe('PIN-pad idle timer (per tenant, migration 0025)', () => {
+  it('bounds and default mirror the database CHECK and column default', () => {
+    expect([PIN_PAD_IDLE_MIN_SECONDS, PIN_PAD_IDLE_DEFAULT_SECONDS, PIN_PAD_IDLE_MAX_SECONDS]).toEqual([
+      15, 60, 300,
+    ])
+  })
+  it.each([15, 16, 60, 75, 299, 300])('keeps an in-range integer (%j)', (v) => {
+    expect(normalizePinPadIdleSeconds(v)).toBe(v)
+  })
+  it.each([
+    14,
+    301,
+    0,
+    -1,
+    15.5,
+    59.999,
+    Number.NaN,
+    Infinity,
+    -Infinity,
+    '60',
+    '90',
+    null,
+    undefined,
+    true,
+    {},
+    [],
+    1e9,
+  ])('drops an out-of-range or non-integer value to the default (%j)', (v) => {
+    expect(normalizePinPadIdleSeconds(v)).toBe(60)
+  })
+})
+
+describe('shapeRoster (fn_kiosk_terminal_bootstrap answer)', () => {
+  const tile = { id: PROFILE, name: 'Abebe Worku', role: 'Kitchen', color: '#ea580c', icon: 'chef-hat' }
+  it('accepts {staff, pin_pad_idle_seconds}', () => {
+    expect(shapeRoster({ staff: [tile], pin_pad_idle_seconds: 120 })).toEqual({
+      staff: [tile],
+      pin_pad_idle_seconds: 120,
+    })
+  })
+  it('defaults a missing or invalid timer instead of failing the terminal', () => {
+    expect(shapeRoster({ staff: [tile] })).toEqual({ staff: [tile], pin_pad_idle_seconds: 60 })
+    expect(shapeRoster({ staff: [], pin_pad_idle_seconds: 9999 })).toEqual({
+      staff: [],
+      pin_pad_idle_seconds: 60,
+    })
+    expect(shapeRoster({ staff: [], pin_pad_idle_seconds: '45' })).toEqual({
+      staff: [],
+      pin_pad_idle_seconds: 60,
+    })
+  })
+  it('drops every other field (tiles through the whitelist too)', () => {
+    const r = shapeRoster({
+      staff: [{ ...tile, username: 'abebe', pin_hash: 'x' }],
+      pin_pad_idle_seconds: 30,
+      restaurant_id: PROFILE,
+      extra: 1,
+    })
+    expect(r).toEqual({ staff: [tile], pin_pad_idle_seconds: 30 })
+    expect(Object.keys(r ?? {})).toEqual(['staff', 'pin_pad_idle_seconds'])
+  })
+  it.each([
+    null,
+    undefined,
+    [],
+    [tile],
+    'x',
+    5,
+    {},
+    { staff: null },
+    { staff: {} },
+    { pin_pad_idle_seconds: 60 },
+  ])('is null (=> 401 invalid_kiosk) unless staff is an array (%j)', (v) => {
+    expect(shapeRoster(v)).toBeNull()
   })
 })
 

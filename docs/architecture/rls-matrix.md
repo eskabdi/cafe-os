@@ -1,4 +1,4 @@
-# RLS matrix (migrations 0007 + 0010 + 0022 + 0023 + 0024; 82 policies; RLS enabled AND forced on every public table)
+# RLS matrix (migrations 0007 + 0010 + 0022 + 0023 + 0024 + 0025; 83 policies; RLS enabled AND forced on every public table)
 
 Helpers (SECURITY DEFINER, empty search_path, identity from `profiles` via `auth.uid()`, never from JWT claims):
 `current_restaurant_id()`, `current_user_id()`, `current_role_id()`, `has_permission(key)`, `has_station_access(station_id)` (RPC use), `current_station_ids()` (policies; one InitPlan per statement),
@@ -32,13 +32,14 @@ Suspended/cancelled tenants resolve to NULL (no access); `past_due` is read-only
 | order_items | T + `orders.view` + (`orders.view_all` or `station_id = any(current_station_ids())` or own order) | none | none | none |
 | kiosk_devices | T + `kiosks.manage` (column grant: no `token_hash`) | none (`fn_register_kiosk`) | none (`fn_revoke_kiosk`; service role refreshes `last_seen_at`) | none |
 | user_notifications | T and `recipient_id = auth.uid()` (own rows only, not even tenant_admin sees others'; column grant on every column, no secret column) | none (`fn_staff_login_blocked`, service-only) | none (`fn_mark_notification_read` sets `read_at` once; trigger refuses any other change, even for the owner role) | none |
+| restaurant_session_settings | T (any active member, no permission: every client needs the timers, also while a PIN change is required/pending; column grant on every column, no secret column) | none (`trg_create_session_settings` on `restaurants` insert) | none (`fn_update_session_timers` / `fn_reset_session_timers`: `settings.session_timers` + step-up + W) | none |
 | payments | T + `payments.view` | none (fn_confirm_payment later) | trigger-blocked for all roles | trigger-blocked for all roles |
 | vouchers, installments | T + `vouchers.view` | none | none | none |
 | expenses | T + `expenses.view`/`expenses.manage` | T + `expenses.manage` + W (actor, day, method snapshot set by trigger; **requires an open business day**, else `day_closed`; a foreign `restaurant_id` is refused with the RLS 42501 before any lookup) | same; frozen once its day is closed | same; frozen once its day is closed |
 
 Policies per table: admin_audit_log 1, audit_logs 1, categories 4, customer_sessions 1, day_sessions 1, expense_categories 4, expenses 4,
 ingredients 4, installments 1, kiosk_devices 1, menu_items 4, order_items 1, orders 1, payment_methods 4, payments 1, permissions 1, plans 5,
-platform_admins 3, platform_invoices 4, profiles 2, qr_credentials 1, recipe_lines 4, restaurants 3, role_permissions 1,
+platform_admins 3, platform_invoices 4, profiles 2, qr_credentials 1, recipe_lines 4, restaurant_session_settings 1, restaurants 3, role_permissions 1,
 role_station_access 1, roles 4, stations 4, stock_movements 1, subscriptions 4, table_areas 4, table_sessions 1, tables 4, user_notifications 1, vouchers 1;
 profile_secrets, tenant_counters, idempotency_keys: 0 (deny all).
 
@@ -56,7 +57,7 @@ profile_secrets, tenant_counters, idempotency_keys: 0 (deny all).
 Every function in `public` pins `search_path`; EXECUTE for PUBLIC = none, anon = `fn_resolve_tenant_slug`, authenticated = the reviewed list
 (adding a client-callable function fails the test until the list is updated consciously); no view, materialized view or foreign table without
 `security_invoker` (none exist); deny-all tables (`profile_secrets`, `tenant_counters`, `idempotency_keys`) carry no client privilege; no client
-privilege on any `*hash*/*secret*/*token*/*password*` column; no `USING (true)` / FOR ALL policy; the total policy count (82) is pinned to this document.
+privilege on any `*hash*/*secret*/*token*/*password*` column; no `USING (true)` / FOR ALL policy; the total policy count (83) is pinned to this document.
 **Every new migration that adds a function must `revoke all on function ... from public, anon, authenticated` explicitly** (Postgres grants PUBLIC
 execute by default and a role-global default privilege now prevents it for FUTURE functions, still revoke explicitly).
 
@@ -83,3 +84,7 @@ execute by default and a role-global default privilege now prevents it for FUTUR
   (CHECK: never together with `must_change_pin`). `has_permission` / `has_station_access` / `current_station_ids` now use the single helper `fn_pin_restricted(user)` =
   `must_change_pin or pin_change_pending` (tenant_admin exempt), so every policy that goes through them denies a user who is waiting for approval. `user_notifications_select` is
   unchanged (recipient-only, no `has_permission`), so a restricted user still reads their own notifications (asserted in `28_pin_change_approval`). The same tenant-membership-only residual as 0023 applies.
+
+- 0025 (per-tenant session timers): `restaurant_session_settings` (1 SELECT policy `restaurant_id = current_restaurant_id()`; 83 policies in total). Column-level SELECT grant
+  only (no table-level privilege, no INSERT/UPDATE/DELETE for any client role, not even tenant_admin); writes only through the definer RPCs. Not published to Realtime
+  (clients re-read `fn_get_session_context()` / `fn_get_session_timers()`). Suspended/cancelled tenants read nothing (helper resolves NULL).

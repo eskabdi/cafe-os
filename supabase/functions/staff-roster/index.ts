@@ -1,7 +1,8 @@
 // staff-roster: the PIN-staff tiles for a REGISTERED kiosk device (shared floor terminal).
 //
 // POST { restaurant_slug, kiosk_token }  (the slug is derived from the page hostname <slug>.cafeos.et by the SPA).
-// The service role asks the database (fn_kiosk_roster) to resolve sha256(token) -> kiosk (not revoked) -> tenant and to check
+// 200 { staff: [...], pin_pad_idle_seconds }  (the tenant's PIN-pad idle timer, migration 0025; 15..300, else the default 60).
+// The service role asks the database (fn_kiosk_terminal_bootstrap -> fn_kiosk_roster) to resolve sha256(token) -> kiosk (not revoked) -> tenant and to check
 // that the tenant's slug equals the claimed one and the tenant is not suspended/cancelled. Every failure is the same 401.
 // The roster contains ONLY active, non-admin PIN staff with a 4-digit PIN (the 6-digit Cashier and admins never appear):
 // id, short name (first + middle), role label, colour, icon. Never username, email, secrets or permissions.
@@ -14,7 +15,7 @@ import { readRosterEnv } from '../_shared/env.ts'
 import { originSlugMatches } from '../_shared/host.ts'
 import { kioskTokenHash } from '../_shared/kiosk.ts'
 import { clientIp, createRateLimiter } from '../pin-login/logic.ts'
-import { MAX_BODY_BYTES, parseRosterBody, shapeFailure, shapeSuccess, shapeTiles, type ShapedResponse } from './logic.ts'
+import { MAX_BODY_BYTES, parseRosterBody, shapeFailure, shapeRoster, shapeSuccess, type ShapedResponse } from './logic.ts'
 
 const env = readRosterEnv()
 const allowedOrigins = parseAllowedOrigins(env?.allowedOrigins)
@@ -79,12 +80,13 @@ Deno.serve(async (req: Request): Promise<Response> => {
   let shaped: ShapedResponse
   try {
     const admin = createClient(env.supabaseUrl, env.serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } })
-    const res = await admin.rpc('fn_kiosk_roster', { p_token_hash: await kioskTokenHash(kiosk_token), p_slug: restaurant_slug })
+    // needs migration 0025 (deploy the migration before this function); NULL = invalid kiosk
+    const res = await admin.rpc('fn_kiosk_terminal_bootstrap', { p_token_hash: await kioskTokenHash(kiosk_token), p_slug: restaurant_slug })
     if (res.error) {
       shaped = shapeFailure('server_error')
     } else {
-      const tiles = shapeTiles(res.data)
-      shaped = tiles === null ? shapeFailure('invalid_kiosk') : shapeSuccess(tiles)
+      const roster = shapeRoster(res.data)
+      shaped = roster === null ? shapeFailure('invalid_kiosk') : shapeSuccess(roster)
     }
   } catch {
     console.error('staff-roster: unexpected_error') // fixed code only

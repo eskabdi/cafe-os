@@ -109,7 +109,7 @@ declare
     ['menu_items','price = price'], ['recipe_lines','qty_per_serving = qty_per_serving'],
     ['ingredients','min_level = min_level'], ['tables','capacity = capacity'], ['expenses','amount = amount'],
     ['profiles','first_name = first_name'], ['subscriptions','status = status'],
-    ['platform_invoices','status = status']];
+    ['platform_invoices','status = status'], ['restaurant_session_settings','signout_seconds = signout_seconds']];
 begin
   for t in select tests.tenant_tables() loop
     begin
