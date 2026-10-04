@@ -124,13 +124,64 @@ begin
   return p_id;
 end $$;
 
--- A verified TOTP factor exactly as GoTrue stores it (real auth.mfa_factors has NO defaults for id/created_at/updated_at
--- and typed factor_type/status columns: supply everything, cast from text).
-create or replace function tests.add_verified_factor(p_user_id uuid) returns void
+-- A factor row exactly as GoTrue stores it (real auth.mfa_factors has NO defaults for id/created_at/updated_at and typed
+-- factor_type/status columns: supply everything, cast from text). The real table is also UNIQUE on (user_id, created_at) and on
+-- (friendly_name, user_id): every row gets its own name and clock_timestamp() (now() is frozen inside a transaction), so one test may
+-- give a user several factors (e.g. an unverified leftover next to a verified one). Needs the owner role (clients cannot write it).
+create or replace function tests.add_factor(p_user_id uuid, p_type text, p_status text) returns void
 language plpgsql as $$
 begin
   insert into auth.mfa_factors (id, user_id, friendly_name, factor_type, status, created_at, updated_at)
-  values (gen_random_uuid(), p_user_id, 'test-totp', 'totp', 'verified', now(), now());
+  values (gen_random_uuid(), p_user_id, 'test-' || p_type || '-' || substr(gen_random_uuid()::text, 1, 8),
+          p_type::auth.factor_type, p_status::auth.factor_status, clock_timestamp(), clock_timestamp());
+end $$;
+
+-- A verified TOTP factor (the usual authenticator).
+create or replace function tests.add_verified_factor(p_user_id uuid) returns void
+language plpgsql as $$
+begin
+  perform tests.add_factor(p_user_id, 'totp', 'verified');
+end $$;
+
+-- Number of factor rows a user holds (optionally only one status). Definer: works under any role, e.g. while authenticated.
+create or replace function tests.n_factors(p_user_id uuid, p_status text default null) returns int
+language sql stable security definer set search_path = '' as $$
+  select count(*)::int from auth.mfa_factors f where f.user_id = p_user_id and (p_status is null or f.status::text = p_status) $$;
+
+-- JWT claims ONLY (role unchanged): for calling an internal helper directly, as the owner role, with the claims a session would
+-- carry. p_aal null = no aal claim at all. The legacy request.jwt.claim.* settings are set too, so auth.uid() cannot see a stale
+-- subject left by an earlier authenticate_as.
+create or replace function tests.set_jwt(p_user_id uuid, p_aal text default null) returns void
+language plpgsql as $$
+begin
+  perform set_config('request.jwt.claims',
+    (jsonb_build_object('sub', p_user_id, 'role', 'authenticated', 'aud', 'authenticated')
+      || case when p_aal is null then '{}'::jsonb else jsonb_build_object('aal', p_aal) end)::text, true);
+  perform set_config('request.jwt.claim.sub', coalesce(p_user_id::text, ''), true);
+  perform set_config('request.jwt.claim.role', 'authenticated', true);
+end $$;
+
+-- An aal2 TOKEN: an authenticated session whose JWT says aal = 'aal2', as GoTrue issues after a TOTP challenge. It touches NO factor
+-- row: the claim outlives the factor (a signed access token is self-contained until it expires), which is exactly what
+-- fn_require_aal2 must not trust on its own (0028). Use it to model "another live token" after an authenticator was removed.
+create or replace function tests.aal2_token(p_user_id uuid) returns void
+language plpgsql as $$
+begin
+  perform tests.authenticate_as(p_user_id);
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', p_user_id, 'role', 'authenticated', 'aud', 'authenticated', 'aal', 'aal2')::text, true);
+end $$;
+
+-- A complete authenticator session: the aal2 token AND a verified factor behind it (added only when the user has none, as the
+-- owner role: RESET ROLE first, clients cannot touch auth.mfa_factors). Every positive case of an aal2 action uses this one.
+create or replace function tests.aal2(p_user_id uuid) returns void
+language plpgsql as $$
+begin
+  execute 'reset role';
+  if tests.n_factors(p_user_id, 'verified') = 0 then
+    perform tests.add_verified_factor(p_user_id);
+  end if;
+  perform tests.aal2_token(p_user_id);
 end $$;
 
 -- Every public table that carries a restaurant_id column (the tenant tables), by name.

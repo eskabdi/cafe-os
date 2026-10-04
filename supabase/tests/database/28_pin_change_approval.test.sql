@@ -11,18 +11,14 @@ select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
        tests.user_id('yonas', 'central-cafe') waiter, tests.user_id('meron', 'central-cafe') deleg,
        tests.user_id('abebe', 'central-cafe') kitchen, tests.user_id('hanna', 'central-cafe') cashier,
        tests.user_id('sara', 'central-cafe') pastry,
-       tests.user_id('owner', 'second-cafe') b_admin, tests.user_id('waiter', 'second-cafe') b_waiter;
+       tests.user_id('owner', 'second-cafe') b_admin, tests.user_id('waiter', 'second-cafe') b_waiter,
+       '00000000-0000-4000-8000-0000000000c1'::uuid platform;
 grant all on _f to public;
 grant execute on all functions in schema tests to public;
 create temp table _n (k text primary key, v text);
 grant all on _n to public;
--- an authenticated session that satisfied MFA (aal2), as GoTrue issues after a TOTP challenge
-create function tests.aal2(p_user uuid) returns void language plpgsql as $$
-begin
-  perform tests.authenticate_as(p_user);
-  perform set_config('request.jwt.claims', json_build_object('sub', p_user, 'role', 'authenticated', 'aud', 'authenticated', 'aal', 'aal2')::text, true);
-end $$;
-grant execute on function tests.aal2(uuid) to public;
+-- tests.aal2(user) (00_helpers): an authenticated session that satisfied MFA, as GoTrue issues after a TOTP challenge = the aal2 claim AND
+-- the verified factor behind it (fn_require_aal2 needs both, 0028). tests.aal2_token(user) is the claim alone (a token that outlives its factor).
 create function tests.n_admin_notes(p_kind text, p_subject uuid) returns int language sql stable security definer set search_path = '' as $$
   select count(*)::int from public.user_notifications n where n.kind = p_kind and n.payload ->> 'profile_id' = p_subject::text and n.recipient_id <> p_subject $$;
 create function tests.n_notes(p_kind text, p_recipient uuid) returns int language sql stable security definer set search_path = '' as $$
@@ -50,22 +46,77 @@ select ok(not has_function_privilege('authenticated', 'public.fn_require_aal2()'
       and not has_function_privilege('anon', 'public.fn_require_aal2()', 'execute'), 'fn_require_aal2: internal (no client EXECUTE), like fn_require_step_up');
 select ok((select p.prosecdef and p.proconfig @> array['search_path=""'] from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname = 'fn_require_aal2'), 'fn_require_aal2: security definer with an empty search_path');
 select ok((select prosrc ~ 'fn_require_aal2' and prosrc !~ 'fn_require_step_up' from pg_proc where proname = 'fn_decide_pin_change' and pronamespace = 'public'::regnamespace), 'fn_decide_pin_change requires aal2 (not the factor-dependent step-up)');
-select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated","aal":"aal1"}', true);
+select is((select provolatile::text from pg_proc where proname = 'fn_require_aal2' and pronamespace = 'public'::regnamespace), 's', 'fn_require_aal2: STABLE');
+select ok(not has_function_privilege('public', 'public.fn_require_aal2()', 'execute') and not has_function_privilege('service_role', 'public.fn_require_aal2()', 'execute')
+      and (select proacl::text from pg_proc where proname = 'fn_require_aal2' and pronamespace = 'public'::regnamespace)
+          = (select proacl::text from pg_proc where proname = 'fn_require_step_up' and pronamespace = 'public'::regnamespace), 'fn_require_aal2: same ACL as fn_require_step_up (owner only: no PUBLIC, no service_role)');
+
+-- ═════════ fn_require_aal2 itself: each of its three conditions is necessary ═════════
+-- (1) the token says aal2, (2) the caller's own profile exists and is not a PIN account (0027), (3) the caller still owns a VERIFIED
+-- factor (0028, finding L1). The helper is internal: it is called directly, as the owner role, with the claims a real session would carry.
+-- Start without any factor row (the seed has none, a developer database might; rolled back with the file).
+delete from auth.mfa_factors;
+select tests.set_jwt('00000000-0000-4000-8000-000000000001', 'aal1');
 select is(tests.run('select public.fn_require_aal2()'), 'P0001|mfa_required|', 'fn_require_aal2: aal1 -> mfa_required');
-select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
+select tests.set_jwt('00000000-0000-4000-8000-000000000001', null);
 select is(tests.run('select public.fn_require_aal2()'), 'P0001|mfa_required|', 'fn_require_aal2: no aal claim -> mfa_required');
-select set_config('request.jwt.claims', '{"sub":"00000000-0000-4000-8000-000000000001","role":"authenticated","aal":"aal2"}', true);
+select tests.set_jwt('00000000-0000-4000-8000-000000000001', 'aal2');
 select is(tests.run('select public.fn_require_aal2()'), 'P0001|mfa_required|', 'fn_require_aal2: aal2 but NO profile row -> mfa_required (fail closed)');
-select set_config('request.jwt.claims', '', true);
--- (the helper is internal: called directly as the owner role with the claims a real session would carry)
-select set_config('request.jwt.claims', json_build_object('sub', (select admin from _f), 'role', 'authenticated', 'aud', 'authenticated', 'aal', 'aal2')::text, true);
-select is(tests.run('select public.fn_require_aal2()'), 'ok:1', 'fn_require_aal2: aal2 + password profile (tenant_admin) passes');
-select set_config('request.jwt.claims', json_build_object('sub', (select admin from _f), 'role', 'authenticated', 'aud', 'authenticated', 'aal', 'aal1')::text, true);
-select is(tests.run('select public.fn_require_aal2()'), 'P0001|mfa_required|', 'fn_require_aal2: aal1 + password profile -> mfa_required (unchanged)');
-select set_config('request.jwt.claims', json_build_object('sub', (select waiter from _f), 'role', 'authenticated', 'aud', 'authenticated', 'aal', 'aal2')::text, true);
-select is(tests.run('select public.fn_require_aal2()'), 'P0001|mfa_required|', 'fn_require_aal2 (H1): aal2 + PIN profile -> mfa_required (a PIN session that enrolled its own TOTP is not enough)');
-select set_config('request.jwt.claims', '', true);
+-- all three hold: the positive control
+select tests.add_verified_factor((select admin from _f));
+select tests.set_jwt((select admin from _f), 'aal2');
+select is(tests.run('select public.fn_require_aal2()'), 'ok:1', 'fn_require_aal2: aal2 + password profile (tenant_admin) + verified factor passes (positive control)');
+-- (1) the claim negated; profile and factor as in the control
+select tests.set_jwt((select admin from _f), 'aal1');
+select is(tests.run('select public.fn_require_aal2()'), 'P0001|mfa_required|', 'fn_require_aal2: aal1 + password profile + verified factor -> mfa_required (the claim is still required)');
+select tests.set_jwt((select admin from _f), null);
+select is(tests.run('select public.fn_require_aal2()'), 'P0001|mfa_required|', 'fn_require_aal2: no aal claim + password profile + verified factor -> mfa_required');
+-- (2) the profile negated: a PIN account that enrolled its own TOTP holds an aal2 token AND a verified factor
+select tests.add_verified_factor((select waiter from _f));
+select tests.set_jwt((select waiter from _f), 'aal2');
+select is(tests.run('select public.fn_require_aal2()'), 'P0001|mfa_required|', 'fn_require_aal2 (H1): aal2 + PIN profile + verified factor -> mfa_required (a PIN session that enrolled its own TOTP is not enough)');
+-- ... and the PIN rule is the ONLY thing refusing it: the identical token + factor pass once the profile is a password account (owner-only simulation, rolled back)
+select tests.set_jwt(null, null);
+alter table public.profiles disable trigger trg_guard_profile_auth_method;
+update public.profiles set auth_method = 'password' where id = (select waiter from _f);
+alter table public.profiles enable trigger trg_guard_profile_auth_method;
+select tests.set_jwt((select waiter from _f), 'aal2');
+select is(tests.run('select public.fn_require_aal2()'), 'ok:1', '(control) the same aal2 token + verified factor with a password profile passes: the PIN rule alone refused it above');
+select tests.set_jwt(null, null);
+alter table public.profiles disable trigger trg_guard_profile_auth_method;
+update public.profiles set auth_method = 'pin' where id = (select waiter from _f);
+alter table public.profiles enable trigger trg_guard_profile_auth_method;
+select tests.set_jwt((select platform from _f), 'aal2');
+select tests.add_verified_factor((select platform from _f));
+select is(tests.run('select public.fn_require_aal2()'), 'P0001|mfa_required|', 'fn_require_aal2: aal2 + verified factor but NO tenant profile (a platform admin) -> mfa_required (fail closed)');
+select set_config('request.jwt.claims', '{"role":"authenticated","aal":"aal2"}', true);
+select set_config('request.jwt.claim.sub', '', true);
+select is(tests.run('select public.fn_require_aal2()'), 'P0001|mfa_required|', 'fn_require_aal2: an aal2 claim without any subject (no caller) -> mfa_required');
+-- (3) the factor negated; aal2 token and password profile as in the control. The claims never change below: only the factor rows do.
+select tests.set_jwt((select admin from _f), 'aal2');
+select is(tests.run('select public.fn_require_aal2()'), 'ok:1', 'fn_require_aal2: (control) the tenant_admin''s aal2 token passes while its verified factor exists');
+delete from auth.mfa_factors where user_id = (select admin from _f);
+select is(tests.n_factors((select admin from _f)), 0, '(precondition) the authenticator was removed: no factor row left for the tenant_admin');
+select is(tests.run('select public.fn_require_aal2()'), 'P0001|mfa_required|', 'fn_require_aal2 (L1): the SAME aal2 token once its factor row is gone (auth.mfa.unenroll elsewhere) -> mfa_required');
+select tests.add_factor((select admin from _f), 'totp', 'unverified');
+select is(tests.run('select public.fn_require_aal2()'), 'P0001|mfa_required|', 'fn_require_aal2: only an UNVERIFIED factor (abandoned enrolment) -> mfa_required');
+select tests.add_verified_factor((select admin2 from _f));
+select is(tests.run('select public.fn_require_aal2()'), 'P0001|mfa_required|', 'fn_require_aal2: a verified factor that belongs to ANOTHER user does not count -> mfa_required');
+select tests.add_verified_factor((select admin from _f));
+select is(tests.run('select public.fn_require_aal2()'), 'ok:1', 'fn_require_aal2: a verified factor next to the unverified leftover -> passes again (the same token)');
+-- the factor predicate is the one fn_require_step_up uses (0015): with no GUC, step-up demands aal2 of an aal1 token exactly when a verified factor exists
+select set_config('app.tenant_admin_mfa_required', 'off', true);
+select tests.set_jwt((select admin from _f), 'aal1');
+delete from auth.mfa_factors where user_id = (select admin from _f);
+select is(tests.run('select public.fn_require_step_up()'), 'ok:1', 'parity: fn_require_step_up (aal1) with no factor demands nothing (fn_require_aal2 refuses even an aal2 token then)');
+select tests.add_factor((select admin from _f), 'totp', 'unverified');
+select is(tests.run('select public.fn_require_step_up()'), 'ok:1', 'parity: an unverified factor is no authenticator for fn_require_step_up either');
+select tests.add_verified_factor((select admin from _f));
+select is(tests.run('select public.fn_require_step_up()'), 'P0001|mfa_required|', 'parity: a verified factor makes fn_require_step_up demand aal2 (the very predicate that lets fn_require_aal2 pass)');
+delete from auth.mfa_factors;
+select tests.clear_auth();
 select ok((select prosrc ~ 'auth_method' and prosrc ~ 'auth\.uid' from pg_proc where proname = 'fn_require_aal2' and pronamespace = 'public'::regnamespace), 'fn_require_aal2 reads auth_method of the caller''s own profile (id = auth.uid())');
+select ok((select prosrc ~ 'auth\.mfa_factors' and prosrc ~ '''verified''' and prosrc ~ 'f\.user_id = \(select auth\.uid\(\)\)' from pg_proc where proname = 'fn_require_aal2' and pronamespace = 'public'::regnamespace), 'fn_require_aal2 reads auth.mfa_factors of the caller''s own id for a verified factor (like fn_require_step_up)');
 select ok(has_function_privilege('authenticated', 'public.fn_approve_pin_change(uuid)', 'execute')
       and has_function_privilege('authenticated', 'public.fn_reject_pin_change(uuid)', 'execute')
       and has_function_privilege('authenticated', 'public.fn_list_pending_pin_changes()', 'execute'), 'approve / reject / list: authenticated');
@@ -423,6 +474,7 @@ insert into public.role_station_access (role_id, station_id, restaurant_id)
   select (select id from public.roles where restaurant_id = (select a from _f) and name = 'HR Lead'), rsa.station_id, rsa.restaurant_id
   from public.role_station_access rsa join public.profiles p on p.role_id = rsa.role_id where p.id = (select kitchen from _f)
   on conflict do nothing;
+delete from auth.mfa_factors where user_id in (select deleg from _f union select admin2 from _f);   -- (the aal2 helper enrolled them above) the next two cases have NO authenticator
 select tests.authenticate_as((select deleg from _f));   -- aal1 session, no authenticator: a PIN-only delegate
 select ok(public.has_permission('users.manage'), '(the PIN delegate holds users.manage)');
 select is(tests.run(format($q$select public.fn_approve_pin_change(%L)$q$, (select kitchen from _f))), 'P0001|mfa_required|', 'PIN delegate (aal1, no factor) with users.manage: approve -> mfa_required');
