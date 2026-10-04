@@ -23,7 +23,7 @@ function addedOn(iso: string | null): string | null {
 
 /**
  * Tenant settings > Security: self-service authenticator (TOTP) setup for accounts that sign in with email and password
- * (the tenant admin and Supabase Auth delegates). PIN sessions never see it. Gate is UX only: Supabase Auth decides who can
+ * (in practice the tenant admin: only tenant_admin accounts use email and password). PIN sessions never see it. Gate is UX only: Supabase Auth decides who can
  * enrol, and the database re-checks the verified session on every command that needs it.
  */
 export function SecurityPage() {

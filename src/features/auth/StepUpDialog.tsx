@@ -36,7 +36,7 @@ export interface StepUpDialogProps {
  * Step-up for an RPC that answered `mfa_required` (fn_require_step_up / fn_require_aal2): verifies a TOTP code with Supabase Auth, which upgrades
  * the session to aal2. The server re-checks the assurance level on the retried call; this dialog decides nothing itself.
  * An account with no authenticator cannot pass fn_require_aal2 and gets a neutral message, no code input. A Supabase Auth account
- * (tenant admin or delegate) is pointed to the self-service Security page; PIN-only staff are told to ask their administrator.
+ * (the tenant admin) is pointed to the self-service Security page; PIN-only staff are told to ask their administrator.
  */
 export function StepUpDialog({ open, onVerified, onCancel }: StepUpDialogProps) {
   const { session, context } = useAuth()
