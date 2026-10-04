@@ -211,8 +211,9 @@ All of this is UX; the database (`fn_pin_restricted` behind `has_permission` / s
   list invalidation. Errors map to neutral copy: `mfa_required` -> "Verify with your authenticator to continue." (no in-page step-up yet), `not_found` -> "no longer
   waiting" + list refresh, `permission_denied` / `permission_escalation`, `tenant_read_only` / `tenant_suspended`, anything else generic.
 - **Inactivity**: `InactivityGuard` keeps managing restricted users (non-admin role), so the forced and waiting screens sign out on inactivity too.
-- **Known gap**: the browser can read `Retry-After` cross-origin only if the function sends `Access-Control-Expose-Headers: Retry-After`; `_shared/cors.ts`
-  does not yet, so production falls back to the 30 s default (safe, just less precise).
+- **Retry-After**: `_shared/cors.ts` sends `Access-Control-Expose-Headers: Retry-After` for allow-listed origins, so the browser reads the 429 wait time (fallback 30 s).
+- **Step-up**: the PIN approvals page opens `StepUpDialog` on `mfa_required` and retries the same decision after verification. Cancelling shows the neutral message and decides nothing.
+- **Cache hygiene**: `AuthProvider` clears the TanStack query cache whenever the signed-in user changes or signs out; a failed same-user context refresh keeps the previous ready context.
 - Tests: `src/lib/supabase/{pin-change,notifications}.test.ts`, `src/features/pin-change/*.test.tsx`, `src/features/notifications/*.test.ts(x)`,
   `src/app/pin-change-flow.test.tsx` (real route tree, mocked Realtime), `tests/e2e/pin-change.spec.ts` (page.route + mocked Realtime WebSocket).
 

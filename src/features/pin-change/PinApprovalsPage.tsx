@@ -12,7 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { RequirePermission, useAuth } from '@/features/auth'
+import { RequirePermission, StepUpDialog, useAuth } from '@/features/auth'
 import {
   approvePinChange,
   listPendingPinChanges,
@@ -52,15 +52,15 @@ function PinApprovalsContent() {
   const pending = useQuery({ queryKey: PIN_APPROVALS_KEY, queryFn: listPendingPinChanges })
   const [confirm, setConfirm] = useState<{ item: PendingPinChange; decision: Decision } | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [stepUpFor, setStepUpFor] = useState<{ item: PendingPinChange; decision: Decision } | null>(null)
 
   const decide = useMutation({
     mutationFn: ({ id, decision }: { id: string; decision: Decision }) =>
       decision === 'approve' ? approvePinChange(id) : rejectPinChange(id),
   })
 
-  const onConfirm = async () => {
-    if (!confirm) return
-    const { item, decision } = confirm
+  const submit = async (target: { item: PendingPinChange; decision: Decision }) => {
+    const { item, decision } = target
     const name = displayName(item)
     setActionError(null)
     try {
@@ -71,11 +71,20 @@ function PinApprovalsContent() {
       void qc.invalidateQueries({ queryKey: PIN_APPROVALS_KEY })
     } catch (err) {
       const code = codeOf(err)
+      if (code === 'mfa_required') {
+        setStepUpFor(target) // verify the authenticator code, then retry the same decision
+        return
+      }
       setActionError(pinApprovalErrorMessage(code))
       if (code === 'not_found') void qc.invalidateQueries({ queryKey: PIN_APPROVALS_KEY })
-    } finally {
-      setConfirm(null)
     }
+  }
+
+  const onConfirm = async () => {
+    if (!confirm) return
+    const target = confirm
+    setConfirm(null)
+    await submit(target)
   }
 
   const confirmName = confirm ? displayName(confirm.item) : ''
@@ -112,10 +121,10 @@ function PinApprovalsContent() {
             {pinApprovalErrorMessage(codeOf(pending.error))}
           </p>
         )}
-        {pending.data && pending.data.length === 0 && (
+        {!pending.isError && pending.data && pending.data.length === 0 && (
           <p className="text-sm text-muted-foreground">No PIN changes are waiting for approval.</p>
         )}
-        {pending.data && pending.data.length > 0 && (
+        {!pending.isError && pending.data && pending.data.length > 0 && (
           <ul className="divide-y divide-line rounded-card border border-line bg-white">
             {pending.data.map((p) => {
               const name = displayName(p)
@@ -175,6 +184,18 @@ function PinApprovalsContent() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <StepUpDialog
+        open={stepUpFor !== null}
+        onCancel={() => {
+          setStepUpFor(null)
+          setActionError(pinApprovalErrorMessage('mfa_required'))
+        }}
+        onVerified={() => {
+          const target = stepUpFor
+          setStepUpFor(null)
+          if (target) void submit(target)
+        }}
+      />
     </main>
   )
 }

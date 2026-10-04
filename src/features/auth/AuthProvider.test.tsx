@@ -1,4 +1,6 @@
-import { render, screen, waitFor, act } from '@testing-library/react'
+import { render as rtlRender, screen, waitFor, act } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ReactElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthProvider } from './AuthProvider'
 import { useAuth } from './useAuth'
@@ -34,12 +36,22 @@ function Probe() {
 }
 
 const session = { user: { id: 'u1' }, access_token: 'a' }
+const session2 = { user: { id: 'u2' }, access_token: 'c' }
+
+let qc = new QueryClient()
+const render = (ui: ReactElement) => rtlRender(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>)
+const ctx = (name: string) => ({
+  role: { id: 'r', name, is_active: true },
+  permissions: ['orders.view'],
+  station_ids: [],
+})
 
 describe('AuthProvider', () => {
   beforeEach(() => {
     h.listener = null
     h.unsubscribe.mockReset()
     h.getSessionContext.mockReset()
+    qc = new QueryClient()
   })
 
   it('goes signed_out on an empty initial session', async () => {
@@ -101,5 +113,52 @@ describe('AuthProvider', () => {
     )
     unmount()
     expect(h.unsubscribe).toHaveBeenCalled()
+  })
+
+  it('clears the query cache on sign-out and when another user signs in', async () => {
+    h.getSessionContext.mockResolvedValue(ctx('Waiter'))
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    )
+    act(() => h.listener?.('SIGNED_IN', session))
+    await waitFor(() => expect(screen.getByTestId('ctx')).toHaveTextContent('ready'))
+    qc.setQueryData(['pin-approvals'], [{ profile_id: 'x' }])
+    act(() => h.listener?.('TOKEN_REFRESHED', { ...session, access_token: 'b' }))
+    expect(qc.getQueryData(['pin-approvals'])).toBeDefined()
+
+    act(() => h.listener?.('SIGNED_OUT', null))
+    await waitFor(() => expect(qc.getQueryData(['pin-approvals'])).toBeUndefined())
+
+    // user switch without a sign-out event in between
+    act(() => h.listener?.('SIGNED_IN', session))
+    await waitFor(() => expect(screen.getByTestId('ctx')).toHaveTextContent('ready'))
+    qc.setQueryData(['session-timers'], { signout_seconds: 30 })
+    act(() => h.listener?.('SIGNED_IN', session2))
+    await waitFor(() => expect(qc.getQueryData(['session-timers'])).toBeUndefined())
+  })
+
+  it('keeps the previous ready context when a same-user background refresh fails', async () => {
+    h.getSessionContext.mockResolvedValueOnce(ctx('Waiter'))
+    let refresh: () => void = () => undefined
+    function Refresher() {
+      const a = useAuth()
+      refresh = a.refreshContext
+      return null
+    }
+    render(
+      <AuthProvider>
+        <Probe />
+        <Refresher />
+      </AuthProvider>,
+    )
+    act(() => h.listener?.('SIGNED_IN', session))
+    await waitFor(() => expect(screen.getByTestId('ctx')).toHaveTextContent('ready'))
+    h.getSessionContext.mockRejectedValueOnce(new Error('network'))
+    act(() => refresh())
+    await waitFor(() => expect(h.getSessionContext).toHaveBeenCalledTimes(2))
+    expect(screen.getByTestId('ctx')).toHaveTextContent('ready')
+    expect(screen.getByTestId('role')).toHaveTextContent('Waiter')
   })
 })

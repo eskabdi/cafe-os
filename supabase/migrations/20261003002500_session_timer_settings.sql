@@ -57,7 +57,7 @@ create trigger trg_audit after insert or update or delete on public.restaurant_s
 -- every active member of the tenant reads its own row (tenant from identity); no client write grant at all (RPCs only)
 create policy restaurant_session_settings_select on public.restaurant_session_settings for select to authenticated
   using (restaurant_id = (select public.current_restaurant_id()));
-revoke all on public.restaurant_session_settings from public, anon, authenticated;
+revoke all on public.restaurant_session_settings from public, anon, authenticated, service_role; -- RPCs (security definer) are the only writers
 grant select (restaurant_id, idle_warning_seconds, signout_seconds, pin_pad_idle_seconds, updated_by, updated_at)
   on public.restaurant_session_settings to authenticated;
 

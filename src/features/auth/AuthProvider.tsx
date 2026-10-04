@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase/client'
 import { getSessionContext, type SessionContext } from '@/lib/supabase/rpc'
@@ -28,6 +29,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const userId = session?.user.id ?? null
 
+  // The query cache is per browser, not per user: drop it whenever the signed-in user changes or signs out, so a shared
+  // browser never shows the previous user's tenant data (pending PIN approvals, timers...).
+  const queryClient = useQueryClient()
+  const lastUserId = useRef<string | null>(null)
+  useEffect(() => {
+    if (lastUserId.current !== userId) {
+      if (lastUserId.current !== null || userId === null) queryClient.clear()
+      lastUserId.current = userId
+    }
+  }, [userId, queryClient])
+
   // Reload the server-derived context when the user changes (not on every token refresh). refreshContext() for the SAME
   // user reloads in the background: the previous context stays visible until the new one arrives, so a live transition
   // (e.g. PIN change approved) does not unmount the signed-in tree behind a loading screen.
@@ -42,7 +54,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (active) setCtx({ userId, status: 'ready', context })
       })
       .catch(() => {
-        if (active) setCtx({ userId, status: 'error', context: null })
+        // A failed background refresh keeps the previous ready context (inactivity guard and gate stay in force).
+        if (active)
+          setCtx((prev) =>
+            prev.userId === userId && prev.status === 'ready'
+              ? prev
+              : { userId, status: 'error', context: null },
+          )
       })
     return () => {
       active = false

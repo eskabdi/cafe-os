@@ -13,6 +13,23 @@ const h = vi.hoisted(() => ({
   rejectPinChange: vi.fn(),
 }))
 vi.mock('@/lib/supabase/client', () => ({ supabase: {} }))
+vi.mock('@/features/auth/StepUpDialog', () => ({
+  StepUpDialog: ({
+    open,
+    onVerified,
+    onCancel,
+  }: {
+    open: boolean
+    onVerified: () => void
+    onCancel: () => void
+  }) =>
+    open ? (
+      <div role="dialog" aria-label="step-up">
+        <button onClick={onVerified}>Verify code</button>
+        <button onClick={onCancel}>Cancel step-up</button>
+      </div>
+    ) : null,
+}))
 vi.mock('@/lib/supabase/rpc', () => {
   class RpcError extends Error {
     readonly code: string
@@ -123,16 +140,29 @@ describe('PinApprovalsPage', () => {
     expect(await screen.findByText('Rejected the new PIN for <b>Sara</b>')).toBeInTheDocument()
   })
 
-  it('mfa_required: neutral step-up message, nothing invalidated', async () => {
+  it('mfa_required: opens step-up, then retries the same decision', async () => {
+    const user = userEvent.setup()
+    const { RpcError } = await import('@/lib/supabase/rpc')
+    h.approvePinChange.mockRejectedValueOnce(new RpcError('mfa_required')).mockResolvedValueOnce({})
+    renderPage()
+    await decide(user, 'Approve Abebe Kebede', 'Approve PIN')
+    await user.click(await screen.findByRole('button', { name: 'Verify code' }))
+    await waitFor(() => expect(h.approvePinChange).toHaveBeenCalledTimes(2))
+    expect(h.approvePinChange).toHaveBeenLastCalledWith(ABEBE)
+    expect(await screen.findByText('Approved the new PIN for Abebe Kebede')).toBeInTheDocument()
+  })
+
+  it('mfa_required: cancelling step-up shows the neutral message and decides nothing', async () => {
     const user = userEvent.setup()
     const { RpcError } = await import('@/lib/supabase/rpc')
     h.approvePinChange.mockRejectedValue(new RpcError('mfa_required'))
     renderPage()
     await decide(user, 'Approve Abebe Kebede', 'Approve PIN')
+    await user.click(await screen.findByRole('button', { name: 'Cancel step-up' }))
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('Verify with your authenticator to continue.')
     expect(alert.textContent).not.toMatch(/mfa|aal/i)
-    expect(h.listPendingPinChanges).toHaveBeenCalledTimes(1)
+    expect(h.approvePinChange).toHaveBeenCalledTimes(1)
   })
 
   it('not_found: explains and refreshes the list', async () => {
