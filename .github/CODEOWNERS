@@ -1,0 +1,5 @@
+# Security-sensitive paths require review from the owner.
+/supabase/migrations/ @eskabdi
+/supabase/functions/  @eskabdi
+/.github/             @eskabdi
+/docs/architecture/   @eskabdi

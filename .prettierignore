@@ -1,0 +1,12 @@
+node_modules
+dist
+coverage
+playwright-report
+test-results
+pnpm-lock.yaml
+docs
+supabase
+.claude
+CLAUDE.md
+README.md
+.github

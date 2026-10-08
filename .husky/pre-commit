@@ -1,0 +1,3 @@
+pnpm exec lint-staged
+pnpm typecheck
+node scripts/check-forbidden-patterns.mjs
