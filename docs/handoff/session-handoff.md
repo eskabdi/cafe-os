@@ -35,6 +35,20 @@ Read this first in the next session, then `CLAUDE.md` and `docs/spec/execution-p
   menu_items / recipe_lines / ingredients, per-tenant `stock_stepup_threshold`, keyset `(created_at, id)`, case-sensitive Storage paths), pgTAP `30_*`, `31_*`.
   - **Phase 4 TODO:** `fn_reverse_order_consumption` raises `day_closed` for an order of a closed day; `fn_cancel_order` must handle it. The consumption
     hooks derive the tenant from the order row; the Phase-4 caller owns authorisation, tenant status and the order lock.
+- **Phase 3 frontend (local commit on top of the DB layer, not pushed, review gate not yet run):**
+  - `src/lib/supabase/types.ts` is now GENERATED (postgres-meta v0.91.0, the `supabase gen types` generator, against all migrations
+    on a throwaway Postgres 15 + the db-test shim; Docker Hub was rate-limited, so `supabase start` was not used). The allowlist has one
+    entry for the `is_service_role` function name in it.
+  - Wrappers: `src/lib/supabase/{menu,inventory,menu-images,reference-data,schemas,menu-inventory-errors}.ts` (12 RPCs, zod-parsed;
+    P0001 code -> fixed copy; `callRpc` is now exported from `rpc.ts`).
+  - Hooks: `src/features/{menu/useMenu,inventory/useInventory}.ts`, `src/hooks/useReferenceData.ts`; one Realtime channel per screen.
+    `useStepUp()` (`src/features/auth/useStepUp.tsx`) re-runs the SAME request once after a verified TOTP (no loop; cancel rejects).
+  - UI: `/r/:slug/menu` (menu.view) and `/r/:slug/inventory` (inventory.view), lazy-loaded, replacing the coming-soon placeholders.
+    Menu photo: visible picker + preview + replace / remove, png/jpg/webp, 2 MiB + magic-byte precheck, upload to
+    `menu-images/restaurants/<own id>/menu/<uuid>.<ext>`, signed URLs (1 h) for thumbnails.
+  - Tests: unit (wrappers, error map, forms, useStepUp, MenuPage, InventoryPage) and `tests/e2e/menu-inventory.spec.ts` (mocked backend).
+  - Open: no categories / stations admin UI yet (Phase 10 config); ingredient list has no paging (fine for tens / hundreds of rows);
+    a real-stack E2E of the Storage policies is still to do once `supabase start` works in CI.
   - **Phase 9 TODO (deferred on purpose):** reset / derive `ingredients.received_today` / `consumed_today` in `fn_open_day` / `fn_close_day`;
     exclude the stock columns from the `ingredients` row-audit trigger (the ledger is the record).
 
@@ -101,3 +115,8 @@ Work order in every phase: schema → migration → RPCs → RLS → pgTAP → t
   - `persist-credentials: false` on checkout steps
   - hash-pin the Supabase CLI download
   - the Playwright report artifact may contain seeded test data
+
+## Requirements added by the user (build in the named phase)
+
+- **Order-fired sound (Phase 5 KDS, wired in Phase 4 fire flow):** every order firing plays a notification sound at the receiving station's screen. Use Realtime on the station's tickets, a WebAudio tone (no binary asset), unlock audio with a user gesture ("Enable sound" button, remembered per device), per-station mute/volume as a UI-only convenience, repeat alert for unacknowledged tickets optional. Never name-keyed: the receiver station is the UUID on the order line.
+- **Menu photo upload (Phase 3 UI):** picker, preview, replace/remove, thumbnails on the menu list.

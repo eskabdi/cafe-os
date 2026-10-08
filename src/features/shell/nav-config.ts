@@ -71,6 +71,7 @@ export const MODULE_NAV: readonly ModuleNavItem[] = [
     group: 'management',
     icon: Store,
     summary: 'Menu items, categories and recipes.',
+    implemented: true,
   },
   {
     id: 'inventory',
@@ -80,6 +81,7 @@ export const MODULE_NAV: readonly ModuleNavItem[] = [
     group: 'management',
     icon: Warehouse,
     summary: 'Ingredients, stock levels and movements.',
+    implemented: true,
   },
   {
     id: 'day-close',

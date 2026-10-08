@@ -100,6 +100,28 @@ flowchart LR
 ```
 Nothing in this path writes; the client never sends a `restaurant_id`. Guards decide only what to render.
 
+## Level 1: menu and inventory (Phase 3, frontend `src/features/{menu,inventory}`)
+```mermaid
+flowchart LR
+    SPA["Menu / Inventory screens"] -->|select menu_items, categories, stations, recipe_lines, ingredients, restaurants.stock_stepup_threshold (RLS: own tenant)| DB[("Postgres")]
+    SPA -->|1. upload file -> menu-images/restaurants/&lt;own id&gt;/menu/&lt;uuid&gt;.png/jpg/webp (Storage policy: own prefix, menu.manage)| STO[("Storage: menu-images (private)")]
+    SPA -->|2. fn_create_menu_item / fn_update_menu_item (image_path, ids, price)| RPC["security definer RPCs (0029)"]
+    SPA -->|fn_set_menu_item_active, fn_set_recipe| RPC
+    SPA -->|fn_create/update/set_ingredient_active| RPC
+    SPA -->|fn_receive_stock / fn_adjust_stock / fn_reverse_stock_movement + idempotency key per intent| RPC
+    SPA -->|fn_list_stock_movements (keyset created_at,id)| RPC
+    SPA -->|fn_set_stock_stepup_threshold (aal2)| RPC
+    RPC -->|fn_menu_check_image: path + object exists| STO
+    RPC -->|ledger row + running total + audit| DB
+    STO -->|createSignedUrl (1 h) -> img src| SPA
+    DB -.->|Realtime menu_items / recipe_lines / categories / ingredients / stock_movements / stations -> invalidate queries| SPA
+    RPC -.->|mfa_required -> StepUpDialog (TOTP, aal2) -> same request, same key| SPA
+```
+The client sends ids, quantities, prices as typed decimals and an idempotency key (one `crypto.randomUUID()` per opened stock dialog,
+reused only for a retry of that intent). It never sends a `restaurant_id`, on-hand stock or a total; structured `P0001` codes are mapped to
+fixed copy in `src/lib/supabase/menu-inventory-errors.ts`. A failed create/update deletes the just-uploaded object; a replaced or removed photo
+is deleted after the update succeeds (the Storage delete policy refuses an object still referenced).
+
 ## Level 1: operational write path (Phases 4+)
 Clients send intents (ids, quantities) to `fn_*` RPCs; the RPC derives tenant and user, checks permission and open day, prices server-side,
 writes orders/stock/payments atomically, appends audit rows, and Realtime delivers RLS-filtered changes to authorized devices.

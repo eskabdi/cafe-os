@@ -72,13 +72,15 @@ export function ErrorState({
   title = 'Something went wrong',
   children,
   onRetry,
-}: Partial<StateProps> & { onRetry?: () => void }) {
+  level,
+}: Partial<StateProps> & { onRetry?: () => void; level?: 1 | 2 }) {
   return (
     <StatePanel
       icon={TriangleAlert}
       tone="text-status-error"
       role="alert"
       title={title}
+      level={level}
       action={onRetry ? <Button onClick={onRetry}>Try again</Button> : undefined}
     >
       {children ?? <p>Please check your connection and try again.</p>}
@@ -86,9 +88,16 @@ export function ErrorState({
   )
 }
 
-export function EmptyState({ title, children, action }: StateProps) {
+export function EmptyState({ title, children, action, level }: StateProps & { level?: 1 | 2 }) {
   return (
-    <StatePanel icon={Inbox} tone="text-muted-foreground" role="status" title={title} action={action}>
+    <StatePanel
+      icon={Inbox}
+      tone="text-muted-foreground"
+      role="status"
+      title={title}
+      action={action}
+      level={level}
+    >
       {children}
     </StatePanel>
   )

@@ -20,7 +20,7 @@ type RpcResult = PromiseLike<{ data: unknown; error: { message: string; details?
 
 const MACHINE_CODE = /^[a-z_]{3,48}$/
 
-async function callRpc(fn: string, args?: Record<string, unknown>): Promise<unknown> {
+export async function callRpc(fn: string, args?: Record<string, unknown>): Promise<unknown> {
   const client = supabase as unknown as { rpc: (fn: string, args?: Record<string, unknown>) => RpcResult }
   const { data, error } = await client.rpc(fn, args)
   // Server errors carry a stable machine code in `message` and optional safe context in `details` (rpc-conventions).

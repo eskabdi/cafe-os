@@ -48,6 +48,17 @@ describe('check-forbidden-patterns: client code', () => {
       'service-role-in-client',
     )
     expect(rules('src/a.ts', "const r = 'service_role'")).toContain('service-role-in-client')
+    expect(rules('src/a.ts', "const r = 'Service_Role'")).toContain('service-role-in-client')
+    expect(rules('src/a.ts', 'const k = env.MY_SERVICE_ROLE')).toContain('service-role-in-client')
+  })
+
+  it('does not flag the generated SQL helper name is_service_role', () => {
+    expect(rules('src/lib/supabase/types.ts', 'is_service_role: { Args: never; Returns: boolean }')).toEqual(
+      [],
+    )
+    expect(rules('src/a.ts', "rpc('is_service_role'); const r = 'service_role'")).toContain(
+      'service-role-in-client',
+    )
   })
 
   it.each([

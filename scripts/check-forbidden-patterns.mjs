@@ -223,7 +223,8 @@ export const RULES = [
     id: 'service-role-in-client',
     scope: 'ts',
     message: 'service_role / SERVICE_ROLE must never appear in src/ (browser code).',
-    test: regexTest(/service_role|SERVICE_ROLE/gi),
+    // `(?<!is_)` exempts the generated SQL helper name `is_service_role` (no key/secret) in src/lib/supabase/types.ts.
+    test: regexTest(/(?<!is_)service_role/gi),
   },
   {
     id: 'name-keyed-map',
