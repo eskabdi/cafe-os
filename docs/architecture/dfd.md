@@ -87,6 +87,19 @@ flowchart LR
     DB -->|status suspended: helpers resolve NULL, all tenant access denied| TEN["tenant users"]
 ```
 
+## Level 1: tenant shell read path (Phase 2)
+```mermaid
+flowchart LR
+    SPA["SPA tenant shell"] -->|fn_get_session_context (JWT)| CTX["profile, restaurant + branding, permissions, station_ids"]
+    CTX -->|strict hex -> CSS vars| TH["TenantThemeProvider"]
+    CTX -->|permission codes| NAV["MODULE_NAV -> sidebar / drawer / route guards"]
+    SPA -->|select stations (RLS: own tenant)| ST[("stations")]
+    ST -->|active rows, filtered by station_ids| NAV
+    ST -.->|Realtime change -> invalidate| SPA
+    RSA[("role_station_access")] -.->|Realtime change -> reload context| SPA
+```
+Nothing in this path writes; the client never sends a `restaurant_id`. Guards decide only what to render.
+
 ## Level 1: operational write path (Phases 4+)
 Clients send intents (ids, quantities) to `fn_*` RPCs; the RPC derives tenant and user, checks permission and open day, prices server-side,
 writes orders/stock/payments atomically, appends audit rows, and Realtime delivers RLS-filtered changes to authorized devices.

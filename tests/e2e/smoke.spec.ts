@@ -14,3 +14,11 @@ test('unauthenticated platform route redirects to the platform login', async ({ 
   await page.goto('/platform')
   await expect(page).toHaveURL(/\/platform\/login$/)
 })
+
+// Phase 2 shell routes: module placeholders and the generic station board sit behind the same auth guard.
+for (const path of ['/r/demo-cafe/pos', '/r/demo-cafe/stations/11111111-1111-4111-8111-111111111111']) {
+  test(`unauthenticated ${path} redirects to the slug login`, async ({ page }) => {
+    await page.goto(path)
+    await expect(page).toHaveURL(/\/r\/demo-cafe\/login$/)
+  })
+}
