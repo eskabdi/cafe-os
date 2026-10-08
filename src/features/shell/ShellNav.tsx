@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useId, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import { Home, KeyRound, ShieldCheck, Timer, UserCheck, type LucideIcon } from 'lucide-react'
 import { useAuth } from '@/features/auth'
@@ -36,13 +36,20 @@ const ACCOUNT_LINKS: Readonly<
   security: { label: 'Security', icon: ShieldCheck, path: securityPath },
 }
 
+/** A labelled group of links. The label is not a heading, so the page's own heading outline stays clean. */
 function Section({ title, children }: { title: string; children: ReactNode }) {
+  const labelId = useId()
   return (
     <div className="space-y-1">
-      <h2 className="px-3 pt-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+      <p
+        id={labelId}
+        className="px-3 pt-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+      >
         {title}
-      </h2>
-      <ul className="space-y-1">{children}</ul>
+      </p>
+      <ul aria-labelledby={labelId} className="space-y-1">
+        {children}
+      </ul>
     </div>
   )
 }

@@ -173,6 +173,7 @@ describe('dynamic station navigation', () => {
     renderAt('/r/demo-cafe', auth(ctx(['orders.view'], [S_A, S_C])))
     const nav = within(mainNav())
     const one = await nav.findByRole('link', { name: 'Station One' })
+    expect(nav.getByRole('list', { name: 'Stations' })).toContainElement(one)
     expect(one).toHaveAttribute('href', `/r/demo-cafe/stations/${S_A}`)
     expect(nav.getByRole('link', { name: 'Station Three' })).toHaveAttribute(
       'href',
@@ -186,7 +187,7 @@ describe('dynamic station navigation', () => {
 
   it('without the board permission, stations are neither fetched nor listed', () => {
     renderAt('/r/demo-cafe', auth(ctx(['menu.view'], [S_A])))
-    expect(screen.queryByRole('heading', { name: 'Stations' })).toBeNull()
+    expect(screen.queryByRole('list', { name: 'Stations' })).toBeNull()
     expect(h.fetchActiveStations).not.toHaveBeenCalled()
   })
 
