@@ -117,12 +117,19 @@ grant execute on function auth.uid(), auth.role(), auth.jwt() to anon, authentic
 -- postgres may read/write auth.users (seed and tests do) but does not own the auth schema
 grant all on all tables in schema auth to postgres;
 
--- minimal storage stub (Phase 3 adds policies)
-create table storage.buckets (id text primary key, name text not null, public boolean default false);
+-- minimal storage stub: the columns the migrations / tests use. Real Supabase: storage.buckets also has file_size_limit and
+-- allowed_mime_types; storage.objects is owned by supabase_storage_admin but `postgres` may create policies on it (migration 0029)
+-- and authenticated holds table privileges (RLS decides). The stub mirrors that: postgres owns the tables, authenticated has DML.
+create table storage.buckets (id text primary key, name text not null, public boolean default false,
+                              file_size_limit bigint, allowed_mime_types text[]);
 create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text references storage.buckets(id),
                               name text, owner uuid, created_at timestamptz default now());
 alter table storage.objects enable row level security;
+alter table storage.buckets owner to postgres;
+alter table storage.objects owner to postgres;
 grant all on all tables in schema storage to postgres;
+grant select, insert, update, delete on storage.objects to authenticated;
+grant select on storage.buckets to authenticated;
 
 create publication supabase_realtime;
 alter publication supabase_realtime owner to postgres;

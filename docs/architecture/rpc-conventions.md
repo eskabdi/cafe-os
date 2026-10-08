@@ -34,7 +34,8 @@ raise exception using errcode = 'P0001', message = '<stable_machine_code>', deta
 | `mfa_required`, `use_suspend_rpc`, `last_platform_super_admin` | platform / MFA invariants |
 | `invalid_timezone`, `invalid_expense_date`, `station_mismatch`, `table_mismatch`, `invalid_reversal` | validation / cross-row invariants |
 | `invalid_auth_user`, `username_taken`, `staff_limit_reached`, `identity_not_rotated`, `owner_email_unconfirmed` | staff / identity provisioning |
-| (reserved for later phases) `insufficient_stock`, `order_not_cancellable`, `invalid_state_transition`, `voucher_already_settled` | |
+| `insufficient_stock` (detail = the tenant's own ingredient name), `duplicate_name`, `plan_limit_reached` (detail `menu_items`) | menu / inventory (0029) |
+| (reserved for later phases) `order_not_cancellable`, `invalid_state_transition`, `voucher_already_settled` | |
 
 ## Phase-1 functions
 | function | callers | notes |
@@ -68,6 +69,30 @@ raise exception using errcode = 'P0001', message = '<stable_machine_code>', deta
 | `fn_get_session_context()` | authenticated | `session_timers` `{idle_warning_seconds, signout_seconds, pin_pad_idle_seconds}` (0025; every tenant user, also while restricted; absent for a platform admin without a tenant profile), `must_change_pin` (true only while `pin_change_status = 'required'`), `pin_change_status` (`none\|required\|pending_approval`), `pin_length` (4; 6 for Cashier) (permissions and station_ids are empty unless status is `none`), profile, tenant (no tin/opening_float), role, permission keys, station ids, writable flag, `open_day`, and for platform admins `platform_mfa` |
 | `fn_idempotency_begin(key, command, request_hash)` / `fn_idempotency_complete(key, command, result)` | internal | unique per (tenant, key, command); a payload hash is mandatory |
 | `fn_write_audit`, `fn_write_admin_audit`, `fn_next_number` | internal | `fn_write_audit(event, record, restaurant?)`: actor is only `auth.uid()` (no actor parameter, no direct EXECUTE for anyone) |
+
+## Phase-3 functions (migration 0029, menu and inventory)
+All: tenant guard -> permission -> input validation -> lock -> work -> audit event. Unknown and foreign ids both answer `not_found`; reference ids
+(category / station / ingredient) that are unknown, foreign or inactive answer `invalid_input` (detail = field) or `invalid_station`.
+Patch functions take a `jsonb` object with a closed key list (anything else, e.g. `restaurant_id` or `stock`, is `invalid_input` / `patch`); a no-op writes no audit event.
+| function | permission | notes |
+|---|---|---|
+| `fn_create_menu_item(name, category_id, station_id, price, description?, emoji?, image_path?, sort_order = 0)` | `menu.manage` | price numeric, max 2 decimals (never rounded silently); `image_path` must be `restaurants/<own tenant>/menu/<file>.(png\|jpg\|jpeg\|webp)` AND an uploaded object of bucket `menu-images`; `duplicate_name`; `plan_limit_reached` (plan `max_menu_items` over active items, advisory-locked); returns the item json |
+| `fn_update_menu_item(id, patch)` | `menu.manage` | keys: name, description, category_id, station_id, price, emoji, image_path, sort_order; null clears description / emoji / image_path only |
+| `fn_set_menu_item_active(id, active)` | `menu.manage` | soft deactivation / reactivation (reactivation re-checks the plan cap) |
+| `fn_set_recipe(menu_item_id, lines)` | `menu.manage` | `lines = [{ingredient_id, qty_per_serving}]` (<= 50, qty > 0, <= 3 decimals, unique, ingredients active in the tenant); replaces the recipe (`[]` clears); audit event only when it changed |
+| `fn_create_ingredient(name, station_id, unit, min_level = 0, cost_per_unit = 0, initial_stock = 0)` | `inventory.adjust` | `initial_stock > 0` writes an `opening` ledger row and needs the open day (`day_closed`) |
+| `fn_update_ingredient(id, patch)` | `inventory.adjust` | keys: name, station_id, unit, min_level, cost_per_unit; `unit` is locked (`invalid_state` / `unit_locked`) once any movement exists; stock is never patchable |
+| `fn_set_ingredient_active(id, active)` | `inventory.adjust` | deactivation refused (`invalid_state` / `ingredient_in_active_recipe`) while an active menu item's recipe uses it |
+| `fn_receive_stock(ingredient_id, qty, idempotency_key, note?)` | `inventory.receive` | qty > 0, <= 3 decimals; ledger row `received`; active ingredient only; idempotent per (tenant, key, `stock.receive`) with a payload hash (`idempotency_conflict`) |
+| `fn_adjust_stock(ingredient_id, qty_delta, reason, idempotency_key)` | `inventory.adjust` | signed non-zero delta; `reason` (3..300 chars) is mandatory and stored on the row (`manual_adjustment`); below-zero => `insufficient_stock`; **step-up**: `abs(delta) * cost_per_unit >= 5000` calls `fn_require_step_up()` (`mfa_required` for enrolled / forced admins); idempotent (`stock.adjust`) |
+| `fn_reverse_stock_movement(movement_id, reason, idempotency_key)` | `inventory.adjust` | compensating row (`reversal`, `reverses_movement_id`) for received / manual_adjustment / opening / correction rows; once only (`invalid_state` / `already_reversed`); reversal and consumption rows are `not_reversible` here; same step-up value rule; idempotent (`stock.reverse`) |
+| `fn_list_stock_movements(ingredient_id?, limit = 50 (1..200), before?)` | `inventory.view` + (station access OR `inventory.adjust` OR `inventory.receive`) | jsonb array newest first with ingredient name / unit / actor short name; own tenant only; readable while past_due |
+| `fn_post_stock_movement(rid, ingredient, delta, reason, note, order?, reverses?)` | internal | THE only writer of `stock_movements` and `ingredients.stock` / `received_today` / `consumed_today` (row-locked, open day required, never below zero) |
+| `fn_apply_recipe_consumption(order_id, menu_item_id, qty)` / `fn_reverse_order_consumption(order_id)` | internal (Phase 4: `fn_submit_order` / `fn_cancel_order`) | one negative `consumed` row per recipe line in ingredient-id order (no deadlocks); atomic `insufficient_stock`; cancellation writes compensating `reversal` rows for the order's unreversed consumption, a second call is a no-op |
+| `fn_stock_day`, `fn_menu_check_refs`, `fn_menu_check_image`, `fn_menu_item_json`, `fn_ingredient_json` | internal | helpers; no client EXECUTE |
+
+Stock model: `stock_movements` is the append-only ledger; `ingredients.stock` is the transactionally maintained running total, equal to `sum(qty_delta)` (asserted for every ingredient by `30_menu_inventory`).
+Idempotency keys are 8..128 chars and tenant-scoped. Direct client DML on `menu_items` / `recipe_lines` / `ingredients` master columns (0007/0020 grants + RLS) is unchanged and still audited by row triggers; the RPCs are the path that adds plan limits, reference validation, ledger rows and event audit.
 
 ## Closed-day allowlist (open question for Phase 4/9)
 `fn_guard_closed_day(kind, allowed_columns)` is the single place that decides what may still change after a day closes (installment collection, customer

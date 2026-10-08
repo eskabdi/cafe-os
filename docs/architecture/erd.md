@@ -102,3 +102,8 @@ Migration 0025: table `restaurant_session_settings` (1:1 with `restaurants`, PK 
 RESTRICT, indexed). One row per tenant: backfilled for existing tenants and created by the `restaurants` AFTER INSERT trigger `trg_create_session_settings`
 (covers `fn_provision_tenant`). CHECKs: `5 <= idle_warning_seconds < signout_seconds`, `signout_seconds between 15 and 900`, `pin_pad_idle_seconds between 15 and 300`.
 New permission `settings.session_timers`.
+
+Migration 0029 (menu and inventory): no new table. `stock_movements` is the append-only ledger (reasons `opening|received|consumed|manual_adjustment|reversal|correction`;
+`reverses_movement_id` is unique, so a row is reversed at most once; every row carries the open `day_session_id`); `ingredients.stock` is the running total maintained only by
+`fn_post_stock_movement` (invariant `stock = sum(qty_delta)`); `recipe_lines` unique `(menu_item_id, ingredient_id)`; `menu_items.image_path` points to Storage bucket `menu-images`
+(`restaurants/<restaurant_id>/menu/<file>`). Storage objects are not part of the relational model.

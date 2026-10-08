@@ -1,4 +1,4 @@
-# RLS matrix (migrations 0007 + 0010 + 0022 + 0023 + 0024 + 0025 + 0026 + 0027 + 0028; 83 policies; RLS enabled AND forced on every public table)
+# RLS matrix (migrations 0007 + 0010 + 0022 + 0023 + 0024 + 0025 + 0026 + 0027 + 0028 + 0029; 83 policies; RLS enabled AND forced on every public table)
 
 Helpers (SECURITY DEFINER, empty search_path, identity from `profiles` via `auth.uid()`, never from JWT claims):
 `current_restaurant_id()`, `current_user_id()`, `current_role_id()`, `has_permission(key)`, `has_station_access(station_id)` (RPC use), `current_station_ids()` (policies; one InitPlan per statement),
@@ -92,3 +92,15 @@ execute by default and a role-global default privilege now prevents it for FUTUR
 - 0026 (mandatory aal2): no table, policy or grant change (83 policies). `fn_require_aal2()` is a new internal function (no client EXECUTE); the PIN-change decision and the session-timer writes call it instead of `fn_require_step_up()`, so these two actions need an aal2 session and PIN-only staff cannot perform them even when a role holds the permission.
 - 0027 (aal2 not for PIN accounts, H1): no table, policy or grant change. `fn_require_aal2()` is redefined (same signature, still no client EXECUTE) to also refuse callers whose profile has `auth_method = 'pin'` or that have no profile, so a PIN session that enrols its own TOTP factor and reaches aal2 still gets `mfa_required`.
 - 0028 (aal2 needs a live authenticator, L1): no table, policy or grant change (83 policies). `fn_require_aal2()` is redefined (same signature, STABLE, empty search_path, same owner-only ACL) to also require a verified `auth.mfa_factors` row for `auth.uid()`, so an aal2 token that outlives a removed authenticator gets `mfa_required`; `session_timers` writes and PIN-change decisions are therefore also gated by a live factor.
+
+- 0029 (menu and inventory): no change to public tables, policies (still 83) or grants. New policies live on **storage.objects** (not counted in the public total): bucket `menu-images`
+  (private, 2 MiB, `image/png|jpeg|webp`, set on the bucket so the Storage API enforces size and MIME), four policies `menu_images_select|insert|update|delete`, all `to authenticated`:
+
+  | verb | predicate (tenant prefix from `current_restaurant_id()`, never from the client) |
+  |---|---|
+  | SELECT | `bucket_id = 'menu-images'` and name = `restaurants/<own id>/menu/<file>` and (`menu.view` or `menu.manage` or `orders.create`) |
+  | INSERT / UPDATE | same prefix plus extension `png|jpg|jpeg|webp`, no `..`, `menu.manage`, `current_tenant_writable()` |
+  | DELETE | same prefix, `menu.manage`, writable tenant, and no `menu_items.image_path` still points at the object |
+
+  The stock RPCs write the ledger as the definer; clients still have no INSERT / UPDATE / DELETE on `stock_movements` and no privilege on `ingredients.stock`, `opening_stock`, `received_today`, `consumed_today`.
+  `fn_list_stock_movements` repeats the `stock_movements_select` predicate explicitly (it is a definer function).
