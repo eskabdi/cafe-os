@@ -1,2 +1,4 @@
 # Prototype localStorage key name ("cafeos_rms_v12"), not a secret (generic-api-key false positive).
 2551b5dd863ec24bed4f93b4801240477a53b8b0:docs/prototype/cafeos.html:generic-api-key:637
+# Same prototype false positive, re-fingerprinted by the squash merge of #1 into main.
+d6ad98577ba2200e8cba0bf304c5b84e5324d1c4:docs/prototype/cafeos.html:generic-api-key:637
