@@ -1,6 +1,10 @@
 -- Phase 3 (migration 0029): menu / recipe / ingredient / stock RPCs, the stock ledger, menu-image Storage policies.
 -- Covers per RPC: happy path, permission denied, cross-tenant (not_found, no existence oracle), validation, replay/idempotency,
 -- closed day, tenant status, audit rows, step-up, and the Phase-3 gate (menu item + recipe -> real stock math).
+-- Review hardening (0029 edited in place): RPC-only writes, step-up on receive / initial stock / zero-cost quantity / cost edits,
+-- per-tenant stock_stepup_threshold (fn_set_stock_stepup_threshold), keyset (created_at, id), case-sensitive Storage paths, rename
+-- guard, overflow pre-check, recipe/reactivation locking, unit lock by recipe, idempotency key checked first, Phase-4 hooks deriving
+-- the tenant from the order row, narrow duplicate_name mapping.
 begin;
 select plan(190);
 
@@ -14,6 +18,7 @@ grant all on _f to public;
 create temp table _n (k text primary key, v text);
 grant all on _n to public;
 create function tests.nv(p_k text) returns uuid language sql stable as $$ select v::uuid from _n where k = p_k $$;
+create function tests.jv(p_k text) returns jsonb language sql stable as $$ select v::jsonb from _n where k = p_k $$;
 create function tests.ev(p_rid uuid, p_event text) returns int language sql stable security definer set search_path = '' as $$
   select count(*)::int from public.audit_logs a where a.restaurant_id = p_rid and a.event = p_event $$;
 create function tests.ledger_gap(p_rid uuid) returns bigint language sql stable security definer set search_path = '' as $$
@@ -35,6 +40,8 @@ insert into _n select 'b_kit', (select id::text from public.stations where resta
 insert into _n select 'a_day', (select id::text from public.day_sessions where restaurant_id = (select a from _f) and status = 'open');
 insert into storage.objects (bucket_id, name) select 'menu-images', 'restaurants/' || a || '/menu/burger.png' from _f;
 insert into storage.objects (bucket_id, name) select 'menu-images', 'restaurants/' || b || '/menu/foreign.png' from _f;
+-- an object whose path only differs in case from a valid one (only the owner / service could ever create it)
+insert into storage.objects (bucket_id, name) select 'menu-images', 'RESTAURANTS/' || a || '/MENU/case.png' from _f;
 insert into public.orders (restaurant_id, day_session_id, order_no, created_by, created_by_name_snapshot, subtotal, vat_rate_snapshot, vat_amount, total)
 select a, tests.nv('a_day'), 'ORD-9001', a_waiter, 'Yonas Tesfaye', 100, 15, 15, 115 from _f;
 insert into _n select 'a_order', (select id::text from public.orders where order_no = 'ORD-9001' and restaurant_id = (select a from _f));
@@ -53,17 +60,19 @@ select is((select count(*)::int from pg_proc p where p.pronamespace = 'public'::
            and p.proname in ('fn_create_menu_item','fn_update_menu_item','fn_set_menu_item_active','fn_set_recipe','fn_create_ingredient','fn_update_ingredient',
                              'fn_set_ingredient_active','fn_receive_stock','fn_adjust_stock','fn_reverse_stock_movement','fn_list_stock_movements',
                              'fn_post_stock_movement','fn_apply_recipe_consumption','fn_reverse_order_consumption','fn_stock_day','fn_menu_check_refs',
-                             'fn_menu_check_image','fn_menu_item_json','fn_ingredient_json')), 19, 'all 19 new functions: security definer with a pinned empty search_path');
+                             'fn_menu_check_image','fn_menu_item_json','fn_ingredient_json','fn_check_idempotency_key','fn_stock_stepup_threshold',
+                             'fn_stock_step_up','fn_set_stock_stepup_threshold')), 23, 'all 23 new functions: security definer with a pinned empty search_path');
 select is((select string_agg(p.proname, ',' order by p.proname) from pg_proc p where p.pronamespace = 'public'::regnamespace
            and p.proname in ('fn_create_menu_item','fn_update_menu_item','fn_set_menu_item_active','fn_set_recipe','fn_create_ingredient','fn_update_ingredient',
-                             'fn_set_ingredient_active','fn_receive_stock','fn_adjust_stock','fn_reverse_stock_movement','fn_list_stock_movements')
+                             'fn_set_ingredient_active','fn_receive_stock','fn_adjust_stock','fn_reverse_stock_movement','fn_list_stock_movements',
+                             'fn_set_stock_stepup_threshold')
              and has_function_privilege('authenticated', p.oid, 'execute') and not has_function_privilege('anon', p.oid, 'execute')
              and not has_function_privilege('public', p.oid, 'execute')),
-          'fn_adjust_stock,fn_create_ingredient,fn_create_menu_item,fn_list_stock_movements,fn_receive_stock,fn_reverse_stock_movement,fn_set_ingredient_active,fn_set_menu_item_active,fn_set_recipe,fn_update_ingredient,fn_update_menu_item',
-          'the 11 command / read RPCs: authenticated only (not anon, not PUBLIC)');
+          'fn_adjust_stock,fn_create_ingredient,fn_create_menu_item,fn_list_stock_movements,fn_receive_stock,fn_reverse_stock_movement,fn_set_ingredient_active,fn_set_menu_item_active,fn_set_recipe,fn_set_stock_stepup_threshold,fn_update_ingredient,fn_update_menu_item',
+          'the 12 command / read RPCs: authenticated only (not anon, not PUBLIC)');
 select is((select string_agg(p.proname, ',' order by p.proname) from pg_proc p where p.pronamespace = 'public'::regnamespace
            and p.proname in ('fn_post_stock_movement','fn_apply_recipe_consumption','fn_reverse_order_consumption','fn_stock_day','fn_menu_check_refs',
-                             'fn_menu_check_image','fn_menu_item_json','fn_ingredient_json')
+                             'fn_menu_check_image','fn_menu_item_json','fn_ingredient_json','fn_check_idempotency_key','fn_stock_stepup_threshold','fn_stock_step_up')
              and (has_function_privilege('authenticated', p.oid, 'execute') or has_function_privilege('anon', p.oid, 'execute')
                   or has_function_privilege('service_role', p.oid, 'execute'))), null, 'internal helpers (ledger writer, consumption, json) have no client EXECUTE');
 select is((select file_size_limit::text || ':' || public::text || ':' || array_to_string(allowed_mime_types, ',') from storage.buckets where id = 'menu-images'),
@@ -75,6 +84,13 @@ select ok(not exists (select 1 from pg_policies where schemaname = 'storage' and
 select ok(not has_column_privilege('authenticated', 'public.ingredients', 'stock', 'update')
       and not has_column_privilege('authenticated', 'public.ingredients', 'stock', 'insert')
       and not has_table_privilege('authenticated', 'public.stock_movements', 'insert,update,delete'), 'clients cannot write stock / the ledger directly');
+select is((select string_agg(t || ':' || p, ',' order by t, p) from unnest(array['menu_items', 'recipe_lines', 'ingredients']) t, unnest(array['insert', 'update', 'delete']) p
+           where has_table_privilege('authenticated', ('public.' || t)::regclass, p) or has_any_column_privilege('authenticated', ('public.' || t)::regclass, p)),
+          null, 'menu_items / recipe_lines / ingredients: no client INSERT / UPDATE / DELETE (table or column level); the RPCs are the only write path');
+select ok(has_table_privilege('authenticated', 'public.menu_items', 'select') and has_table_privilege('authenticated', 'public.recipe_lines', 'select')
+      and has_table_privilege('authenticated', 'public.ingredients', 'select'), '... SELECT (under RLS) stays');
+select ok((select count(*) from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname in ('fn_set_recipe', 'fn_set_menu_item_active')
+           and pg_get_functiondef(p.oid) ~* 'for share') = 2, 'fn_set_recipe and fn_set_menu_item_active take FOR SHARE locks on the recipe ingredients');
 
 -- ═════════ menu items ═════════
 select tests.authenticate_as((select a_waiter from _f));
@@ -105,6 +121,8 @@ select is(tests.run(format($q$select public.fn_create_menu_item('X9', %L, %L, 10
           'P0001|invalid_input|image_path', 'create: path to an object that was never uploaded refused');
 select is(tests.run(format($q$select public.fn_create_menu_item('X10', %L, %L, 10, null, null, %L)$q$, tests.nv('a_cat'), tests.nv('a_kit'), 'https://evil.example/x.png')),
           'P0001|invalid_input|image_path', 'create: URL instead of a storage path refused');
+select is(tests.run(format($q$select public.fn_create_menu_item('X11', %L, %L, 10, null, null, %L)$q$, tests.nv('a_cat'), tests.nv('a_kit'), 'RESTAURANTS/' || (select a from _f) || '/MENU/case.png')),
+          'P0001|invalid_input|image_path', 'create: case-variant prefix refused although such an object exists (path check is case-sensitive)');
 -- no rows were created by any refused call
 select is((select count(*)::int from public.menu_items where restaurant_id = (select a from _f) and name like 'X%'), 0, 'refused creates left no rows');
 
@@ -136,6 +154,22 @@ select is(tests.run(format($q$select public.fn_create_menu_item('Over Limit', %L
 select tests.clear_auth();
 update public.plans set max_menu_items = null where id = (select plan_id from public.subscriptions where restaurant_id = (select a from _f));
 
+-- unique_violation -> duplicate_name ONLY for the name key: an extra (test-only) unique index must surface as a generic conflict
+create unique index _t_menu_sort_uq on public.menu_items (restaurant_id, sort_order) where sort_order = 424242;
+create unique index _t_ing_min_uq on public.ingredients (restaurant_id, min_level) where min_level = 4242;
+select tests.authenticate_as((select a_admin from _f));
+select is(tests.run(format($q$select public.fn_create_menu_item('Sort One', %L, %L, 10, null, null, null, 424242)$q$, tests.nv('a_cat'), tests.nv('a_kit'))), 'ok:1', 'unique narrowing: first row with the test key');
+select is(tests.run(format($q$select public.fn_create_menu_item('Sort Two', %L, %L, 10, null, null, null, 424242)$q$, tests.nv('a_cat'), tests.nv('a_kit'))),
+          'P0001|invalid_state|unique_conflict', 'menu item: a non-name unique violation is NOT reported as duplicate_name');
+select is(tests.run(format($q$select public.fn_update_menu_item(%L, '{"sort_order": 424242}')$q$, tests.nv('burger'))),
+          'P0001|invalid_state|unique_conflict', 'update menu item: same narrowing');
+select is(tests.run(format($q$select public.fn_create_ingredient('Min One', %L, 'kg', 4242)$q$, tests.nv('a_kit'))), 'ok:1', 'unique narrowing: first ingredient with the test key');
+select is(tests.run(format($q$select public.fn_create_ingredient('Min Two', %L, 'kg', 4242)$q$, tests.nv('a_kit'))),
+          'P0001|invalid_state|unique_conflict', 'ingredient: a non-name unique violation is NOT reported as duplicate_name');
+select tests.clear_auth();
+drop index public._t_menu_sort_uq;
+drop index public._t_ing_min_uq;
+
 -- ═════════ ingredients ═════════
 select tests.authenticate_as((select a_waiter from _f));
 select is(tests.run(format($q$select public.fn_create_ingredient('Nope', %L, 'kg')$q$, tests.nv('a_kit'))), 'P0001|permission_denied|', 'create ingredient: waiter denied');
@@ -151,7 +185,7 @@ select is(tests.stock_of(tests.nv('flour')), 0.000, 'create ingredient without i
 select is(tests.mov_count(tests.nv('flour')), 0, '... and no movement');
 select is(tests.stock_of(tests.nv('beef')) || '|' || tests.mov_count(tests.nv('beef')), '50.500|1', 'create ingredient with initial stock: opening movement, on-hand 50.5');
 select is((select reason || '|' || qty_delta || '|' || day_session_id::text from public.stock_movements where ingredient_id = tests.nv('beef')), 'opening|50.500|' || tests.nv('a_day')::text, 'opening row bound to the open business day');
-select is(tests.ev((select a from _f), 'inventory.ingredient_created'), 3, 'create ingredient: audit events');
+select is(tests.ev((select a from _f), 'inventory.ingredient_created'), 4, 'create ingredient: audit events (3 here + Min One of the unique-narrowing check)');
 select is(tests.run(format($q$select public.fn_create_ingredient('gate flour', %L, 'kg')$q$, tests.nv('a_kit'))), 'P0001|duplicate_name|name', 'create ingredient: duplicate name');
 select is(tests.run(format($q$select public.fn_create_ingredient('Bad Unit', %L, 'lb')$q$, tests.nv('a_kit'))), 'P0001|invalid_input|unit', 'create ingredient: unit outside the allowed set');
 select is(tests.run(format($q$select public.fn_create_ingredient('Neg', %L, 'kg', -1)$q$, tests.nv('a_kit'))), 'P0001|invalid_input|min_level', 'create ingredient: negative min_level');
@@ -190,6 +224,18 @@ select is(tests.run(format($q$select public.fn_set_ingredient_active(%L, false)$
 select is((public.fn_set_ingredient_active(tests.nv('sugar'), false) ->> 'is_active'), 'false', 'unused ingredient deactivates (soft)');
 select is(tests.run(format($q$select public.fn_set_recipe(%L, '[{"ingredient_id": "%s", "qty_per_serving": 1}]')$q$, tests.nv('burger'), tests.nv('sugar'))), 'P0001|invalid_input|ingredient_id', 'recipe: inactive ingredient refused');
 select public.fn_set_ingredient_active(tests.nv('sugar'), true);
+-- unit lock by recipe (no movement yet) and reactivation of a menu item whose recipe uses a deactivated ingredient
+insert into _n select 'cake', (public.fn_create_menu_item('Gate Cake', tests.nv('a_cat'), tests.nv('a_pas'), 50) ->> 'id');
+insert into _n select 'salt', (public.fn_create_ingredient('Gate Salt', tests.nv('a_kit'), 'kg') ->> 'id');
+select public.fn_set_recipe(tests.nv('cake'), format('[{"ingredient_id": "%s", "qty_per_serving": 0.1}, {"ingredient_id": "%s", "qty_per_serving": 0.01}]', tests.nv('sugar'), tests.nv('salt'))::jsonb);
+select is(tests.mov_count(tests.nv('salt')), 0, 'salt has no movement ...');
+select is(tests.run(format($q$select public.fn_update_ingredient(%L, '{"unit": "g"}')$q$, tests.nv('salt'))), 'P0001|invalid_state|unit_locked', '... but a recipe uses it: unit locked (recipe quantities are in that unit)');
+select is((public.fn_set_menu_item_active(tests.nv('cake'), false) ->> 'is_active'), 'false', 'cake taken off sale');
+select is((public.fn_set_ingredient_active(tests.nv('sugar'), false) ->> 'is_active'), 'false', 'sugar may now be deactivated (only an INACTIVE item uses it)');
+select is(tests.run(format($q$select public.fn_set_menu_item_active(%L, true)$q$, tests.nv('cake'))), 'P0001|invalid_state|ingredient_inactive', 'reactivating the cake re-checks its recipe: inactive ingredient refused');
+select is((select is_active from public.menu_items where id = tests.nv('cake')), false, '... and the cake stays inactive');
+select public.fn_set_ingredient_active(tests.nv('sugar'), true);
+select is((public.fn_set_menu_item_active(tests.nv('cake'), true) ->> 'is_active'), 'true', 'with the ingredient active again the cake can be reactivated');
 select tests.clear_auth();
 
 -- ═════════ stock: visibility first (before the Kitchen role is granted receive) ═════════
@@ -223,6 +269,9 @@ select is(tests.ev((select a from _f), 'inventory.stock_received'), 1, '... nor 
 select is(tests.run(format($q$select public.fn_receive_stock(%L, 7, 'key-receive-0001', 'delivery #1')$q$, tests.nv('flour'))), 'P0001|idempotency_conflict|', 'same key, different payload -> idempotency_conflict');
 select is(tests.run(format($q$select public.fn_receive_stock(%L, 5, 'short')$q$, tests.nv('flour'))), 'P0001|invalid_input|idempotency_key', 'receive: key shorter than 8 chars refused');
 select is(tests.run(format($q$select public.fn_receive_stock(%L, 5, null)$q$, tests.nv('flour'))), 'P0001|invalid_input|idempotency_key', 'receive: missing key refused');
+select is(tests.run(format($q$select public.fn_receive_stock(%L, 5, 'short')$q$, tests.nv('b_ing'))), 'P0001|invalid_input|idempotency_key', 'receive: the key is validated BEFORE the ingredient lookup / lock (foreign id: still the key error)');
+select is(tests.run(format($q$select public.fn_adjust_stock(%L, -1, 'any reason', 'short')$q$, gen_random_uuid())), 'P0001|invalid_input|idempotency_key', 'adjust: key validated before the lookup');
+select is(tests.run(format($q$select public.fn_reverse_stock_movement(%L, 'any reason', null)$q$, gen_random_uuid())), 'P0001|invalid_input|idempotency_key', 'reverse: key validated before the lookup');
 select is(tests.run(format($q$select public.fn_receive_stock(%L, 0, 'key-receive-0002')$q$, tests.nv('flour'))), 'P0001|invalid_input|qty', 'receive: zero qty');
 select is(tests.run(format($q$select public.fn_receive_stock(%L, -5, 'key-receive-0003')$q$, tests.nv('flour'))), 'P0001|invalid_input|qty', 'receive: negative qty (use adjust)');
 select is(tests.run(format($q$select public.fn_receive_stock(%L, 1.2345, 'key-receive-0004')$q$, tests.nv('flour'))), 'P0001|invalid_input|qty', 'receive: 4 decimals refused');
@@ -311,6 +360,17 @@ select is(public.fn_reverse_order_consumption(tests.nv('a_order')), 2, 'cancelli
 select is(tests.stock_of(tests.nv('flour')) || '|' || tests.stock_of(tests.nv('beef')), '161.000|55.000', 'stock back to 161 / 55 after the reversal');
 select is((select consumed_today from public.ingredients where id = tests.nv('flour')), 0.000, 'consumed_today follows the reversal');
 select is(public.fn_reverse_order_consumption(tests.nv('a_order')), 0, 'second cancel is a no-op (already reversed)');
+-- QR / table-session path: no profile behind the call at all; the tenant comes from the order row
+select tests.clear_auth();
+select is(public.fn_apply_recipe_consumption(tests.nv('a_order'), tests.nv('burger'), 1), 2, 'hooks work with NO signed-in profile (QR path): tenant derived from orders.restaurant_id');
+select is((select count(*)::int from public.stock_movements where order_id = tests.nv('a_order') and reason = 'consumed' and created_by is null), 2, '... rows carry no actor (null), never a foreign one');
+select tests.set_jwt((select b_admin from _f));
+select is(tests.run(format($q$select public.fn_apply_recipe_consumption(%L, %L, 1)$q$, tests.nv('a_order'), tests.nv('b_menu'))), 'P0001|not_found|', 'a menu item of another tenant than the ORDER is not_found (caller identity irrelevant)');
+select is(public.fn_reverse_order_consumption(tests.nv('a_order')), 2, 'reversal also keyed on the order tenant (caller is a tenant-B identity)');
+select is((select count(*)::int from public.stock_movements where order_id = tests.nv('a_order') and created_by = (select b_admin from _f)), 0, 'a foreign caller is never recorded as the actor of tenant A rows');
+select tests.clear_auth();
+select tests.set_jwt((select a_admin from _f));
+select is(tests.stock_of(tests.nv('flour')) || '|' || tests.stock_of(tests.nv('beef')), '161.000|55.000', 'stock back to 161 / 55');
 select is(tests.ledger_gap((select a from _f)), 0::bigint, 'LEDGER INVARIANT: every ingredient on-hand = sum of its movements (tenant A, incl. seed)');
 select is(tests.ledger_gap((select b from _f)), 0::bigint, 'LEDGER INVARIANT holds for tenant B');
 select tests.clear_auth();
@@ -323,14 +383,98 @@ select tests.clear_auth();
 
 -- ═════════ movement log ═════════
 select tests.authenticate_as((select a_admin from _f));
-select is(jsonb_array_length(public.fn_list_stock_movements(tests.nv('flour'))), 7, 'admin log for flour: receive, 3 adjusts, 1 reversal, 1 consumption, 1 consumption reversal');
+select is(jsonb_array_length(public.fn_list_stock_movements(tests.nv('flour'))), 9, 'admin log for flour: receive, 3 adjusts, 1 reversal, 2 consumptions, 2 consumption reversals');
 select is((public.fn_list_stock_movements(tests.nv('flour'), 1) -> 0 ->> 'ingredient_name'), 'Gate Flour', 'log rows carry the ingredient name');
 select is((public.fn_list_stock_movements(tests.nv('flour'), 1) -> 0 ->> 'created_by_name'), (select short_name from public.profiles where id = (select a_admin from _f)), 'log rows carry the actor short name');
 select is(jsonb_array_length(public.fn_list_stock_movements(tests.nv('flour'), 3)), 3, 'limit respected');
 select is(tests.run($q$select public.fn_list_stock_movements(null, 0)$q$), 'P0001|invalid_input|limit', 'limit 0 refused');
 select is(tests.run($q$select public.fn_list_stock_movements(null, 1000)$q$), 'P0001|invalid_input|limit', 'limit 1000 refused');
 select is(jsonb_array_length(public.fn_list_stock_movements(tests.nv('flour'), 50, now() - interval '1 day')), 0, 'keyset p_before filters');
+-- all 9 flour rows share created_at (one transaction): only the (created_at, id) keyset can page through them
+insert into _n select 'log_full', public.fn_list_stock_movements(tests.nv('flour'), 200)::text;
+insert into _n select 'log_p1', public.fn_list_stock_movements(tests.nv('flour'), 4)::text;
+select is(jsonb_array_length(public.fn_list_stock_movements(tests.nv('flour'), 50, (tests.jv('log_p1') -> 3 ->> 'created_at')::timestamptz)), 0,
+          'p_before alone (created_at only) loses every row that shares the timestamp ...');
+select is((select string_agg(e ->> 'id', ',' order by n) from jsonb_array_elements(
+             tests.jv('log_p1') || public.fn_list_stock_movements(tests.nv('flour'), 4, (tests.jv('log_p1') -> 3 ->> 'created_at')::timestamptz, (tests.jv('log_p1') -> 3 ->> 'id')::uuid))
+             with ordinality as t(e, n)),
+          (select string_agg(e ->> 'id', ',' order by n) from jsonb_array_elements(tests.jv('log_full')) with ordinality as t(e, n) where n <= 8),
+          '... (p_before, p_before_id) continues exactly after the last row: page1 || page2 = the first 8 rows, no gap, no repeat');
+select is(jsonb_array_length(public.fn_list_stock_movements(tests.nv('flour'), 200, (tests.jv('log_full') -> 8 ->> 'created_at')::timestamptz, (tests.jv('log_full') -> 8 ->> 'id')::uuid)), 0,
+          'after the oldest row: empty page');
+select is(tests.run(format($q$select public.fn_list_stock_movements(null, 10, null, %L)$q$, gen_random_uuid())), 'P0001|invalid_input|before', 'p_before_id without p_before refused');
 select tests.clear_auth();
+
+-- ═════════ step-up hardening + per-tenant threshold (a_admin owns a verified factor since the aal2 call above) ═════════
+select tests.authenticate_as((select a_admin from _f));
+insert into _n select 'oil', (public.fn_create_ingredient('Gate Oil', tests.nv('a_kit'), 'L', 0, 100) ->> 'id');
+insert into _n select 'water', (public.fn_create_ingredient('Gate Water', tests.nv('a_kit'), 'L') ->> 'id');
+select is(tests.run(format($q$select public.fn_receive_stock(%L, 50, 'key-stepup-0001')$q$, tests.nv('oil'))), 'P0001|mfa_required|', 'receive worth 50 x 100 = 5000 ETB without aal2 -> mfa_required (receive is gated too)');
+select is(tests.mov_count(tests.nv('oil')), 0, '... and no ledger row survived the refusal');
+select is((public.fn_receive_stock(tests.nv('oil'), 49, 'key-stepup-0002') ->> 'stock'), '49.000', 'receive worth 4900 ETB: no step-up');
+select is(tests.run(format($q$select public.fn_create_ingredient('Gate Saffron', %L, 'g', 0, 100, 50)$q$, tests.nv('a_kit'))), 'P0001|mfa_required|', 'create ingredient with initial stock worth 5000 ETB -> mfa_required');
+select is((select count(*)::int from public.ingredients where name = 'Gate Saffron'), 0, '... and no ingredient row was created');
+select is(tests.run(format($q$select public.fn_create_ingredient('Gate Saffron', %L, 'g', 0, 100, 49)$q$, tests.nv('a_kit'))), 'ok:1', 'initial stock worth 4900 ETB: no step-up');
+select is(tests.run(format($q$select public.fn_receive_stock(%L, 5000, 'key-stepup-0003')$q$, tests.nv('water'))), 'P0001|mfa_required|', 'cost 0: gated on quantity (|qty| 5000 >= threshold)');
+select is(tests.run(format($q$select public.fn_adjust_stock(%L, 4999, 'opening count', 'key-stepup-0004')$q$, tests.nv('water'))), 'ok:1', 'cost 0, |qty| 4999: no step-up');
+select is(tests.run(format($q$select public.fn_adjust_stock(%L, -4999, 'wrong count', 'key-stepup-0005')$q$, tests.nv('water'))), 'ok:1', 'negative quantity below the threshold: no step-up');
+insert into _n select 'water_mov', (select id::text from public.stock_movements where ingredient_id = tests.nv('water') and qty_delta = 4999);
+select is(tests.run(format($q$select public.fn_update_ingredient(%L, '{"cost_per_unit": 0}')$q$, tests.nv('oil'))), 'P0001|mfa_required|', 'changing cost_per_unit of an ingredient WITH movements needs step-up (zeroing the cost cannot evade the value rule)');
+select is((select cost_per_unit from public.ingredients where id = tests.nv('oil')), 100.00, '... cost unchanged');
+select is((public.fn_update_ingredient(tests.nv('oil'), '{"min_level": 3}') ->> 'min_level'), '3.000', 'other fields of that ingredient need no step-up');
+select is((public.fn_update_ingredient(tests.nv('salt'), '{"cost_per_unit": 9}') ->> 'cost_per_unit'), '9.00', 'cost of an ingredient without movements changes without step-up');
+-- threshold RPC: permission, aal2, validation
+select is(tests.run($q$select public.fn_set_stock_stepup_threshold(1000)$q$), 'P0001|mfa_required|', 'threshold: settings.manage holder on an aal1 session -> mfa_required');
+select tests.clear_auth();
+select tests.authenticate_as((select a_waiter from _f));
+select is(tests.run($q$select public.fn_set_stock_stepup_threshold(1000)$q$), 'P0001|permission_denied|', 'threshold: waiter (no settings.manage) denied');
+select tests.clear_auth();
+select tests.as_anon();
+select is(tests.run($q$select public.fn_set_stock_stepup_threshold(1000)$q$), '42501|permission denied for function fn_set_stock_stepup_threshold|', 'threshold: anon has no EXECUTE');
+select tests.clear_auth();
+select tests.aal2((select a_admin from _f));
+select is(tests.run($q$select public.fn_set_stock_stepup_threshold(99)$q$), 'P0001|invalid_input|stock_stepup_threshold', 'threshold below 100 refused');
+select is(tests.run($q$select public.fn_set_stock_stepup_threshold(1000001)$q$), 'P0001|invalid_input|stock_stepup_threshold', 'threshold above 1000000 refused');
+select is(tests.run($q$select public.fn_set_stock_stepup_threshold(1000.001)$q$), 'P0001|invalid_input|stock_stepup_threshold', 'threshold with 3 decimals refused');
+select is(tests.run($q$select public.fn_set_stock_stepup_threshold(null)$q$), 'P0001|invalid_input|stock_stepup_threshold', 'null threshold refused');
+select is((public.fn_set_stock_stepup_threshold(1000) ->> 'stock_stepup_threshold'), '1000.00', 'aal2 tenant admin sets the threshold to 1000 ETB');
+select is((select (new_data ->> 'old') || '|' || (new_data ->> 'new') || '|' || actor_id::text from public.audit_logs
+           where restaurant_id = (select a from _f) and event = 'settings.stock_stepup_threshold_updated'),
+          '5000.00|1000.00|' || (select a_admin from _f)::text, 'threshold change audited with old / new value and the real actor');
+select public.fn_set_stock_stepup_threshold(1000);
+select is(tests.ev((select a from _f), 'settings.stock_stepup_threshold_updated'), 1, 'replay with the same value writes no second audit event');
+select is((select stock_stepup_threshold from public.restaurants), 1000.00, 'clients can read their own threshold');
+select is(tests.run($q$update public.restaurants set stock_stepup_threshold = 100$q$), '42501|permission denied for table restaurants|', 'the threshold is not client-updatable (RPC only)');
+select tests.clear_auth();
+select is((select stock_stepup_threshold from public.restaurants where id = (select b from _f)), 5000.00, 'tenant B keeps its own threshold (5000)');
+select tests.aal2((select b_admin from _f));
+select is((public.fn_set_stock_stepup_threshold(2000) ->> 'stock_stepup_threshold'), '2000.00', 'B admin sets B''s threshold ...');
+select tests.clear_auth();
+select is((select string_agg(stock_stepup_threshold::text, ',' order by id = (select a from _f) desc) from public.restaurants where id in ((select a from _f), (select b from _f))), '1000.00,2000.00',
+          '... which never touches A''s (tenant from identity, no tenant parameter)');
+select tests.authenticate_as((select a_admin from _f));
+select is(tests.run(format($q$select public.fn_receive_stock(%L, 10, 'key-stepup-0006')$q$, tests.nv('oil'))), 'P0001|mfa_required|', 'with threshold 1000: a 10 x 100 = 1000 ETB receive now needs step-up');
+select is(tests.run(format($q$select public.fn_receive_stock(%L, 9, 'key-stepup-0007')$q$, tests.nv('oil'))), 'ok:1', '900 ETB: no step-up');
+select is(tests.run(format($q$select public.fn_reverse_stock_movement(%L, 'counted twice', 'key-stepup-0008')$q$, tests.nv('water_mov'))), 'P0001|mfa_required|', 'reversal of a 4999-unit zero-cost row: quantity >= threshold 1000 -> mfa_required');
+select tests.clear_auth();
+update public.restaurants set status = 'past_due' where id = (select a from _f);
+select tests.aal2((select a_admin from _f));
+select is(tests.run($q$select public.fn_set_stock_stepup_threshold(3000)$q$), 'P0001|tenant_read_only|', 'threshold: past_due tenant is read-only');
+select tests.clear_auth();
+update public.restaurants set status = 'active', stock_stepup_threshold = 5000 where id = (select a from _f);
+
+-- ═════════ overflow: resulting on-hand / counters are pre-checked (numeric(12,3)) ═════════
+insert into public.ingredients (restaurant_id, name, station_id, unit, stock, opening_stock) values ((select a from _f), 'Gate Max', tests.nv('a_kit'), 'g', 999999999, 999999999);
+insert into public.stock_movements (restaurant_id, ingredient_id, station_id, qty_delta, reason, day_session_id)
+select restaurant_id, id, station_id, 999999999, 'opening', tests.nv('a_day') from public.ingredients where name = 'Gate Max';
+insert into _n select 'max', (select id::text from public.ingredients where name = 'Gate Max');
+select tests.authenticate_as((select a_admin from _f));
+select is(tests.run(format($q$select public.fn_receive_stock(%L, 1, 'key-overflow-0001')$q$, tests.nv('max'))), 'P0001|invalid_input|qty', 'receive that would push on-hand past 999999999.999 -> invalid_input (no numeric overflow error)');
+select is(tests.run(format($q$select public.fn_adjust_stock(%L, 0.999, 'fill to the brim', 'key-overflow-0002')$q$, tests.nv('max'))), 'ok:1', 'exactly 999999999.999 is accepted');
+select is(tests.run(format($q$select public.fn_adjust_stock(%L, 0.001, 'one more gram', 'key-overflow-0003')$q$, tests.nv('max'))), 'P0001|invalid_input|qty', 'one more thousandth refused');
+select is(tests.stock_of(tests.nv('max')), 999999999.999, 'on-hand at the maximum, nothing half-written');
+select tests.clear_auth();
+select is(tests.ledger_gap((select a from _f)), 0::bigint, 'LEDGER INVARIANT still holds after the step-up / overflow cases');
 
 -- ═════════ closed business day ═════════
 update public.day_sessions set status = 'closed', closed_at = now(), closed_by = (select a_admin from _f), order_count = 1, gross_collected = 100,
@@ -344,6 +488,8 @@ select is(tests.run(format($q$select public.fn_create_ingredient('Closed Day Ite
 select is(tests.stock_of(tests.nv('flour')), 161.000, 'closed day: stock unchanged by refused commands');
 select is(jsonb_array_length(public.fn_list_stock_movements(tests.nv('flour'), 200)) > 0, true, 'the movement log stays readable');
 select tests.clear_auth();
+select is(tests.run(format($q$select public.fn_apply_recipe_consumption(%L, %L, 1)$q$, tests.nv('a_order'), tests.nv('burger'))), 'P0001|day_closed|no open business day', 'Phase-4 hook: consumption with no open day -> day_closed');
+select is(tests.run(format($q$select public.fn_reverse_order_consumption(%L)$q$, tests.nv('a_order'))), 'P0001|day_closed|order business day is closed', 'Phase-4 hook: cancelling an order of a CLOSED day -> day_closed (Phase 4 must handle it)');
 
 -- ═════════ tenant status ═════════
 update public.restaurants set status = 'past_due' where id = (select a from _f);
@@ -376,10 +522,15 @@ select is(tests.run(format($q$insert into storage.objects (bucket_id, name) valu
 select is((select count(*)::int from storage.objects where name like 'restaurants/' || (select b from _f) || '/%'), 0, 'storage: tenant A cannot list tenant B objects');
 select is(tests.run(format($q$delete from storage.objects where name = 'restaurants/%s/menu/burger.png'$q$, (select a from _f))), 'ok:0', 'storage: an image still referenced by a menu item cannot be deleted');
 select is(tests.run(format($q$delete from storage.objects where name = 'restaurants/%s/menu/new-photo.webp'$q$, (select a from _f))), 'ok:1', 'storage: an unreferenced image can be deleted');
+select is(tests.run(format($q$insert into storage.objects (bucket_id, name) values ('menu-images', 'RESTAURANTS/%s/MENU/upper.png')$q$, (select a from _f))), '42501|new row violates row-level security policy for table "objects"|', 'storage: case-variant prefix refused (case-sensitive path)');
+select is(tests.run(format($q$insert into storage.objects (bucket_id, name) values ('menu-images', 'restaurants/%s/menu/Photo.PNG')$q$, (select a from _f))), 'ok:1', 'storage: mixed-case file name and upper-case extension accepted');
+select is(tests.run(format($q$update storage.objects set name = 'restaurants/%s/menu/renamed.png' where name = 'restaurants/%s/menu/burger.png'$q$, (select a from _f), (select a from _f))), 'ok:0', 'storage: an image still referenced by a menu item cannot be renamed (no dangling image_path)');
+select is(tests.run(format($q$update storage.objects set name = 'restaurants/%s/menu/photo2.webp' where name = 'restaurants/%s/menu/Photo.PNG'$q$, (select a from _f), (select a from _f))), 'ok:1', 'storage: an unreferenced image can be renamed');
+select is((select count(*)::int from storage.objects where name ~ ('^restaurants/' || (select a from _f) || '/menu/burger\.png$')), 1, 'storage: the referenced image is still in place');
 select tests.clear_auth();
 select tests.authenticate_as((select a_waiter from _f));
 select is(tests.run(format($q$insert into storage.objects (bucket_id, name) values ('menu-images', 'restaurants/%s/menu/waiter.png')$q$, (select a from _f))), '42501|new row violates row-level security policy for table "objects"|', 'storage: waiter (no menu.manage) cannot upload');
-select is((select count(*)::int from storage.objects where bucket_id = 'menu-images'), 1, 'storage: waiter (menu.view) reads own tenant objects only (burger.png)');
+select is((select count(*)::int from storage.objects where bucket_id = 'menu-images'), 2, 'storage: waiter (menu.view) reads own tenant objects only (burger.png, photo2.webp; never the case-variant object)');
 select tests.clear_auth();
 select tests.authenticate_as((select b_admin from _f));
 select is((select count(*)::int from storage.objects where bucket_id = 'menu-images' and name like 'restaurants/' || (select a from _f) || '/%'), 0, 'storage: tenant B cannot see tenant A objects');

@@ -94,7 +94,7 @@ select is(tests.oracle(format($q$insert into public.tables (id, restaurant_id, t
           '42501|permission denied for table tables|', 'tables: INSERT with a chosen id refused identically');
 select is(tests.oracle(format($q$update public.recipe_lines set id = {id} where restaurant_id = %L$q$, (select a from _f)), (select id from public.recipe_lines limit 1)),
           '42501|permission denied for table recipe_lines|', 'recipe_lines: UPDATE of id refused identically');
-select is(tests.run(format($q$insert into public.menu_items (restaurant_id, name, category_id, station_id, price) values (%L, 'Plain New', %L, %L, 5)$q$, (select a from _f), (select cat from _f), (select st from _f))), 'ok:1', 'menu_items: a normal insert still works');
+select is(tests.run(format($q$select public.fn_create_menu_item('Plain New', %L, %L, 5)$q$, (select cat from _f), (select st from _f))), 'ok:1', 'menu_items: a normal create still works (through fn_create_menu_item, the only write path since 0029)');
 select tests.clear_auth();
 
 -- ═════════ L3 resolver ═════════
