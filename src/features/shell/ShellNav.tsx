@@ -128,7 +128,7 @@ export function ShellNav({ slug, onNavigate }: { slug: string; onNavigate?: () =
         <Section key={group} title={GROUP_LABELS[group]}>
           {items.map((m) => (
             <li key={m.id}>
-              <NavLink to={modulePath(slug, m.segment)} className={linkClass} onClick={onNavigate}>
+              <NavLink to={modulePath(slug, m.segment)} end className={linkClass} onClick={onNavigate}>
                 <m.icon aria-hidden="true" className="h-5 w-5 shrink-0" />
                 {m.label}
               </NavLink>

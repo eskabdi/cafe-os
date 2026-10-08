@@ -23,6 +23,7 @@ const { TenantShell } = await import('@/features/tenant/TenantShell')
 const { default: TenantHome, TenantNotFound } = await import('@/features/tenant/TenantRoutes')
 const { StationKDS } = await import('@/features/stations/StationKDS')
 const { RequireStationAccess } = await import('./RouteGuards')
+const { CONTEXT_REFRESH_DEBOUNCE_MS } = await import('@/features/stations/StationsProvider')
 const { placeholderModuleRoutes } = await import('./module-routes')
 
 const RID = '99999999-9999-4999-8999-999999999999'
@@ -204,6 +205,36 @@ describe('dynamic station navigation', () => {
     await userEvent.setup().click(within(mainNav()).getByRole('button', { name: 'Try again' }))
     expect(await within(mainNav()).findByRole('link', { name: 'Station One' })).toBeInTheDocument()
   })
+
+  it('uses ONE Realtime subscription for sidebar, drawer and board', async () => {
+    const user = userEvent.setup()
+    renderAt(`/r/demo-cafe/stations/${S_A}`, auth(ctx(['orders.view'], [S_A])))
+    await user.click(screen.getByRole('button', { name: 'Open navigation' }))
+    await screen.findByRole('dialog', { name: 'Navigation' })
+    expect(h.subscribeToStations).toHaveBeenCalledTimes(1)
+  })
+
+  it('coalesces a burst of stations / access events into one context refresh', async () => {
+    const value = auth(ctx(['orders.view'], [S_A]))
+    renderAt('/r/demo-cafe', value)
+    await within(mainNav()).findByRole('link', { name: 'Station One' })
+    const handlers = (h.subscribeToStations.mock.calls as unknown as unknown[][])[0]?.[2] as {
+      onStationsChange: () => void
+      onAccessChange: () => void
+    }
+    vi.useFakeTimers()
+    try {
+      handlers.onStationsChange()
+      handlers.onAccessChange()
+      handlers.onStationsChange()
+      handlers.onAccessChange()
+      expect(value.refreshContext).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(CONTEXT_REFRESH_DEBOUNCE_MS + 10)
+      expect(value.refreshContext).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('route guards', () => {
@@ -249,6 +280,15 @@ describe('route guards', () => {
   it('a URL slug of another tenant redirects to the identity tenant home', async () => {
     const router = renderAt('/r/other-cafe/pos', auth(ctx(['orders.create'])))
     await waitFor(() => expect(router.state.location.pathname).toBe('/r/demo-cafe'))
+  })
+})
+
+describe('active nav state', () => {
+  it('Settings is not also current on a settings sub-route', () => {
+    renderAt('/r/demo-cafe/settings/terminals', auth(ctx(['settings.manage', 'kiosks.manage'])))
+    const current = within(mainNav()).getAllByRole('link', { current: 'page' })
+    expect(current).toHaveLength(1)
+    expect(current[0]).toHaveAttribute('href', '/r/demo-cafe/settings/terminals')
   })
 })
 

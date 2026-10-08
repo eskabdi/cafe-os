@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { useAuth } from '@/features/auth'
 import { tenantHomePath } from '@/features/pin-change/pin-paths'
 import { ShellErrorBoundary } from './ErrorBoundary'
+import { StationsProvider } from '@/features/stations/StationsProvider'
 import { ShellNav } from './ShellNav'
 import { PageSkeleton } from './states'
 
@@ -67,57 +68,59 @@ export function AppShell({ slug }: { slug: string }) {
   const displayName = user?.short_name || user?.first_name
 
   return (
-    <div className="min-h-screen bg-background">
-      <a
-        href="#main-content"
-        className={`sr-only z-[60] rounded-md bg-white px-4 py-3 text-ink focus:not-sr-only focus:fixed focus:left-2 focus:top-2 ${focusRing}`}
-      >
-        Skip to content
-      </a>
-      <header className="sticky top-0 z-40 border-b border-line bg-white">
-        <div className="flex items-center gap-2 px-2 py-1 lg:px-4">
-          <MobileNav slug={slug} />
-          <Brand slug={slug} />
-          {context?.restaurant && (
-            <span
-              className="ml-2 hidden truncate text-sm font-medium text-ink sm:inline"
-              data-testid="shell-tenant"
-            >
-              {context.restaurant.name}
-            </span>
-          )}
-          <div className="ml-auto flex items-center gap-2">
-            {displayName && (
-              <span className="hidden text-right text-sm leading-tight md:block">
-                <span className="block font-medium text-ink">{displayName}</span>
-                {context?.role && (
-                  <span className="block text-xs text-muted-foreground">{context.role.name}</span>
-                )}
+    <StationsProvider>
+      <div className="min-h-screen bg-background [--shell-header-h:53px]">
+        <a
+          href="#main-content"
+          className={`sr-only z-[60] rounded-md bg-white px-4 py-3 text-ink focus:not-sr-only focus:fixed focus:left-2 focus:top-2 ${focusRing}`}
+        >
+          Skip to content
+        </a>
+        <header className="sticky top-0 z-40 border-b border-line bg-white">
+          <div className="flex items-center gap-2 px-2 py-1 lg:px-4">
+            <MobileNav slug={slug} />
+            <Brand slug={slug} />
+            {context?.restaurant && (
+              <span
+                className="ml-2 hidden truncate text-sm font-medium text-ink sm:inline"
+                data-testid="shell-tenant"
+              >
+                {context.restaurant.name}
               </span>
             )}
-            <Button variant="ghost" onClick={() => void signOut()}>
-              <LogOut aria-hidden="true" className="h-5 w-5" />
-              <span className="hidden sm:inline">Sign out</span>
-              <span className="sr-only sm:hidden">Sign out</span>
-            </Button>
+            <div className="ml-auto flex items-center gap-2">
+              {displayName && (
+                <span className="hidden text-right text-sm leading-tight md:block">
+                  <span className="block font-medium text-ink">{displayName}</span>
+                  {context?.role && (
+                    <span className="block text-xs text-muted-foreground">{context.role.name}</span>
+                  )}
+                </span>
+              )}
+              <Button variant="ghost" onClick={() => void signOut()}>
+                <LogOut aria-hidden="true" className="h-5 w-5" />
+                <span className="hidden sm:inline">Sign out</span>
+                <span className="sr-only sm:hidden">Sign out</span>
+              </Button>
+            </div>
           </div>
+        </header>
+        <div className="flex">
+          <aside
+            aria-label="Sidebar"
+            className="sticky top-[var(--shell-header-h)] hidden h-[calc(100dvh-var(--shell-header-h))] w-64 shrink-0 overflow-y-auto border-r border-line bg-white lg:block"
+          >
+            <ShellNav slug={slug} />
+          </aside>
+          <main id="main-content" tabIndex={-1} className="min-w-0 flex-1 focus:outline-none">
+            <ShellErrorBoundary resetKey={pathname}>
+              <Suspense fallback={<PageSkeleton />}>
+                <Outlet />
+              </Suspense>
+            </ShellErrorBoundary>
+          </main>
         </div>
-      </header>
-      <div className="flex">
-        <aside
-          aria-label="Sidebar"
-          className="sticky top-[53px] hidden h-[calc(100vh-53px)] w-64 shrink-0 overflow-y-auto border-r border-line bg-white lg:block"
-        >
-          <ShellNav slug={slug} />
-        </aside>
-        <main id="main-content" tabIndex={-1} className="min-w-0 flex-1 focus:outline-none">
-          <ShellErrorBoundary resetKey={pathname}>
-            <Suspense fallback={<PageSkeleton />}>
-              <Outlet />
-            </Suspense>
-          </ShellErrorBoundary>
-        </main>
       </div>
-    </div>
+    </StationsProvider>
   )
 }

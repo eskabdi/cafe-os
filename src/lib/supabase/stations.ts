@@ -1,14 +1,13 @@
 import { z } from 'zod'
+import { isUuid } from '@/lib/domain/navigation'
 import { supabase } from './client'
 
 // Station rows for the navigation and the generic StationKDS. RLS (stations_select) limits SELECT to the caller's own tenant
 // (restaurant_id = current_restaurant_id()); no restaurant_id is ever sent as a filter by the client. Per-station access is
 // role_station_access, reported by fn_get_session_context as station_ids and enforced by current_station_ids() in RLS.
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
 export const stationRowSchema = z.object({
-  id: z.string().regex(UUID_RE),
+  id: z.string().refine(isUuid),
   name: z.string().min(1).max(60),
   description: z.string().max(300).nullable().optional(),
   // mirrors the stations table checks; anything else is dropped to null (never applied to a style)
@@ -61,7 +60,7 @@ export interface StationsSubscription {
  * filters only narrow the stream). Returns an unsubscribe function. No polling.
  */
 export function subscribeToStations(restaurantId: string, roleId: string, handlers: StationsSubscription): () => void {
-  if (!UUID_RE.test(restaurantId) || !UUID_RE.test(roleId)) return () => {}
+  if (!isUuid(restaurantId) || !isUuid(roleId)) return () => {}
   const channel = supabase
     .channel(`stations:${restaurantId}:${roleId}`)
     .on(
