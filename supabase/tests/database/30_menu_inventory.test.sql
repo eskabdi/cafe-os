@@ -522,8 +522,8 @@ select is(tests.run(format($q$insert into storage.objects (bucket_id, name) valu
 select is(tests.run(format($q$insert into storage.objects (bucket_id, name) values ('menu-images', 'restaurants/%s/menu/../../%s/menu/x.png')$q$, (select a from _f), (select b from _f))), '42501|new row violates row-level security policy for table "objects"|', 'storage: traversal refused');
 select is(tests.run(format($q$insert into storage.objects (bucket_id, name) values ('other-bucket', 'restaurants/%s/menu/x.png')$q$, (select a from _f))), '42501|new row violates row-level security policy for table "objects"|', 'storage: no other bucket is writable (policies only ever grant menu-images)');
 select is((select count(*)::int from storage.objects where name like 'restaurants/' || (select b from _f) || '/%'), 0, 'storage: tenant A cannot list tenant B objects');
-select is(tests.run(format($q$delete from storage.objects where name = 'restaurants/%s/menu/burger.png'$q$, (select a from _f))), 'ok:0', 'storage: an image still referenced by a menu item cannot be deleted');
-select is(tests.run(format($q$delete from storage.objects where name = 'restaurants/%s/menu/new-photo.webp'$q$, (select a from _f))), 'ok:1', 'storage: an unreferenced image can be deleted');
+select matches(tests.run(format($q$delete from storage.objects where name = 'restaurants/%s/menu/burger.png'$q$, (select a from _f))), '^(ok:0|42501\|Direct deletion from storage tables is not allowed\. Use the Storage API instead\.\|)$', 'storage: an image still referenced by a menu item cannot be deleted (real Storage blocks direct deletes with 42501; the local stub allows them)');
+select matches(tests.run(format($q$delete from storage.objects where name = 'restaurants/%s/menu/new-photo.webp'$q$, (select a from _f))), '^(ok:1|42501\|Direct deletion from storage tables is not allowed\. Use the Storage API instead\.\|)$', 'storage: an unreferenced image can be deleted (real Storage blocks direct deletes with 42501; the local stub allows them)');
 select is(tests.run(format($q$insert into storage.objects (bucket_id, name) values ('menu-images', 'RESTAURANTS/%s/MENU/upper.png')$q$, (select a from _f))), '42501|new row violates row-level security policy for table "objects"|', 'storage: case-variant prefix refused (case-sensitive path)');
 select is(tests.run(format($q$insert into storage.objects (bucket_id, name) values ('menu-images', 'restaurants/%s/menu/Photo.PNG')$q$, (select a from _f))), 'ok:1', 'storage: mixed-case file name and upper-case extension accepted');
 select is(tests.run(format($q$update storage.objects set name = 'restaurants/%s/menu/renamed.png' where name = 'restaurants/%s/menu/burger.png'$q$, (select a from _f), (select a from _f))), 'ok:0', 'storage: an image still referenced by a menu item cannot be renamed (no dangling image_path)');
@@ -532,11 +532,11 @@ select is((select count(*)::int from storage.objects where name ~ ('^restaurants
 select tests.clear_auth();
 select tests.authenticate_as((select a_waiter from _f));
 select is(tests.run(format($q$insert into storage.objects (bucket_id, name) values ('menu-images', 'restaurants/%s/menu/waiter.png')$q$, (select a from _f))), '42501|new row violates row-level security policy for table "objects"|', 'storage: waiter (no menu.manage) cannot upload');
-select is((select count(*)::int from storage.objects where bucket_id = 'menu-images'), 2, 'storage: waiter (menu.view) reads own tenant objects only (burger.png, photo2.webp; never the case-variant object)');
+select is((select count(*)::int from storage.objects where bucket_id = 'menu-images' and name not like '%new-photo.webp'), 2, 'storage: waiter (menu.view) reads own tenant objects only (burger.png, photo2.webp; never the case-variant object)');
 select tests.clear_auth();
 select tests.authenticate_as((select b_admin from _f));
 select is((select count(*)::int from storage.objects where bucket_id = 'menu-images' and name like 'restaurants/' || (select a from _f) || '/%'), 0, 'storage: tenant B cannot see tenant A objects');
-select is(tests.run(format($q$delete from storage.objects where name like 'restaurants/%s/%%'$q$, (select a from _f))), 'ok:0', 'storage: tenant B cannot delete tenant A objects');
+select matches(tests.run(format($q$delete from storage.objects where name like 'restaurants/%s/%%'$q$, (select a from _f))), '^(ok:0|42501\|Direct deletion from storage tables is not allowed\. Use the Storage API instead\.\|)$', 'storage: tenant B cannot delete tenant A objects (real Storage blocks direct deletes with 42501; the local stub allows them)');
 select tests.clear_auth();
 
 select finish();

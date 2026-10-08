@@ -302,7 +302,7 @@ select matches(tests.run(format($q$insert into storage.objects (bucket_id, name)
 select tests.clear_auth();
 select tests.authenticate_as((select a_waiter from _f));
 select is(tests.run(format($q$update storage.objects set name = name where name like 'restaurants/%s/%%'$q$, (select a from _f))), 'ok:0', 'storage: waiter (no menu.manage) cannot update objects');
-select is(tests.run(format($q$delete from storage.objects where name like 'restaurants/%s/%%'$q$, (select a from _f))), 'ok:0', 'storage: waiter cannot delete objects');
+select matches(tests.run(format($q$delete from storage.objects where name like 'restaurants/%s/%%'$q$, (select a from _f))), '^(ok:0|42501\|Direct deletion from storage tables is not allowed\. Use the Storage API instead\.\|)$', 'storage: waiter cannot delete objects (real Storage blocks direct deletes with 42501; the local stub allows them)');
 select tests.clear_auth();
 
 -- ═════════ tenant status: every RPC, storage, direct DML; the other tenant is unaffected ═════════
