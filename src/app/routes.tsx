@@ -27,6 +27,8 @@ const StationKDS = lazy(() =>
   import('@/features/stations/StationKDS').then((m) => ({ default: m.StationKDS })),
 )
 const PlatformRoutes = lazy(() => import('@/features/platform/PlatformRoutes'))
+const MenuPage = lazy(() => import('@/features/menu').then((m) => ({ default: m.MenuPage })))
+const InventoryPage = lazy(() => import('@/features/inventory').then((m) => ({ default: m.InventoryPage })))
 
 function Loading() {
   return (
@@ -117,7 +119,24 @@ export const routes: RouteObject[] = [
                         ),
                       },
                       { path: 'settings/security', element: <SecurityPage /> },
-                      // Generated from the nav catalogue: POS, Cashier, Menu, Inventory, ... ("coming soon" placeholders).
+                      // Phase 3 modules: same permission codes as their nav entries (menu.view / inventory.view).
+                      {
+                        path: 'menu',
+                        element: (
+                          <RequireNavPermission permission="menu.view">
+                            <MenuPage />
+                          </RequireNavPermission>
+                        ),
+                      },
+                      {
+                        path: 'inventory',
+                        element: (
+                          <RequireNavPermission permission="inventory.view">
+                            <InventoryPage />
+                          </RequireNavPermission>
+                        ),
+                      },
+                      // Generated from the nav catalogue: POS, Cashier, Day close, ... ("coming soon" placeholders).
                       ...placeholderModuleRoutes(),
                       // ONE generic board for every station row (by UUID); never a per-station route.
                       {
