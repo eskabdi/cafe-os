@@ -11,7 +11,8 @@ export const MENU_IMAGE_BUCKET = 'menu-images'
 /** Signed URL lifetime; the query re-signs before it expires. */
 export const SIGNED_URL_TTL_SECONDS = 3600
 
-export const menuImageUrlKey = (path: string) => ['menu-image-url', path] as const
+/** Tenant-scoped like every other query key; the whole cache is also cleared on sign-out / user change (AuthProvider). */
+export const menuImageUrlKey = (restaurantId: string, path: string) => ['menu-image-url', restaurantId, path] as const
 
 /**
  * Validates (type, size, magic bytes) and uploads a picked file. `restaurantId` must be the identity's own restaurant id

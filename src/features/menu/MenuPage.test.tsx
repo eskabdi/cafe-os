@@ -133,6 +133,23 @@ beforeEach(() => {
 })
 
 describe('MenuPage', () => {
+  it('realtime: ingredient and recipe changes invalidate the ingredient list used by the recipe editor', async () => {
+    const spy = vi.spyOn(QueryClient.prototype, 'invalidateQueries')
+    try {
+      renderPage(['menu.view'])
+      await waitFor(() => expect(h.subscribeToMenu).toHaveBeenCalledWith(RID, expect.any(Function)))
+      const onChange = h.subscribeToMenu.mock.calls[0]![1] as (table: string) => void
+      onChange('ingredients')
+      expect(spy).toHaveBeenLastCalledWith({ queryKey: ['ingredients', RID] })
+      spy.mockClear()
+      onChange('recipe_lines')
+      expect(spy).toHaveBeenCalledWith({ queryKey: ['recipe', RID] })
+      expect(spy).toHaveBeenCalledWith({ queryKey: ['ingredients', RID] })
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('groups active items by category row in sort order, with filters generated from the rows (view only)', async () => {
     renderPage(['menu.view'])
     const sections = await screen.findAllByRole('region')

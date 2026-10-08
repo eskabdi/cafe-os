@@ -135,6 +135,20 @@ beforeEach(() => {
 })
 
 describe('InventoryPage', () => {
+  it('realtime: an ingredient change also invalidates the menu items', async () => {
+    const spy = vi.spyOn(QueryClient.prototype, 'invalidateQueries')
+    try {
+      renderPage(['inventory.view'])
+      await waitFor(() => expect(h.subscribeToInventory).toHaveBeenCalledWith(RID, expect.any(Function)))
+      const onChange = h.subscribeToInventory.mock.calls[0]![1] as (table: string) => void
+      onChange('ingredients')
+      expect(spy).toHaveBeenCalledWith({ queryKey: ['ingredients', RID] })
+      expect(spy).toHaveBeenCalledWith({ queryKey: ['menu-items', RID] })
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('lists ingredients with a low-stock alert; view-only users get no stock actions', async () => {
     renderPage(['inventory.view'])
     const alert = await screen.findByRole('alert')
@@ -268,6 +282,15 @@ describe('InventoryPage', () => {
         }),
       ),
     )
+  })
+
+  it('a failed movement log shows an ErrorState with an h2 (the page keeps a single h1)', async () => {
+    h.listStockMovements.mockRejectedValue(new Error('stock_movements_unavailable'))
+    renderPage(['inventory.view'])
+    await userEvent.click(await screen.findByRole('tab', { name: 'Movement log' }))
+    const heading = await screen.findByRole('heading', { name: 'The movement log could not be loaded' })
+    expect(heading.tagName).toBe('H2')
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
   })
 
   it('History opens the movement log filtered to the ingredient', async () => {

@@ -37,12 +37,10 @@ const MENU_COLUMNS = 'id,name,description,category_id,station_id,price,emoji,ima
 export async function fetchMenuItems(): Promise<MenuItem[]> {
   const { data, error } = await supabase.from('menu_items').select(MENU_COLUMNS).order('sort_order', { ascending: true })
   if (error) throw new Error('menu_unavailable')
-  const out: MenuItem[] = []
-  for (const row of Array.isArray(data) ? data : []) {
-    const parsed = menuItemSchema.safeParse(row)
-    if (parsed.success) out.push(parsed.data)
-  }
-  return out
+  // A row that fails validation fails the whole read (UI shows ErrorState) instead of silently vanishing from the list.
+  const parsed = z.array(menuItemSchema).safeParse(data ?? [])
+  if (!parsed.success) throw new Error('menu_unavailable')
+  return parsed.data
 }
 
 /** The recipe of one menu item (RLS: menu.view / menu.manage / inventory.view). */
@@ -109,10 +107,10 @@ export async function setRecipe(menuItemId: string, lines: RecipeLine[]): Promis
   )
 }
 
-export type MenuRealtimeTable = 'menu_items' | 'recipe_lines' | 'categories' | 'stations'
+export type MenuRealtimeTable = 'menu_items' | 'recipe_lines' | 'categories' | 'stations' | 'ingredients'
 
 /**
- * Realtime changes to the tenant's menu items, recipe lines, categories and stations (RLS applies to Realtime; the filter only
+ * Realtime changes to the tenant's menu items, recipe lines, categories, stations and ingredients (RLS applies to Realtime; the filter only
  * narrows the stream). The handler invalidates queries; no polling. Returns an unsubscribe function.
  */
 export function subscribeToMenu(restaurantId: string, onChange: (table: MenuRealtimeTable) => void): () => void {
@@ -124,6 +122,7 @@ export function subscribeToMenu(restaurantId: string, onChange: (table: MenuReal
     .on('postgres_changes', { event: '*', schema: 'public', table: 'recipe_lines', filter }, () => onChange('recipe_lines'))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'categories', filter }, () => onChange('categories'))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'stations', filter }, () => onChange('stations'))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'ingredients', filter }, () => onChange('ingredients'))
     .subscribe()
   return () => {
     void supabase.removeChannel(channel)

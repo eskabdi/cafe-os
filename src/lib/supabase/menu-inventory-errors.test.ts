@@ -3,9 +3,22 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('./client', () => ({ supabase: {} }))
 
 const { RpcError } = await import('./rpc')
-const { ClientActionError, errorField, isStepUpRequired, menuInventoryErrorMessage } = await import('./menu-inventory-errors')
+const { ClientActionError, createIngredientErrorMessage, errorField, isStepUpRequired, menuInventoryErrorMessage } =
+  await import('./menu-inventory-errors')
 
 const GENERIC = 'Something went wrong. Please try again.'
+
+describe('createIngredientErrorMessage', () => {
+  it('adds a retry hint to duplicate_name and otherwise matches the shared copy', () => {
+    expect(createIngredientErrorMessage(new RpcError('duplicate_name'))).toMatch(
+      /already used.*If you just retried, check the ingredient list first/,
+    )
+    expect(menuInventoryErrorMessage(new RpcError('duplicate_name'))).not.toMatch(/retried/)
+    expect(createIngredientErrorMessage(new RpcError('day_closed'))).toBe(
+      menuInventoryErrorMessage(new RpcError('day_closed')),
+    )
+  })
+})
 
 describe('menuInventoryErrorMessage', () => {
   it.each([

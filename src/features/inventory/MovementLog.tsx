@@ -62,10 +62,14 @@ export function MovementLog({
         </p>
       )}
       {log.isError && (
-        <ErrorState title="The movement log could not be loaded" onRetry={() => void log.refetch()} />
+        <ErrorState
+          title="The movement log could not be loaded"
+          level={2}
+          onRetry={() => void log.refetch()}
+        />
       )}
       {log.isSuccess && rows.length === 0 && (
-        <EmptyState title="No movements yet">
+        <EmptyState title="No movements yet" level={2}>
           <p>Received, adjusted and consumed stock appears here.</p>
         </EmptyState>
       )}

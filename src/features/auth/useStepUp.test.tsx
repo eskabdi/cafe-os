@@ -29,7 +29,7 @@ function renderHarness() {
     signOut: vi.fn(),
     refreshContext: vi.fn(),
   }
-  render(
+  return render(
     <AuthContext.Provider value={value}>
       <MemoryRouter>
         <Harness />
@@ -93,6 +93,45 @@ describe('useStepUp', () => {
       result = runner!.run(action).catch((e: unknown) => e)
     })
     await userEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+    await expect(result).resolves.toMatchObject({ code: 'step_up_cancelled' })
+    expect(action).toHaveBeenCalledTimes(1)
+  })
+
+  it('a second mfa_required while one is pending cancels the first and re-runs only the second', async () => {
+    renderHarness()
+    const first = vi.fn().mockRejectedValue(new RpcError('mfa_required'))
+    const second = vi
+      .fn()
+      .mockRejectedValueOnce(new RpcError('mfa_required'))
+      .mockResolvedValueOnce('second-ok')
+    let r1: Promise<unknown> = Promise.resolve()
+    let r2: Promise<unknown> = Promise.resolve()
+    act(() => {
+      r1 = runner!.run(first).catch((e: unknown) => e)
+    })
+    await screen.findByRole('dialog')
+    act(() => {
+      r2 = runner!.run(second)
+    })
+    await expect(r1).resolves.toMatchObject({ code: 'step_up_cancelled' })
+    const code = await screen.findByLabelText('Authentication code')
+    await waitFor(() => expect(code).toBeEnabled())
+    await userEvent.type(code, '123456')
+    await userEvent.click(screen.getByRole('button', { name: 'Verify' }))
+    await expect(r2).resolves.toBe('second-ok')
+    expect(first).toHaveBeenCalledTimes(1)
+    expect(second).toHaveBeenCalledTimes(2)
+  })
+
+  it('unmounting rejects a pending step-up with step_up_cancelled', async () => {
+    const { unmount } = renderHarness()
+    const action = vi.fn().mockRejectedValue(new RpcError('mfa_required'))
+    let result: Promise<unknown> = Promise.resolve()
+    act(() => {
+      result = runner!.run(action).catch((e: unknown) => e)
+    })
+    await screen.findByRole('dialog')
+    unmount()
     await expect(result).resolves.toMatchObject({ code: 'step_up_cancelled' })
     expect(action).toHaveBeenCalledTimes(1)
   })

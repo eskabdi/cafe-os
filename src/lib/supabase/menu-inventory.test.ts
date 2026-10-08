@@ -122,28 +122,44 @@ describe('menu RPCs', () => {
     expect(err).toMatchObject({ code: 'plan_limit_reached', detail: 'menu_items' })
   })
 
-  it('reads menu items via RLS without a tenant filter and drops invalid rows', async () => {
-    h.result = { data: [itemJson, { ...itemJson, id: 'bad' }], error: null }
+  it('reads menu items via RLS without a tenant filter', async () => {
+    h.result = { data: [itemJson], error: null }
     await expect(menu.fetchMenuItems()).resolves.toEqual([itemJson])
     expect(h.calls[0]).toEqual(['from', 'menu_items'])
     expect(h.calls.some((c) => c[0] === 'eq')).toBe(false)
   })
 
-  it('subscribes to menu, recipe, category and station changes of the tenant', () => {
+  it('fails the menu read with a generic error when any row is malformed (no silent drop)', async () => {
+    h.result = { data: [itemJson, { ...itemJson, id: 'bad' }], error: null }
+    const err = await menu.fetchMenuItems().catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toBe('menu_unavailable')
+  })
+
+  it('subscribes to menu, recipe, category, station and ingredient changes of the tenant', () => {
     const changed = vi.fn()
     const off = menu.subscribeToMenu(RID, changed)
-    expect(h.ons.map((o) => o.table)).toEqual(['menu_items', 'recipe_lines', 'categories', 'stations'])
+    expect(h.ons.map((o) => o.table)).toEqual(['menu_items', 'recipe_lines', 'categories', 'stations', 'ingredients'])
     expect(new Set(h.ons.map((o) => o.filter))).toEqual(new Set([`restaurant_id=eq.${RID}`]))
     h.ons[1]?.cb()
     expect(changed).toHaveBeenCalledWith('recipe_lines')
     off()
     expect(h.removeChannel).toHaveBeenCalled()
     expect(menu.subscribeToMenu('not-a-uuid', changed)).toBeTypeOf('function')
-    expect(h.ons).toHaveLength(4)
+    expect(h.ons).toHaveLength(5)
   })
 })
 
 describe('ingredient and stock RPCs', () => {
+  it('reads ingredients via RLS and fails with a generic error when any row is malformed', async () => {
+    h.result = { data: [ingJson], error: null }
+    await expect(inv.fetchIngredients()).resolves.toEqual([ingJson])
+    expect(h.calls[0]).toEqual(['from', 'ingredients'])
+    h.result = { data: [ingJson, { ...ingJson, unit: 'cups' }], error: null }
+    const err = await inv.fetchIngredients().catch((e: unknown) => e)
+    expect((err as Error).message).toBe('ingredients_unavailable')
+  })
+
   it('fn_create_ingredient / fn_update_ingredient / fn_set_ingredient_active', async () => {
     h.rpc.mockResolvedValue({ data: ingJson, error: null })
     await inv.createIngredient({ name: 'Ing', station_id: ST, unit: 'kg' })

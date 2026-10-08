@@ -20,6 +20,7 @@ import {
   type IngredientPatch,
   type MovementCursor,
 } from '@/lib/supabase/inventory'
+import { menuItemsKey } from '@/lib/supabase/menu'
 import { allStationsKey } from '@/lib/supabase/reference-data'
 
 export const MOVEMENTS_PAGE_SIZE = 25
@@ -68,8 +69,11 @@ export function useInventoryRealtime() {
     if (!rid) return
     return subscribeToInventory(rid, (table) => {
       if (table === 'stations') void qc.invalidateQueries({ queryKey: allStationsKey(rid) })
-      else if (table === 'ingredients') void qc.invalidateQueries({ queryKey: ingredientsKey(rid) })
-      else {
+      else if (table === 'ingredients') {
+        void qc.invalidateQueries({ queryKey: ingredientsKey(rid) })
+        // cheap: only refetched if a menu list is mounted (otherwise just marked stale)
+        void qc.invalidateQueries({ queryKey: menuItemsKey(rid) })
+      } else {
         void qc.invalidateQueries({ queryKey: ['stock-movements', rid] })
         void qc.invalidateQueries({ queryKey: ingredientsKey(rid) })
       }

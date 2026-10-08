@@ -35,16 +35,20 @@ export function useRecipe(menuItemId: string | null) {
 
 /** Signed URL for a private menu image; re-signed well before it expires. */
 export function useMenuImageUrl(path: string | null | undefined) {
+  const rid = useRestaurantId()
   return useQuery({
-    queryKey: menuImageUrlKey(path ?? ''),
+    queryKey: menuImageUrlKey(rid, path ?? ''),
     queryFn: () => signedMenuImageUrl(path ?? ''),
-    enabled: Boolean(path),
+    enabled: Boolean(rid && path),
     staleTime: (SIGNED_URL_TTL_SECONDS - 300) * 1000,
     gcTime: (SIGNED_URL_TTL_SECONDS - 300) * 1000,
   })
 }
 
-/** One Realtime channel per menu screen: any menu / recipe / category / station change invalidates the matching query. */
+/**
+ * One Realtime channel per menu screen: any menu / recipe / category / station / ingredient change invalidates the matching
+ * query. Ingredients feed the recipe editor's list, and recipe changes alter an ingredient's "used in a recipe" state.
+ */
 export function useMenuRealtime() {
   const rid = useRestaurantId()
   const qc = useQueryClient()
@@ -52,7 +56,10 @@ export function useMenuRealtime() {
     if (!rid) return
     return subscribeToMenu(rid, (table) => {
       if (table === 'menu_items') void qc.invalidateQueries({ queryKey: menuItemsKey(rid) })
-      else if (table === 'recipe_lines') void qc.invalidateQueries({ queryKey: ['recipe', rid] })
+      else if (table === 'recipe_lines') {
+        void qc.invalidateQueries({ queryKey: ['recipe', rid] })
+        void qc.invalidateQueries({ queryKey: ingredientsKey(rid) })
+      } else if (table === 'ingredients') void qc.invalidateQueries({ queryKey: ingredientsKey(rid) })
       else if (table === 'categories') void qc.invalidateQueries({ queryKey: categoriesKey(rid) })
       else void qc.invalidateQueries({ queryKey: allStationsKey(rid) })
     })

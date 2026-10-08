@@ -61,12 +61,10 @@ export async function fetchIngredients(): Promise<Ingredient[]> {
     .select('id,name,station_id,unit,stock,min_level,cost_per_unit,is_active')
     .order('name', { ascending: true })
   if (error) throw new Error('ingredients_unavailable')
-  const out: Ingredient[] = []
-  for (const row of Array.isArray(data) ? data : []) {
-    const parsed = ingredientSchema.safeParse(row)
-    if (parsed.success) out.push(parsed.data)
-  }
-  return out
+  // A row that fails validation fails the whole read (UI shows ErrorState) instead of silently vanishing from the list.
+  const parsed = z.array(ingredientSchema).safeParse(data ?? [])
+  if (!parsed.success) throw new Error('ingredients_unavailable')
+  return parsed.data
 }
 
 export interface IngredientInput {

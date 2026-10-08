@@ -17,7 +17,11 @@ import { NativeSelect } from '@/components/ui/select'
 import { useStepUp } from '@/features/auth'
 import { INGREDIENT_UNITS, pickerRows } from '@/lib/domain/inventory'
 import type { Ingredient } from '@/lib/supabase/inventory'
-import { errorField, menuInventoryErrorMessage } from '@/lib/supabase/menu-inventory-errors'
+import {
+  createIngredientErrorMessage,
+  errorField,
+  menuInventoryErrorMessage,
+} from '@/lib/supabase/menu-inventory-errors'
 import type { StationRow } from '@/lib/supabase/stations'
 import {
   emptyIngredientForm,
@@ -79,14 +83,11 @@ export function IngredientFormDialog({
       }
       onClose()
     } catch (err) {
+      const message = ingredient ? menuInventoryErrorMessage(err) : createIngredientErrorMessage(err)
       const field = errorField(err)
       if (field && FORM_FIELDS.has(field)) {
-        setError(
-          field as keyof IngredientFormValues,
-          { type: 'server', message: menuInventoryErrorMessage(err) },
-          { shouldFocus: true },
-        )
-      } else setFormError(menuInventoryErrorMessage(err))
+        setError(field as keyof IngredientFormValues, { type: 'server', message }, { shouldFocus: true })
+      } else setFormError(message)
     } finally {
       setBusy(false)
     }

@@ -115,3 +115,13 @@ export function menuInventoryErrorMessage(err: unknown): string {
       return 'Something went wrong. Please try again.'
   }
 }
+
+/**
+ * Copy for a failed ingredient CREATE. fn_create_ingredient has no idempotency key, so a retry after a lost response can hit
+ * duplicate_name for the row the first attempt already created: point the user at the list before they pick a new name.
+ */
+export function createIngredientErrorMessage(err: unknown): string {
+  return errorCode(err).code === 'duplicate_name'
+    ? 'That name is already used. If you just retried, check the ingredient list first: it may already have been created.'
+    : menuInventoryErrorMessage(err)
+}
