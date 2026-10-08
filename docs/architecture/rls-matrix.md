@@ -1,4 +1,4 @@
-# RLS matrix (migrations 0007 + 0010 + 0022 + 0023 + 0024 + 0025 + 0026 + 0027 + 0028; 83 policies; RLS enabled AND forced on every public table)
+# RLS matrix (migrations 0007 + 0010 + 0022 + 0023 + 0024 + 0025 + 0026 + 0027 + 0028 + 0029; 83 policies; RLS enabled AND forced on every public table)
 
 Helpers (SECURITY DEFINER, empty search_path, identity from `profiles` via `auth.uid()`, never from JWT claims):
 `current_restaurant_id()`, `current_user_id()`, `current_role_id()`, `has_permission(key)`, `has_station_access(station_id)` (RPC use), `current_station_ids()` (policies; one InitPlan per statement),
@@ -9,7 +9,7 @@ Suspended/cancelled tenants resolve to NULL (no access); `past_due` is read-only
 | table | SELECT | INSERT | UPDATE | DELETE |
 |---|---|---|---|---|
 | plans | anon/auth: active; platform: all | platform super admin | platform super admin | platform super admin |
-| restaurants | own row; platform admins all | none (fn_provision_tenant) | `settings.manage` + W, columns: name, phone, address, tin, vat_rate, opening_float, auto_consume_stock, timezone, branding; platform super admin | none |
+| restaurants | own row; platform admins all (`stock_stepup_threshold` readable, written only by `fn_set_stock_stepup_threshold`) | none (fn_provision_tenant) | `settings.manage` + W, columns: name, phone, address, tin, vat_rate, opening_float, auto_consume_stock, timezone, branding; platform super admin | none |
 | subscriptions | own; platform admins | platform super admin | platform super admin | platform super admin |
 | platform_admins | self; platform admins | platform super admin | platform super admin | none (deactivate) |
 | platform_invoices | own with `settings.manage`; platform admins (aal2) | super admin | super admin | super admin (all platform writes audited in `admin_audit_log`) |
@@ -21,8 +21,8 @@ Suspended/cancelled tenants resolve to NULL (no access); `past_due` is read-only
 | roles | T | T + `roles.manage` + W (non-system only) | same, non-system only | same, non-system only (RESTRICT if users) |
 | role_permissions, role_station_access | T and (own role or `roles.manage`) | none | none | none (only `fn_update_role_permissions`) |
 | stations, categories, payment_methods, table_areas, expense_categories | T | T + `config.manage` + W | same | same (RESTRICT) |
-| menu_items, recipe_lines | T + (`menu.view`/`menu.manage`/`orders.create`; recipes also `inventory.view`) | T + `menu.manage` + W | same | same |
-| ingredients | T + (`inventory.view` + station access/`inventory.adjust`/`inventory.receive`) or `menu.manage` | T + `inventory.adjust` + W (master-data columns only) | same (stock columns RPC-only) | same |
+| menu_items, recipe_lines | T + (`menu.view`/`menu.manage`/`orders.create`; recipes also `inventory.view`) | **no client grant since 0029** (RPCs only); policy kept as ceiling: T + `menu.manage` + W | same | same |
+| ingredients | T + (`inventory.view` + station access/`inventory.adjust`/`inventory.receive`) or `menu.manage` | **no client grant since 0029** (RPCs only); policy kept as ceiling: T + `inventory.adjust` + W | same | same |
 | stock_movements | T + `inventory.view` + (station access or adjust/receive) | none (stock RPCs) | trigger-blocked | trigger-blocked |
 | tables | T + (`tables.view`/`tables.manage`/`orders.create`) | T + `tables.manage` + W | same | same |
 | table_sessions, customer_sessions | T + `tables.view`/`orders.view_all` (session token hash column not granted) | none (RPC) | none | none |
@@ -92,3 +92,23 @@ execute by default and a role-global default privilege now prevents it for FUTUR
 - 0026 (mandatory aal2): no table, policy or grant change (83 policies). `fn_require_aal2()` is a new internal function (no client EXECUTE); the PIN-change decision and the session-timer writes call it instead of `fn_require_step_up()`, so these two actions need an aal2 session and PIN-only staff cannot perform them even when a role holds the permission.
 - 0027 (aal2 not for PIN accounts, H1): no table, policy or grant change. `fn_require_aal2()` is redefined (same signature, still no client EXECUTE) to also refuse callers whose profile has `auth_method = 'pin'` or that have no profile, so a PIN session that enrols its own TOTP factor and reaches aal2 still gets `mfa_required`.
 - 0028 (aal2 needs a live authenticator, L1): no table, policy or grant change (83 policies). `fn_require_aal2()` is redefined (same signature, STABLE, empty search_path, same owner-only ACL) to also require a verified `auth.mfa_factors` row for `auth.uid()`, so an aal2 token that outlives a removed authenticator gets `mfa_required`; `session_timers` writes and PIN-change decisions are therefore also gated by a live factor.
+
+- 0029 (menu and inventory): no new public table, policies still 83. **Grants changed**: `insert`, `update`, `delete` on `menu_items`, `recipe_lines`, `ingredients`
+  are REVOKED from `authenticated` (table and column level; the 0009 / 0020 column grants are gone), so the definer RPCs are the only write path (plan cap, uploaded-image
+  check, unit lock, active-recipe rule, step-up on cost edits cannot be skipped); SELECT and all policies stay (the write policies remain as a second ceiling that no client
+  privilege reaches). New column `restaurants.stock_stepup_threshold`: SELECT granted to `authenticated`, not in the UPDATE column grant.
+  New policies live on **storage.objects** (not counted in the public total): bucket `menu-images`
+  (private, 2 MiB, `image/png|jpeg|webp`, set on the bucket so the Storage API enforces size and MIME), four policies `menu_images_select|insert|update|delete`, all `to authenticated`:
+
+  | verb | predicate (tenant prefix from `current_restaurant_id()`, never from the client) |
+  |---|---|
+  | SELECT | `bucket_id = 'menu-images'` and name = `restaurants/<own id>/menu/<file>` and (`menu.view` or `menu.manage` or `orders.create`) |
+  | INSERT | same prefix plus extension `png|jpg|jpeg|webp` (extension in any case), no `..`, `menu.manage`, `current_tenant_writable()` |
+  | UPDATE | USING: same prefix, `menu.manage`, writable tenant, and no `menu_items.image_path` points at the object (a referenced image cannot be renamed); WITH CHECK: as INSERT |
+  | DELETE | same prefix, `menu.manage`, writable tenant, and no `menu_items.image_path` still points at the object |
+
+  All path regexes are case-SENSITIVE (`~`): `RESTAURANTS/<id>/MENU/x.png` never matches; only the file extension is case-insensitive (`[pP][nN][gG]` ...).
+  `fn_menu_check_image` uses the same case-sensitive pattern.
+
+  The stock RPCs write the ledger as the definer; clients still have no INSERT / UPDATE / DELETE on `stock_movements` and no privilege on `ingredients.stock`, `opening_stock`, `received_today`, `consumed_today`.
+  `fn_list_stock_movements` repeats the `stock_movements_select` predicate explicitly (it is a definer function).

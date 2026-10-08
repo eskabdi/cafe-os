@@ -205,10 +205,11 @@ select cmp_ok((select count(*)::int from tests.fk_delete_sweep() where outcome =
 
 -- the six dynamic domains + role, through the tenant_admin''s REAL DELETE grant: dependency error, and the row survives
 select tests.authenticate_as((select b_admin from _f));
-select matches(tests.run(format($q$delete from public.ingredients where id = (select id from public.ingredients where restaurant_id = %L)$q$, (select b from _f))),
-               '^23503\|update or delete on table "ingredients" violates foreign key constraint', 'ingredient with recipe lines / stock movements cannot be deleted');
-select matches(tests.run(format($q$delete from public.menu_items where id = (select menu_item_id from public.order_items where restaurant_id = %L limit 1)$q$, (select b from _f))),
-               '^23503\|update or delete on table "menu_items" violates foreign key constraint', 'menu item with order items / recipe lines cannot be deleted');
+-- menu_items / ingredients: no client DELETE at all since 0029 (soft deactivation through the RPCs); the FK sweep above covers the owner
+select is(tests.run(format($q$delete from public.ingredients where id = (select id from public.ingredients where restaurant_id = %L)$q$, (select b from _f))),
+          '42501|permission denied for table ingredients|', 'ingredient cannot be deleted by a client (no DELETE grant; deactivate via fn_set_ingredient_active)');
+select is(tests.run(format($q$delete from public.menu_items where id = (select menu_item_id from public.order_items where restaurant_id = %L limit 1)$q$, (select b from _f))),
+          '42501|permission denied for table menu_items|', 'menu item cannot be deleted by a client (no DELETE grant; deactivate via fn_set_menu_item_active)');
 select matches(tests.run(format($q$delete from public.tables where id = (select table_id from public.table_sessions where restaurant_id = %L limit 1)$q$, (select b from _f))),
                '^23503\|update or delete on table "tables" violates foreign key constraint', 'table with sessions / QR credentials cannot be deleted');
 select tests.clear_auth();
@@ -236,13 +237,10 @@ grant execute on function tests.tbl_grants(text) to public;
 select is(tests.col_grants('authenticated', 'insert'), $m$categories: color,description,icon,is_active,name,restaurant_id,sort_order
 expense_categories: color,description,icon,is_active,name,restaurant_id,sort_order
 expenses: amount,description,expense_category_id,expense_date,payment_method_id,restaurant_id
-ingredients: cost_per_unit,is_active,min_level,name,restaurant_id,station_id,unit
-menu_items: category_id,description,emoji,image_path,is_active,name,price,restaurant_id,sort_order,station_id
 payment_methods: affects_cash_drawer,color,description,icon,is_active,name,requires_reference,restaurant_id,sort_order
 plans: created_at,features,id,is_active,max_menu_items,max_staff,name,price_etb_monthly,updated_at
 platform_admins: full_name,id,role
 platform_invoices: amount,created_at,id,method,paid_at,period_end,period_start,reference,restaurant_id,status,subscription_id,updated_at
-recipe_lines: ingredient_id,menu_item_id,qty_per_serving,restaurant_id
 roles: color,description,icon,is_active,name,restaurant_id,sort_order
 stations: color,description,icon,is_active,name,restaurant_id,sort_order
 subscriptions: cancel_at_period_end,created_at,current_period_end,current_period_start,id,plan_id,restaurant_id,status,trial_ends_at,updated_at
@@ -252,14 +250,11 @@ tables: capacity,is_active,label,qr_enabled,restaurant_id,sort_order,status,tabl
 select is(tests.col_grants('authenticated', 'update'), $m$categories: color,description,icon,is_active,name,sort_order
 expense_categories: color,description,icon,is_active,name,sort_order
 expenses: amount,description,expense_category_id,expense_date,payment_method_id
-ingredients: cost_per_unit,is_active,min_level,name,station_id,unit
-menu_items: category_id,description,emoji,image_path,is_active,name,price,sort_order,station_id
 payment_methods: affects_cash_drawer,color,description,icon,is_active,name,requires_reference,sort_order
 plans: created_at,features,id,is_active,max_menu_items,max_staff,name,price_etb_monthly,updated_at
 platform_admins: full_name,is_active,role
 platform_invoices: amount,created_at,id,method,paid_at,period_end,period_start,reference,restaurant_id,status,subscription_id,updated_at
 profiles: first_name,is_active,last_name,middle_name
-recipe_lines: qty_per_serving
 restaurants: address,auto_consume_stock,branding,name,opening_float,phone,timezone,tin,vat_rate
 roles: color,description,icon,is_active,name,sort_order
 stations: color,description,icon,is_active,name,sort_order
@@ -275,9 +270,9 @@ categories: DELETE,SELECT
 day_sessions: SELECT
 expense_categories: DELETE,SELECT
 expenses: DELETE,SELECT
-ingredients: DELETE,SELECT
+ingredients: SELECT
 installments: SELECT
-menu_items: DELETE,SELECT
+menu_items: SELECT
 order_items: SELECT
 payment_methods: DELETE,SELECT
 payments: SELECT
@@ -286,7 +281,7 @@ plans: DELETE,INSERT,SELECT,UPDATE
 platform_admins: SELECT
 platform_invoices: DELETE,INSERT,SELECT,UPDATE
 profiles: SELECT
-recipe_lines: DELETE,SELECT
+recipe_lines: SELECT
 role_permissions: SELECT
 role_station_access: SELECT
 roles: DELETE,SELECT

@@ -143,7 +143,7 @@ update _ctx set grill = (select id from public.stations where restaurant_id = (s
                 runner = (select id from public.roles where restaurant_id = (select a from _f) and name = 'Runner');
 select is(tests.run(format($q$select public.fn_update_role_permissions(%L, array['orders.view','inventory.view'], array[%L]::uuid[])$q$, (select runner from _ctx), (select grill from _ctx))),
           'ok:1', 'the matrix accepts the new role and the new station');
-select is(tests.run(format($q$insert into public.menu_items (restaurant_id, name, category_id, station_id, price) values (%L, 'Grilled Fish', %L, %L, 350)$q$, (select a from _f), (select desserts from _ctx), (select grill from _ctx))),
+select is(tests.run(format($q$select public.fn_create_menu_item('Grilled Fish', %L, %L, 350)$q$, (select desserts from _ctx), (select grill from _ctx))),
           'ok:1', 'a menu item can live in the new category at the new station');
 select is(tests.run(format($q$insert into public.table_areas (restaurant_id, name) values (%L, 'Hall 2')$q$, (select a from _f))), 'ok:1', 'more areas on demand');
 select is(tests.run(format($q$insert into public.tables (restaurant_id, table_area_id, label) values (%L, %L, 'R01')$q$, (select a from _f), (select rooftop from _ctx))), 'ok:1', 'a table in the new area');
@@ -151,7 +151,7 @@ select is(tests.run(format($q$insert into public.expenses (restaurant_id, expens
           'ok:1', 'an expense in the new category paid with the new method');
 select is((select method_name_snapshot from public.expenses where description = 'diesel'), 'Amole', 'the expense snapshots the new method name');
 select is((select method_affects_drawer_snapshot from public.expenses where description = 'diesel'), false, 'cash-drawer behaviour is a data flag on the method row (Amole: off)');
-select is(tests.run(format($q$insert into public.ingredients (restaurant_id, name, station_id, unit) values (%L, 'Charcoal', %L, 'kg')$q$, (select a from _f), (select grill from _ctx))),
+select is(tests.run(format($q$select public.fn_create_ingredient('Charcoal', %L, 'kg')$q$, (select grill from _ctx))),
           'ok:1', 'an ingredient at the new station');
 -- the admin gives the new role to an existing staff member (Kitchen -> Runner)
 select is(tests.run(format($q$select public.fn_change_user_role(%L, %L)$q$, (select kitchen_user from _f), (select runner from _ctx))), 'ok:1', 'assign the brand-new role to a user');

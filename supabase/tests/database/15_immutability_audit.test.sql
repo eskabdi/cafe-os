@@ -85,7 +85,7 @@ select tests.clear_auth();
 select tests.authenticate_as((select kitchen from _f));
 select is(tests.run($q$update public.order_items set item_status = 'ready'$q$), '42501|permission denied for table order_items|', 'station operator: no direct order_items mutation');
 select is(tests.run($q$update public.orders set status = 'ready'$q$), '42501|permission denied for table orders|', 'station operator: no direct orders mutation');
-select is(tests.run($q$update public.ingredients set name = 'x'$q$), 'ok:0', 'station operator: no ingredient edits (no inventory.adjust)');
+select is(tests.run($q$update public.ingredients set name = 'x'$q$), '42501|permission denied for table ingredients|', 'station operator: no ingredient edits (no client write on ingredients at all since 0029)');
 select tests.clear_auth();
 
 -- ═════════ audit integrity ═════════
@@ -159,7 +159,9 @@ select is(tests.run(format($q$update public.restaurants set branding = jsonb_set
 select matches(tests.run($q$update public.restaurants set branding = jsonb_set(branding, '{logo_path}', '"https://evil.example.com/x.png"')$q$), '^23514\|', 'logo path as a URL is rejected');
 select matches(tests.run($q$update public.restaurants set branding = jsonb_set(branding, '{logo_path}', '"data:image/png;base64,AAAA"')$q$), '^23514\|', 'logo path as a data: URI is rejected');
 select matches(tests.run(format($q$update public.restaurants set branding = jsonb_set(branding, '{logo_path}', to_jsonb('restaurants/' || %L || '/../%s/x.png'))$q$, (select a from _f), (select b from _f))), '^23514\|', 'path traversal in logo path is rejected');
-select matches(tests.run(format($q$update public.menu_items set image_path = 'restaurants/%s/dish.png' where name = 'Doro Wat'$q$, (select b from _f))), '^23514\|', 'menu image path into another tenant''s prefix is rejected');
+-- menu items are written only through fn_update_menu_item since 0029 (the menu_items_image_path_check CHECK stays as the DB backstop)
+select is(tests.run(format($q$select public.fn_update_menu_item((select id from public.menu_items where name = 'Doro Wat' and restaurant_id = %L), jsonb_build_object('image_path', 'restaurants/%s/menu/dish.png'))$q$, (select a from _f), (select b from _f))),
+          'P0001|invalid_input|image_path', 'menu image path into another tenant''s prefix is rejected');
 select tests.clear_auth();
 
 -- ═════════ closed business day ═════════

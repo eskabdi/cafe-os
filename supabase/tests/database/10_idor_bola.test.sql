@@ -190,7 +190,7 @@ select matches(tests.run(format($q$insert into public.roles (restaurant_id, name
                '^42501\|new row violates row-level security', 'A admin cannot insert a role into B');
 select matches(tests.run(format($q$insert into public.menu_items (restaurant_id, name, category_id, station_id, price) select %L, 'Forged', %L, %L, 1$q$,
                                 (select b from _f), (select b_category from _f), (select b_station from _f))),
-               '^42501\|new row violates row-level security', 'A admin cannot insert a menu item into B');
+               '^42501\|permission denied for table menu_items', 'A admin cannot insert a menu item into B (no client INSERT since 0029)');
 select matches(tests.run(format($q$insert into public.tables (restaurant_id, table_area_id, label) values (%L, %L, 'Z9')$q$,
                                 (select b from _f), (select b_area from _f))),
                '^42501\|new row violates row-level security', 'A admin cannot insert a table into B');
@@ -199,14 +199,12 @@ select matches(tests.run(format($q$insert into public.expenses (restaurant_id, e
                '^42501\|new row violates row-level security', 'A admin cannot insert an expense into B');
 
 -- cross-tenant REFERENCES from A's own rows: denied, and indistinguishable from a reference to nothing
-select is(tests.oracle(format($q$insert into public.menu_items (restaurant_id, name, category_id, station_id, price) values (%L, 'X1', {id}, %L, 1)$q$,
-                              (select a from _f), (select a_station from _f)), (select b_category from _f)),
-          '23503|insert or update on table "menu_items" violates foreign key constraint "menu_items_category_fk"|Key is not present in table "categories".',
-          'menu item cannot reference B''s category, and the error is identical to an unknown id');
-select is(tests.oracle(format($q$insert into public.menu_items (restaurant_id, name, category_id, station_id, price) select %L, 'X2', category_id, {id}, 1 from public.menu_items where restaurant_id = %L limit 1$q$,
-                              (select a from _f), (select a from _f)), (select b_station from _f)),
-          '23503|insert or update on table "menu_items" violates foreign key constraint "menu_items_station_fk"|Key is not present in table "stations".',
-          'menu item cannot reference B''s station (no oracle)');
+-- menu items are written only through the 0029 RPCs: the reference checks there must not be an oracle either
+select is(tests.oracle(format($q$select public.fn_create_menu_item('X1', {id}, %L, 1)$q$, (select a_station from _f)), (select b_category from _f)),
+          'P0001|invalid_input|category_id', 'menu item cannot reference B''s category, and the error is identical to an unknown id');
+select is(tests.oracle(format($q$select public.fn_create_menu_item('X2', (select category_id from public.menu_items where restaurant_id = %L limit 1), {id}, 1)$q$,
+                              (select a from _f)), (select b_station from _f)),
+          'P0001|invalid_station|', 'menu item cannot reference B''s station (no oracle)');
 select is(tests.oracle(format($q$insert into public.tables (restaurant_id, table_area_id, label) values (%L, {id}, 'Q9')$q$, (select a from _f)), (select b_area from _f)),
           '23503|insert or update on table "tables" violates foreign key constraint "tables_area_fk"|Key is not present in table "table_areas".',
           'table cannot reference B''s area (no oracle)');
@@ -217,9 +215,9 @@ select is(tests.oracle(format($q$insert into public.expenses (restaurant_id, exp
                               (select b from _f), (select b_expcat from _f)), (select b_method from _f)),
           '42501|new row violates row-level security policy for table "expenses"|',
           'expense naming B as tenant: real and unknown payment-method ids give the same RLS denial (no BEFORE-trigger oracle)');
-select is(tests.oracle(format($q$update public.menu_items set category_id = {id} where restaurant_id = %L$q$, (select a from _f)), (select b_category from _f)),
-          '23503|insert or update on table "menu_items" violates foreign key constraint "menu_items_category_fk"|Key is not present in table "categories".',
-          'UPDATE re-pointing A''s rows at B''s category: same error as unknown id');
+select is(tests.oracle(format($q$select public.fn_update_menu_item((select id from public.menu_items where restaurant_id = %L limit 1), jsonb_build_object('category_id', {id}))$q$,
+                              (select a from _f)), (select b_category from _f)),
+          'P0001|invalid_input|category_id', 'UPDATE re-pointing an A item at B''s category: same error as unknown id');
 
 -- by-id access: B's real ids behave exactly like unknown ids for select / update / delete
 select is(tests.oracle($q$select 1 from public.roles where id = {id}$q$, (select b_waiter_role from _f)), 'ok:0', 'select B role by id = unknown id');
@@ -230,7 +228,7 @@ select is(tests.oracle($q$select 1 from public.subscriptions where id = {id}$q$,
 select is(tests.oracle($q$update public.stations set name = 'pwn' where id = {id}$q$, (select b_station from _f)), 'ok:0', 'update B station by id = unknown id');
 select is(tests.oracle($q$update public.profiles set is_active = false where id = {id}$q$, (select b_waiter from _f)), 'ok:0', 'deactivate B profile by id = unknown id');
 select is(tests.oracle($q$update public.roles set name = 'pwn' where id = {id}$q$, (select b_waiter_role from _f)), 'ok:0', 'rename B role by id = unknown id');
-select is(tests.oracle($q$delete from public.menu_items where id = {id}$q$, (select b_menu from _f)), 'ok:0', 'delete B menu item by id = unknown id');
+select is(tests.oracle($q$delete from public.menu_items where id = {id}$q$, (select b_menu from _f)), '42501|permission denied for table menu_items|', 'delete B menu item by id: no client DELETE at all (same answer as unknown id)');
 select is(tests.oracle($q$delete from public.roles where id = {id}$q$, (select b_waiter_role from _f)), 'ok:0', 'delete B role by id = unknown id');
 select is(tests.oracle($q$delete from public.tables where id = {id}$q$, (select b_table from _f)), 'ok:0', 'delete B table by id = unknown id');
 select is(tests.oracle($q$select 1 from public.orders where id = {id}$q$, (select b_order from _g)), 'ok:0', 'select B order by id = unknown id');
