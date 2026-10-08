@@ -62,3 +62,34 @@ project origin in production, and for a local or self-hosted Supabase (e.g. `htt
 | Slug enumeration | unchanged: unknown / suspended / cancelled resolve identically; slugs of paying tenants are public by nature of subdomains |
 | Tenant picks a slug that impersonates a brand | provisioning is platform-only (`fn_provision_tenant`), reviewed by the platform |
 | Wrong-tenant UI via spoofed Host | harmless: identity comes from the token/profile, not the host |
+
+## Signed-in tenant shell (Phase 2)
+Every authenticated route below `/r/:slug` renders inside `TenantShell` (`src/features/tenant/TenantShell.tsx`) behind `RequireAuth` and `PinChangeGate`:
+- **Slug check:** a URL slug that differs from the session context's `restaurant.slug` is redirected to the identity's own tenant home. The slug never selects data.
+- **Theme:** `TenantThemeProvider` reads `restaurant.branding` from `fn_get_session_context`, validates `primary_color` / `accent_color` as strict `#rrggbb`
+  (fallback `#dc2626` / `#b91c1c`) and sets only the brand CSS variables (`--primary`, `--primary-dark`, `--primary-foreground`, `--ring`, `--brand-accent*`)
+  on `<html>`. `--status-*` (success/warning/error/cancelled/overdue) are never touched.
+- **Navigation:** one catalogue, `MODULE_NAV` (`src/features/shell/nav-config.ts`), keyed by real permission codes (a unit test parses the permission
+  catalogue in the migrations). Sidebar (`lg+`), mobile drawer, home overview and the guarded routes are all generated from it:
+
+  | Module | Path | Permission |
+  |---|---|---|
+  | Dashboard | `dashboard` | `dashboard.view` |
+  | POS | `pos` | `orders.create` |
+  | Cashier | `cashier` | `payments.create` |
+  | Installments | `installments` | `vouchers.view` |
+  | Menu | `menu` | `menu.view` |
+  | Inventory | `inventory` | `inventory.view` |
+  | Day close | `day-close` | `day_close.execute` |
+  | Settings | `settings` | `settings.manage` |
+  | Terminals | `settings/terminals` | `kiosks.manage` |
+
+  Not-yet-built modules render an accessible "coming soon" placeholder. A route whose permission is not held renders an in-shell 403; unknown paths an in-shell 404.
+  Account links (Change PIN / PIN approvals / Session timers / Security) keep their Phase 1 rules (`accountLinkIds`).
+- **Stations:** the "Stations" section lists `stations` rows read through RLS (`stations_select`: own tenant only; no `restaurant_id` is sent), active only,
+  filtered to `context.station_ids` (role_station_access; tenant_admin: all, the same set RLS uses via `current_station_ids()`) and shown only with
+  `orders.view` (required by `order_items_select`). Colour/icon come from the row (`#rrggbb` / icon-slug allowlist). Every station links to the one generic
+  route `/r/<slug>/stations/:stationId` (`StationKDS`, guarded by `RequireStationAccess`). Realtime on `stations` invalidates the query; Realtime on the
+  role's `role_station_access` reloads the session context. No polling, no station names in code.
+
+All of this is UX only: RLS and the RPC permission checks remain the authorization ceiling.

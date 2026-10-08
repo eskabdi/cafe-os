@@ -10,7 +10,7 @@ export function PinPendingPage() {
   const { context, signOut, refreshContext, contextStatus } = useAuth()
   const name = context?.user?.short_name ?? context?.user?.first_name
   return (
-    <main className="mx-auto max-w-md space-y-4 p-6">
+    <section className="mx-auto max-w-md space-y-4 p-6">
       <h1 className="text-xl font-semibold text-ink">Waiting for manager approval</h1>
       <div className="space-y-2 text-sm text-ink">
         {name && <p className="font-medium">{name}</p>}
@@ -33,6 +33,6 @@ export function PinPendingPage() {
           Sign out
         </Button>
       </div>
-    </main>
+    </section>
   )
 }

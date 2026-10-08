@@ -56,7 +56,12 @@ const TILE_ICONS: Readonly<Record<string, LucideIcon>> = {
 
 export const GENERIC_TILE_ICON: LucideIcon = UserRound
 
+/** Icon for a row's icon slug (role, station, ...) from the same allowlist; unknown or missing slugs get `fallback`. */
+export function iconForSlug(slug: string | null | undefined, fallback: LucideIcon): LucideIcon {
+  if (!slug || !Object.prototype.hasOwnProperty.call(TILE_ICONS, slug)) return fallback
+  return TILE_ICONS[slug] ?? fallback
+}
+
 export function tileIconFor(slug: string | null | undefined): LucideIcon {
-  if (!slug || !Object.prototype.hasOwnProperty.call(TILE_ICONS, slug)) return GENERIC_TILE_ICON
-  return TILE_ICONS[slug] ?? GENERIC_TILE_ICON
+  return iconForSlug(slug, GENERIC_TILE_ICON)
 }

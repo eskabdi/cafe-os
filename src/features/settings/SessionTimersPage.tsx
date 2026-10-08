@@ -124,7 +124,7 @@ function SessionTimersContent() {
     warn < signout
 
   return (
-    <main className="mx-auto max-w-2xl space-y-6 p-6">
+    <section className="mx-auto max-w-2xl space-y-6 p-6">
       <header className="space-y-1">
         <Link className="text-sm text-ink underline underline-offset-4" to={`/r/${slug}`}>
           Back
@@ -261,6 +261,6 @@ function SessionTimersContent() {
           if (action) void run(action)
         }}
       />
-    </main>
+    </section>
   )
 }

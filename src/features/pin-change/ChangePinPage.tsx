@@ -22,7 +22,7 @@ export function ChangePinPage() {
   const pinLength = context?.pin_length
   if (pinLength !== 4 && pinLength !== 6) {
     return (
-      <main className="mx-auto max-w-md space-y-3 p-6">
+      <section className="mx-auto max-w-md space-y-3 p-6">
         <h1 className="text-xl font-semibold text-ink">Change your PIN</h1>
         <p role="alert" className="text-sm text-muted-foreground">
           Your PIN settings could not be loaded. Please try again.
@@ -33,7 +33,7 @@ export function ChangePinPage() {
             Sign out
           </Button>
         </div>
-      </main>
+      </section>
     )
   }
   return <ChangePinForm pinLength={pinLength} />
@@ -174,7 +174,7 @@ function ChangePinForm({ pinLength }: { pinLength: number }) {
 
   if (done) {
     return (
-      <main className="mx-auto max-w-md space-y-4 p-6">
+      <section className="mx-auto max-w-md space-y-4 p-6">
         <h1 ref={doneHeading} tabIndex={-1} className="text-xl font-semibold text-ink outline-none">
           Your PIN has been changed
         </h1>
@@ -193,14 +193,14 @@ function ChangePinForm({ pinLength }: { pinLength: number }) {
         <Button className="w-full" onClick={refreshContext}>
           Continue
         </Button>
-      </main>
+      </section>
     )
   }
 
   const text = STEP_TEXT[step]
   const busy = mutation.isPending
   return (
-    <main className="mx-auto max-w-sm space-y-5 p-6">
+    <section className="mx-auto max-w-sm space-y-5 p-6">
       <header className="space-y-1 text-center">
         <h1 className="text-xl font-semibold text-ink">Change your PIN</h1>
         <p className="text-sm text-muted-foreground">
@@ -260,6 +260,6 @@ function ChangePinForm({ pinLength }: { pinLength: number }) {
       >
         {sessionEnded ? 'Sign in again' : 'Sign out'}
       </Button>
-    </main>
+    </section>
   )
 }

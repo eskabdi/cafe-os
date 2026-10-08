@@ -1,65 +1,23 @@
-import { Link, NavLink, Outlet } from 'react-router-dom'
-import { buttonVariants } from '@/components/ui/button'
+import { Navigate, Outlet, useParams } from 'react-router-dom'
 import { useAuth } from '@/features/auth'
-import {
-  changePinPath,
-  pinApprovalsPath,
-  securityPath,
-  sessionTimersPath,
-  tenantHomePath,
-} from '@/features/pin-change/pin-paths'
-import { usesSupabaseAuthSignIn } from '@/lib/domain/authenticator'
-import { pinChangeStatusOf } from '@/lib/domain/pin-change'
-import { cn } from '@/lib/utils/cn'
+import { tenantHomePath } from '@/features/pin-change/pin-paths'
+import { AppShell } from '@/features/shell'
+import { TenantThemeProvider } from './TenantThemeProvider'
 
 /**
- * Header for every signed-in tenant route. Links are UX only (the server re-authorizes everything):
- *  - "Change PIN" stays visible while the server reports pin_change_status = 'required'
- *  - "PIN approvals" for holders of users.manage, "Session timers" for settings.session_timers (an unrestricted user; a
- *    restricted user holds no permission at all)
- *  - "Security" (authenticator setup) only for sessions that signed in with Supabase Auth, never for PIN sessions
+ * Layout for every signed-in tenant route (behind RequireAuth + PinChangeGate): tenant theme + responsive shell with the
+ * permission-generated navigation. The slug is only a pre-auth resolver: the tenant shown comes from the server-derived
+ * session context, and a URL slug that does not match the identity's tenant is redirected to the home of its own tenant.
  */
 export function TenantShell() {
-  const { context, can, session } = useAuth()
+  const { context } = useAuth()
+  const { slug: urlSlug } = useParams<{ slug: string }>()
   const slug = context?.restaurant?.slug
   if (!slug || !context?.user) return <Outlet />
-  const status = pinChangeStatusOf(context)
-
+  if (urlSlug !== slug) return <Navigate to={tenantHomePath(slug)} replace />
   return (
-    <>
-      <header className="border-b border-line bg-white">
-        <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2">
-          <Link
-            to={tenantHomePath(slug)}
-            className="inline-flex min-h-[44px] items-center text-lg font-bold text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            Cafe<span className="text-primary">OS</span>
-          </Link>
-          <nav aria-label="Account" className="ml-auto flex flex-wrap items-center gap-2">
-            {status === 'required' && (
-              <NavLink to={changePinPath(slug)} className={cn(buttonVariants({ variant: 'default' }))}>
-                Change PIN
-              </NavLink>
-            )}
-            {status === 'none' && can('users.manage') && (
-              <NavLink to={pinApprovalsPath(slug)} className={cn(buttonVariants({ variant: 'ghost' }))}>
-                PIN approvals
-              </NavLink>
-            )}
-            {status === 'none' && can('settings.session_timers') && (
-              <NavLink to={sessionTimersPath(slug)} className={cn(buttonVariants({ variant: 'ghost' }))}>
-                Session timers
-              </NavLink>
-            )}
-            {status === 'none' && usesSupabaseAuthSignIn(session) && (
-              <NavLink to={securityPath(slug)} className={cn(buttonVariants({ variant: 'ghost' }))}>
-                Security
-              </NavLink>
-            )}
-          </nav>
-        </div>
-      </header>
-      <Outlet />
-    </>
+    <TenantThemeProvider branding={context.restaurant?.branding}>
+      <AppShell slug={slug} />
+    </TenantThemeProvider>
   )
 }

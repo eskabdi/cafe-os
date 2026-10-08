@@ -54,7 +54,7 @@ export function SecurityPage() {
 
   if (!eligible) {
     return (
-      <main className="mx-auto max-w-2xl space-y-3 p-6">
+      <section className="mx-auto max-w-2xl space-y-3 p-6">
         <h1 className="text-xl font-semibold text-ink">Security</h1>
         <p role="alert" className="text-sm text-muted-foreground">
           This page is only available to accounts that sign in with an email address and password.
@@ -62,14 +62,14 @@ export function SecurityPage() {
         <Link className="text-sm text-ink underline underline-offset-4" to={`/r/${slug}`}>
           Back
         </Link>
-      </main>
+      </section>
     )
   }
 
   const list = factors.data ?? []
 
   return (
-    <main className="mx-auto max-w-2xl space-y-6 p-6">
+    <section className="mx-auto max-w-2xl space-y-6 p-6">
       <header className="space-y-1">
         <Link className="text-sm text-ink underline underline-offset-4" to={`/r/${slug}`}>
           Back
@@ -144,6 +144,6 @@ export function SecurityPage() {
           await afterChange('Authenticator removed')
         }}
       />
-    </main>
+    </section>
   )
 }

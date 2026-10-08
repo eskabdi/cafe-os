@@ -89,7 +89,7 @@ function PinApprovalsContent() {
 
   const confirmName = confirm ? displayName(confirm.item) : ''
   return (
-    <main className="mx-auto max-w-2xl space-y-6 p-6">
+    <section className="mx-auto max-w-2xl space-y-6 p-6">
       <header className="space-y-1">
         <Link className="text-sm text-ink underline underline-offset-4" to={tenantHomePath(slug)}>
           Back
@@ -196,6 +196,6 @@ function PinApprovalsContent() {
           if (target) void submit(target)
         }}
       />
-    </main>
+    </section>
   )
 }

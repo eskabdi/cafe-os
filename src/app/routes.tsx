@@ -12,6 +12,7 @@ import {
 import { NotificationsListener } from '@/features/notifications'
 import { ChangePinPage, PinApprovalsPage, PinChangeGate, PinPendingPage } from '@/features/pin-change'
 import { SecurityPage, SessionTimersPage } from '@/features/settings'
+import { RequireNavPermission, RequireStationAccess, placeholderModuleRoutes } from '@/features/shell'
 import { TenantShell } from '@/features/tenant/TenantShell'
 import { TerminalPage, TerminalsPage, terminalPath } from '@/features/terminal'
 import { getKioskToken } from '@/lib/utils/kiosk-token'
@@ -19,6 +20,12 @@ import { HomePage } from './HomePage'
 import { NotFoundPage } from './NotFoundPage'
 
 const TenantRoutes = lazy(() => import('@/features/tenant/TenantRoutes'))
+const TenantNotFound = lazy(() =>
+  import('@/features/tenant/TenantRoutes').then((m) => ({ default: m.TenantNotFound })),
+)
+const StationKDS = lazy(() =>
+  import('@/features/stations/StationKDS').then((m) => ({ default: m.StationKDS })),
+)
 const PlatformRoutes = lazy(() => import('@/features/platform/PlatformRoutes'))
 
 function Loading() {
@@ -84,12 +91,45 @@ export const routes: RouteObject[] = [
                     children: [
                       { path: 'change-pin', element: <ChangePinPage /> },
                       { path: 'pin-pending', element: <PinPendingPage /> },
-                      { path: 'settings/terminals', element: <TerminalsPage /> },
-                      { path: 'settings/pin-approvals', element: <PinApprovalsPage /> },
-                      { path: 'settings/session-timers', element: <SessionTimersPage /> },
+                      // Route guards use the same permission codes as the nav entries and the server checks (UX only).
+                      {
+                        path: 'settings/terminals',
+                        element: (
+                          <RequireNavPermission permission="kiosks.manage">
+                            <TerminalsPage />
+                          </RequireNavPermission>
+                        ),
+                      },
+                      {
+                        path: 'settings/pin-approvals',
+                        element: (
+                          <RequireNavPermission permission="users.manage">
+                            <PinApprovalsPage />
+                          </RequireNavPermission>
+                        ),
+                      },
+                      {
+                        path: 'settings/session-timers',
+                        element: (
+                          <RequireNavPermission permission="settings.session_timers">
+                            <SessionTimersPage />
+                          </RequireNavPermission>
+                        ),
+                      },
                       { path: 'settings/security', element: <SecurityPage /> },
+                      // Generated from the nav catalogue: POS, Cashier, Menu, Inventory, ... ("coming soon" placeholders).
+                      ...placeholderModuleRoutes(),
+                      // ONE generic board for every station row (by UUID); never a per-station route.
+                      {
+                        path: 'stations/:stationId',
+                        element: (
+                          <RequireStationAccess>
+                            <StationKDS />
+                          </RequireStationAccess>
+                        ),
+                      },
                       { index: true, element: <TenantRoutes /> },
-                      { path: '*', element: <TenantRoutes /> },
+                      { path: '*', element: <TenantNotFound /> },
                     ],
                   },
                 ],
