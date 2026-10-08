@@ -117,6 +117,8 @@ CafeOS's primary surfaces (POS, KDS, cashier, reports) are internal staff tools 
 
 ---
 
+> **Two portals (non-negotiable, owner decision 2026-10-08; execution prompt §34A, Phase 3B).** CafeOS has a **Platform Admin Portal** (`/platform/*`, actor "Super Admin" = `platform_super_admin`: tenants, subscriptions/plans, Tenant Admin invitation, usage/quota, system health, backups, platform audit) and a **Tenant Portal** (`/r/<slug>/*`, actor "Tenant Admin" = `tenant_admin`: restaurant, users, roles, permission matrix, role assignment, plus all operational modules). The Super Admin never sees tenant operational screens or data (dashboard, POS, station boards, cashier, …) and tenant users never see the platform portal. Support impersonation / "log in as tenant" is **not** built. Where this document says otherwise, §34A wins.
+
 ## Part 2 — System Design: CafeOS Multi-Tenant SaaS Platform
 
 ### 2.1 Requirements Gathering
@@ -125,7 +127,7 @@ CafeOS's primary surfaces (POS, KDS, cashier, reports) are internal staff tools 
 - Self-serve tenant signup: restaurant name, owner contact, chosen slug → a working, isolated CafeOS instance with no manual provisioning step
 - Tenant branding: logo + primary/accent color reflected across the app and printed receipts (Part 3 below)
 - Subscription billing: plan tiers, trial period, CafeOS charging the *restaurant owner* — distinct from the restaurant charging *its own customers* via Telebirr/CBE/Chapa/cash, which is unchanged, existing functionality from the core roadmap §8.5/§8.7/§8.8
-- Platform Admin Console: CafeOS's own team can see every tenant, its subscription/billing status, suspend/reactivate a tenant, and get support access to a tenant's data with a mandatory audit trail
+- Platform Admin Console: CafeOS's own team can see every tenant, its subscription/billing status, suspend/reactivate a tenant, invite the Tenant Admin, and monitor usage/quota, system health and backups — with no access to tenant operational data (no impersonation; see §34A note above)
 - Plan-based feature/limits enforcement (e.g., a "Starter" plan capped at N staff seats or without installment vouchers)
 
 **Non-functional**

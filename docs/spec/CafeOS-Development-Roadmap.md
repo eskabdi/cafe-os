@@ -4,6 +4,8 @@
 
 > **Companion document:** the multi-tenancy architecture decision, full SaaS system design, and tenant-branding design-system extension referenced throughout this doc now live in *`CafeOS-Multi-Tenant-SaaS-Architecture.md`* — read that alongside §3–§7 below, which this document keeps in place as the single-restaurant module baseline the multi-tenant layer is built on top of.
 
+> **Two portals (non-negotiable, owner decision 2026-10-08; execution prompt §34A, Phase 3B).** CafeOS has a **Platform Admin Portal** (`/platform/*`, actor "Super Admin" = `platform_super_admin`: tenants, subscriptions/plans, Tenant Admin invitation, usage/quota, system health, backups, platform audit) and a **Tenant Portal** (`/r/<slug>/*`, actor "Tenant Admin" = `tenant_admin`: restaurant, users, roles, permission matrix, role assignment, plus all operational modules). The Super Admin never sees tenant operational screens or data (dashboard, POS, station boards, cashier, …) and tenant users never see the platform portal. Support impersonation / "log in as tenant" is **not** built. Where this document says otherwise, §34A wins.
+
 | | |
 |---|---|
 | **Source reviewed** | `final.html` — 1,590 lines, ~123 KB, single file (CDN Tailwind + CDN Chart.js + inline vanilla JS) |

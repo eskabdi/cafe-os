@@ -52,9 +52,13 @@ Read this first in the next session, then `CLAUDE.md` and `docs/spec/execution-p
   - **Phase 9 TODO (deferred on purpose):** reset / derive `ingredients.received_today` / `consumed_today` in `fn_open_day` / `fn_close_day`;
     exclude the stock columns from the `ingredients` row-audit trigger (the ledger is the record).
 
+## Phase 3B — Two portals (inserted 2026-10-08, before Phase 4; Phase 4 paused)
+
+Owner decision, non-negotiable: Platform Admin Portal (Super Admin) and Tenant Portal (Tenant Admin), fully separated. See execution prompt §34A and Phase 3B. Roles/permission matrix/user management/branding moved from Phase 10 into 3B. Phase 4 DB work had started in a worktree but stopped on a rate limit with nothing committed; it resumes after 3B.
+
 ## Remaining roadmap (§58)
 
-Phase 3 menu/inventory → 4 POS → 5 KDS → 6 cashier → 7 installments → 8 dashboard → 9 day close → 10 settings → 11 hardening → 12 cutover.
+Phase 3 menu/inventory (merged #10, #11) → 3B portals → 4 POS → 5 KDS → 6 cashier → 7 installments → 8 dashboard → 9 day close → 10 settings → 11 hardening → 12 cutover.
 
 Work order in every phase: schema → migration → RPCs → RLS → pgTAP → types → hooks → UI → realtime → E2E → gate.
 
