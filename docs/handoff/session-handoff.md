@@ -14,19 +14,23 @@ Read this first in the next session, then `CLAUDE.md` and `docs/spec/execution-p
   - auth: Supabase Auth for admins with MFA/aal2; PIN login for staff
   - kiosk terminals, PIN-change approval, session timers
   - pgTAP tests 00–29; migrations through `20261003002800`
-- **Phase 2 (generic app shell) is in progress, as `wip(unverified)` commits on the branch.** It was built by a frontend-engineer agent and is not yet verified or reviewed.
-  - New: `src/features/shell/`, `src/features/stations/`, `TenantThemeProvider`, `src/lib/domain/{navigation,theme}.ts`, `src/lib/supabase/stations.ts`, plus tests.
-  - Next session's first steps:
-    1. Finish or verify Phase 2: `pnpm typecheck && pnpm lint && pnpm test -- --run && pnpm build`, plus `node scripts/check-forbidden-patterns.mjs` and E2E.
-    2. Squash the WIP commits into one, or let the squash merge do it.
-    3. Open a draft PR to `main` and subscribe to it.
-    4. Run the review gate.
-  - Phase 2 scope:
-    - responsive shell (sidebar, header, mobile nav) with permission-driven nav from one config
-    - placeholder module routes guarded by real permission codes
-    - station nav loaded from the DB via RLS (`station:<uuid>`), linking to `/r/<slug>/stations/:stationId` with a generic StationKDS placeholder
-    - TenantThemeProvider (validated hex, fallback `#dc2626`)
-    - loading, error-boundary and empty states
+- **Phase 2 (generic app shell) is complete and gate-passed**, in a draft PR to `main` (see the PR list; merge it first if still open).
+  - Gate results:
+    - code-reviewer: 10 findings, the valid ones fixed (single shared stations subscription, context refresh on station change, `end` on nav links, `dvh` header offset).
+    - security-auditor: no findings.
+    - verifier: typecheck, lint, forbidden-patterns, 680 unit tests, build, audit, pgTAP and 18/18 E2E all green.
+    - rls-tester and tenant-isolation-review: not required, no DB changes.
+  - What exists:
+    - `src/features/shell/`: AppShell, ShellNav (sidebar and drawer), RouteGuards, ErrorBoundary, states, `nav-config.ts` (`MODULE_NAV` is the single nav source).
+    - `src/features/stations/`: StationsProvider (one Realtime channel), generic StationKDS placeholder.
+    - `TenantThemeProvider`, `src/lib/domain/{navigation,theme}.ts`, `src/lib/supabase/stations.ts`.
+  - Station access uses the `role_station_access` table, not `station:<uuid>` permission codes.
+  - Not done in Phase 2:
+    - no tenant logo in the header (needs signed Storage URLs)
+    - login pages are not themed yet
+    - `types.ts` is still a placeholder
+    - the main bundle is 840 kB (needs code-splitting)
+  - Next step: start Phase 3 (menu and inventory) in a fresh session, beginning with the schema and RLS work.
 
 ## Remaining roadmap (§58)
 
