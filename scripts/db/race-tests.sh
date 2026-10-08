@@ -4,6 +4,7 @@
 #   * last tenant_admin: two admins deactivate each other at the same time            (H2)  -> exactly 1 active admin
 #   * same race through fn_change_user_role (demotion)                                  (H2)
 #   * last platform_super_admin: two super admins deactivate each other                 (SM6)
+#   * one account, one portal: concurrent platform_admins + profiles insert for the same user (3B) -> exactly one
 #   * closed-day guard vs fn_close_day-style UPDATE, both orders of arrival             (H3)
 #   * 60 concurrent wrong PIN guesses against one account                               (SM3) -> failed_attempts stays 3
 #   * 20 concurrent blocked-login handlers for one user                                 (SS1) -> exactly one notification set
@@ -30,9 +31,13 @@ new_tenant() { # slug owner_id owner_email
   q "$SVC select public.fn_provision_tenant('Race $1', '$1', '$2', '$3', 'Owner', null, null, (select id from public.plans where name = 'Growth'), 'owner')" >/dev/null
   q "update public.restaurants set status = 'active' where slug = '$1'" >/dev/null
 }
-as_user() { # uid sql...  -> a transaction that runs as the authenticated user, with the statements given
+as_user() { # uid sql...  -> a transaction that runs as the authenticated user (aal2 claim), with the statements given
   local uid="$1"; shift
-  printf "begin;\nselect set_config('app.platform_mfa_required', 'off', true);\nselect set_config('request.jwt.claims', '{\"sub\":\"%s\",\"role\":\"authenticated\"}', true);\nset local role authenticated;\n%s\ncommit;\n" "$uid" "$*"
+  printf "begin;\nselect set_config('app.platform_mfa_required', 'off', true);\nselect set_config('request.jwt.claims', '{\"sub\":\"%s\",\"role\":\"authenticated\",\"aal\":\"aal2\"}', true);\nset local role authenticated;\n%s\ncommit;\n" "$uid" "$*"
+}
+add_factor() { # uid -> a verified TOTP factor (platform RPCs need aal2 AND a live authenticator, 0030)
+  q "insert into auth.mfa_factors (id, user_id, friendly_name, factor_type, status, created_at, updated_at)
+     values (gen_random_uuid(), '$1', 'race-' || substr(gen_random_uuid()::text, 1, 8), 'totp', 'verified', clock_timestamp(), clock_timestamp())" >/dev/null
 }
 active_admins() { q "select count(*) from public.profiles p join public.roles r on r.id = p.role_id and r.restaurant_id = p.restaurant_id join public.restaurants x on x.id = p.restaurant_id where x.slug = '$1' and p.is_active and r.system_key = 'tenant_admin'"; }
 
@@ -43,13 +48,13 @@ new_user $B race-b@race.example.com
 q "insert into public.profiles (id, restaurant_id, first_name, username, role_id, auth_method)
    select '$B', r.id, 'Second', 'second', (select id from public.roles where restaurant_id = r.id and system_key = 'tenant_admin'), 'password' from public.restaurants r where r.slug = 'race-admins'" >/dev/null
 check "two active admins before" 2 "$(active_admins race-admins)"
-as_user $A "update public.profiles set is_active = false where id = '$B'; select pg_sleep(1.5);" | "${PSQL[@]}" >/tmp/race.$$.1 2>&1 &
+as_user $A "select public.fn_set_user_active('$B', false); select pg_sleep(1.5);" | "${PSQL[@]}" >/tmp/race.$$.1 2>&1 &
 p1=$!
 sleep 0.4
-as_user $B "update public.profiles set is_active = false where id = '$A';" | "${PSQL[@]}" >/tmp/race.$$.2 2>&1 &
+as_user $B "select public.fn_set_user_active('$A', false);" | "${PSQL[@]}" >/tmp/race.$$.2 2>&1 &
 p2=$!
 wait $p1 $p2
-check "exactly one active admin after the race (trigger path)" 1 "$(active_admins race-admins)"
+check "exactly one active admin after the race (fn_set_user_active / trigger path)" 1 "$(active_admins race-admins)"
 grep -q last_tenant_admin /tmp/race.$$.1 /tmp/race.$$.2 && pass "the loser got last_tenant_admin" || fail "nobody got last_tenant_admin"
 
 echo "== H2: same race through fn_change_user_role"
@@ -71,14 +76,27 @@ new_user $S1 race-su1@race.example.com; new_user $S2 race-su2@race.example.com
 q "insert into public.platform_admins (id, full_name, role) values ('$S1', 'Race Super 1', 'platform_super_admin'), ('$S2', 'Race Super 2', 'platform_super_admin')" >/dev/null
 # the demo seed's own super admin would hide the race: park it
 q "update public.platform_admins set is_active = false where id = '00000000-0000-4000-8000-0000000000c1'" >/dev/null
-as_user $S1 "update public.platform_admins set is_active = false where id = '$S2'; select pg_sleep(1.5);" | "${PSQL[@]}" >/tmp/race.$$.1 2>&1 &
+add_factor $S1; add_factor $S2
+as_user $S1 "select public.fn_platform_set_admin_active('$S2', false, 'race test'); select pg_sleep(1.5);" | "${PSQL[@]}" >/tmp/race.$$.1 2>&1 &
 p1=$!
 sleep 0.4
-as_user $S2 "update public.platform_admins set is_active = false where id = '$S1';" | "${PSQL[@]}" >/tmp/race.$$.2 2>&1 &
+as_user $S2 "select public.fn_platform_set_admin_active('$S1', false, 'race test');" | "${PSQL[@]}" >/tmp/race.$$.2 2>&1 &
 p2=$!
 wait $p1 $p2
 check "exactly one active super admin after the race" 1 "$(q "select count(*) from public.platform_admins where is_active and role = 'platform_super_admin'")"
 q "update public.platform_admins set is_active = true where id = '00000000-0000-4000-8000-0000000000c1'" >/dev/null
+
+echo "== 3B: one auth user cannot become a tenant profile AND a platform admin through two concurrent transactions"
+X=00000000-0000-4000-8000-0000000fe001
+new_user $X race-dual@race.example.com
+printf "begin;\ninsert into public.platform_admins (id, full_name, role) values ('%s', 'Dual', 'platform_support');\nselect pg_sleep(1.5);\ncommit;\n" "$X" | "${PSQL[@]}" >/tmp/race.$$.1 2>&1 &
+p1=$!
+sleep 0.4
+printf "begin;\ninsert into public.profiles (id, restaurant_id, first_name, username, role_id, auth_method) select '%s', r.id, 'Dual', 'dual', (select id from public.roles where restaurant_id = r.id and system_key = 'tenant_admin'), 'password' from public.restaurants r where r.slug = 'race-admins';\ncommit;\n" "$X" | "${PSQL[@]}" >/tmp/race.$$.2 2>&1 &
+p2=$!
+wait $p1 $p2
+check "the account is in exactly one portal after the race" 1 "$(q "select (select count(*) from public.platform_admins where id = '$X') + (select count(*) from public.profiles where id = '$X')")"
+grep -q auth_method_mismatch /tmp/race.$$.2 && pass "the loser got auth_method_mismatch" || fail "nobody got auth_method_mismatch"
 
 echo "== H3: closed-day guard vs concurrent day close"
 CLOSE="update public.day_sessions set status = 'closed', closed_at = now(), closed_by = owner_id, order_count = 0, gross_collected = 0, cash_collected = 0, cash_expenses = 0, expenses_total = 0, expected_cash = 0, counted_cash = 0, cash_variance = 0, net_profit = 0, inventory_variance = 0, station_snapshot = '[]', expense_snapshot = '[]', payment_snapshot = '[]'"

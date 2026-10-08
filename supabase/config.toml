@@ -92,3 +92,9 @@ verify_jwt = true
 
 [functions.staff-roster]
 verify_jwt = true
+
+[functions.tenant-admin-invite]
+verify_jwt = true
+
+[functions.staff-pin-reset]
+verify_jwt = true

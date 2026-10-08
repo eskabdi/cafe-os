@@ -59,8 +59,8 @@ select is(tests.run(format($q$insert into public.table_sessions (restaurant_id, 
 -- ═════════ identity guard never blocks narrowing; rename guard ═════════
 update auth.users set email = 'hanna@real-person.example.com' where id = (select cashier from _f);   -- legacy PIN profile with a non-synthetic email
 select tests.authenticate_as((select admin from _f));
-select is(tests.run(format($q$update public.profiles set is_active = false where id = %L$q$, (select cashier from _f))), 'ok:1', 'deactivating a profile with a legacy identity is never blocked by the identity check');
-select is(tests.run(format($q$update public.profiles set first_name = 'Hanna2' where id = %L$q$, (select cashier from _f))), 'ok:1', 'nor is a rename');
+select is(tests.run(format($q$select public.fn_set_user_active(%L, false)$q$, (select cashier from _f))), 'ok:1', 'deactivating a profile with a legacy identity is never blocked by the identity check');
+select is(tests.run(format($q$select public.fn_update_user(%L, '{"first_name": "Hanna2"}')$q$, (select cashier from _f))), 'ok:1', 'nor is a rename');
 select tests.clear_auth();
 update public.profiles set is_active = true where id = (select cashier from _f);
 update auth.users set email = 'hanna@central-cafe.staff.cafeos.invalid' where id = (select cashier from _f);
@@ -74,13 +74,13 @@ do $$ begin
   end;
 end $$;
 select tests.authenticate_as('00000000-0000-4000-8000-0000000000f1');
-select is(tests.run(format($q$update public.profiles set first_name = 'Renamed' where id = %L$q$, (select cashier from _f))), 'P0001|permission_escalation|target holds rights the caller does not', 'users.manage cannot RENAME a user whose role it does not cover (first_name)');
-select is(tests.run(format($q$update public.profiles set last_name = 'X' where id = %L$q$, (select kitchen from _f))), 'P0001|permission_escalation|target holds rights the caller does not', '... nor last_name');
+select is(tests.run(format($q$select public.fn_update_user(%L, '{"first_name": "Renamed"}')$q$, (select cashier from _f))), 'P0001|permission_escalation|target holds rights the caller does not', 'users.manage cannot RENAME a user whose role it does not cover (first_name)');
+select is(tests.run(format($q$select public.fn_update_user(%L, '{"last_name": "X"}')$q$, (select kitchen from _f))), 'P0001|permission_escalation|target holds rights the caller does not', '... nor last_name');
 select is(tests.run(format($q$update public.profiles set username = 'hijack' where id = %L$q$, (select cashier from _f))), '42501|permission denied for table profiles|', 'username is not client-updatable at all (L4)');
 select tests.clear_auth();
 select is(tests.run(format($q$update public.profiles set username = 'hijack' where id = %L$q$, (select cashier from _f))), 'ok:1', 'owner/service contexts may still rename (trigger exempts non-tenant actors)');
 select tests.authenticate_as((select admin from _f));
-select is(tests.run(format($q$update public.profiles set first_name = 'Ok' where id = %L$q$, (select kitchen from _f))), 'ok:1', 'tenant_admin renames anyone');
+select is(tests.run(format($q$select public.fn_update_user(%L, '{"first_name": "Ok"}')$q$, (select kitchen from _f))), 'ok:1', 'tenant_admin renames anyone');
 select tests.clear_auth();
 
 -- ═════════ M1: client cannot write id / timestamps (cross-tenant existence oracle) ═════════

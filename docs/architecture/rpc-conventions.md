@@ -4,8 +4,10 @@
 - `language plpgsql security definer set search_path = ''`, every object schema-qualified.
 - Tenant and caller are derived server-side by `fn_tenant_status_guard(p_write)` (returns the caller's `restaurant_id`);
   no function accepts a `restaurant_id` from the client (except platform/service functions that act on a named tenant).
-- Authorization: `has_permission('<key>')` / `is_platform_super_admin()` / `is_service_role()`, then input validation, then work,
-  then audit (`fn_write_audit` event and/or row triggers).
+- Authorization: `has_permission('<key>')` / `fn_platform_guard()` (every platform RPC since 0030: active super admin + aal2 + verified factor, no opt-out) /
+  `is_service_role()`, then input validation, then work, then audit (`fn_write_audit` event and/or row triggers; platform writes also `fn_write_admin_audit`).
+- Write path: where an RPC exists for a table, clients hold no INSERT / UPDATE / DELETE privilege on it (0029: menu / recipes / ingredients; 0030: plans,
+  subscriptions, platform_invoices, platform_admins; 0031: roles, profiles UPDATE, restaurants UPDATE). The RLS write policies stay as a second ceiling.
 - `EXECUTE`: since migration 0011 new functions get no PUBLIC/anon/authenticated/service_role execute by default; every function still revokes and grants explicitly in its migration.
 
 ## Error convention (single, mandatory)
@@ -35,6 +37,7 @@ raise exception using errcode = 'P0001', message = '<stable_machine_code>', deta
 | `invalid_timezone`, `invalid_expense_date`, `station_mismatch`, `table_mismatch`, `invalid_reversal` | validation / cross-row invariants |
 | `invalid_auth_user`, `username_taken`, `staff_limit_reached`, `identity_not_rotated`, `owner_email_unconfirmed` | staff / identity provisioning |
 | `insufficient_stock` (detail = the tenant's own ingredient name), `duplicate_name` (only the tenant name key; any other unique violation is `invalid_state` / `unique_conflict`), `plan_limit_reached` (detail `menu_items`), `invalid_state` details `unit_locked`, `ingredient_inactive`, `ingredient_in_active_recipe`, `already_reversed`, `not_reversible` | menu / inventory (0029) |
+| `role_in_use` (detail `active_users:<n>` / `users:<n>`), `email_in_use`, `invite_rate_limited`, `invitation_expired`, `invalid_state` details `self`, `invoice_exists`, `already_attached`, `already_confirmed`, `inactive` | portals (0030 / 0031) |
 | (reserved for later phases) `order_not_cancellable`, `invalid_state_transition`, `voucher_already_settled` | |
 
 ## Phase-1 functions
@@ -104,3 +107,26 @@ Deferred to Phase 9 (day close): `received_today` / `consumed_today` are never r
 ## Closed-day allowlist (open question for Phase 4/9)
 `fn_guard_closed_day(kind, allowed_columns)` is the single place that decides what may still change after a day closes (installment collection, customer
 session status). If a late installment must flip `orders.payment_status` of a closed-day order, add that column to the orders trigger argument; never bypass the guard.
+
+## Phase-3B functions (migrations 0030 / 0031, the two portals)
+Full contract with request / response / error examples and Public / Private / Internal classification: `docs/api/portals.md`.
+
+| function | callers | notes |
+|---|---|---|
+| `fn_platform_guard()` | internal | the single gate of every platform RPC: `not_authenticated` / `permission_denied` / `mfa_required`; returns the admin id |
+| `fn_platform_list_tenants(search?, status?, plan_id?, limit = 50, offset = 0)`, `fn_platform_get_tenant(restaurant_id)` | super admin | metadata + subscription + limits + aggregate usage (`fn_tenant_usage`) + invitations + recent invoices; never operational rows |
+| `fn_platform_create_tenant(name, slug, plan_id, trial_days = 14, timezone)` | super admin | provisioning without an owner; the first Tenant Admin is invited |
+| `fn_platform_change_plan(restaurant_id, plan_id, reason)`, `fn_platform_set_billing_status(restaurant_id, status, reason)`, `fn_platform_cancel_tenant(restaurant_id, reason, confirm_slug)` | super admin | reason 3..500; replay = `changed: false`; cancellation terminal |
+| `fn_platform_list_plans()`, `fn_platform_create_plan(jsonb)`, `fn_platform_update_plan(id, jsonb)`, `fn_platform_set_plan_active(id, active)` | super admin | closed key list; no delete |
+| `fn_platform_list_invoices(restaurant_id?, status?, limit, before?, before_id?)`, `fn_platform_create_invoice(...)`, `fn_platform_set_invoice_status(id, status, method?, reference?)` | super admin | keyset `(created_at, id)`; one live invoice per period |
+| `fn_platform_system_health()`, `fn_platform_list_backup_runs(limit, before?, before_id?)` | super admin | DB-side checks; backup runs written by service_role only |
+| `fn_platform_list_audit_log(limit, before?, before_id?, restaurant_id?, action_prefix?, admin_id?)`, `fn_platform_list_admins()`, `fn_platform_set_admin_active(id, active, reason)` | super admin | keyset; never yourself; last super admin protected |
+| `fn_ops_register_platform_admin(user_id, full_name)` | service_role | ops-only Super Admin registration |
+| `fn_prepare_tenant_admin_invitation(...)`, `fn_prepare_tenant_admin_invitation_resend(id)`, `fn_revoke_tenant_admin_invitation(id)` | super admin (named tenant) or tenant_admin + aal2 (own tenant) | used by `tenant-admin-invite`; actor resolved by `fn_invitation_actor` |
+| `fn_attach_tenant_admin_invitation(id, auth_user_id)`, `fn_abort_tenant_admin_invitation(id)` | service_role | Edge Function steps |
+| `fn_get_my_invitation()`, `fn_accept_tenant_admin_invitation()` | the invitee | binding happens here (confirmed e-mail, not expired, no other identity) |
+| `fn_list_tenant_admin_invitations()` | tenant_admin | own tenant |
+| `fn_list_roles()`, `fn_create_role(jsonb)`, `fn_update_role(id, jsonb)`, `fn_set_role_active(id, active)`, `fn_delete_role(id)`, `fn_set_role_station_access(id, station_ids)` | `roles.manage` + step-up | system role protected; own role never; coverage rule for non-admins; `role_in_use` dependency guard |
+| `fn_list_users(include_inactive)`, `fn_update_user(id, jsonb)`, `fn_set_user_active(id, active)`, `fn_prepare_pin_reset(id)` | `users.view` / `users.manage` (+ step-up for state and PIN) | trigger guards (escalation, last admin) apply |
+| `fn_get_restaurant_profile()`, `fn_update_restaurant_profile(jsonb)` (step-up), `fn_update_business_settings(jsonb)` (aal2), `fn_update_restaurant_branding(primary, accent, logo_path)` (step-up), `fn_get_subscription_usage()` | `settings.manage` | closed key lists; logo must be an uploaded `tenant-branding` object under the own prefix |
+| `fn_tenant_usage(rid)`, `fn_invitation_actor`, `fn_*_json`, `fn_*_normalize`, `fn_role_for_edit`, `fn_user_for_edit`, `fn_json_*`, `fn_check_patch`, `fn_platform_reason`, `fn_identity_lock` | internal | no client EXECUTE (pinned by `13_security_hygiene`) |

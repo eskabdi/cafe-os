@@ -3,7 +3,7 @@
 -- never reach a client (PIN hash, token hashes), Realtime publication, default privileges.
 -- A failure here after a new migration means the new object needs the same hardening (or a reviewed allowlist entry).
 begin;
-select plan(62);
+select plan(65);
 
 -- ═════════ SECURITY DEFINER / function hygiene ═════════
 create temp view _fn as
@@ -25,7 +25,7 @@ select is((select string_agg(name, ',' order by name) from _fn where has_functio
 select is((select string_agg(name, ',' order by name) from _fn where has_function_privilege('anon', oid, 'execute')),
           'fn_resolve_tenant_slug', 'anon may execute only fn_resolve_tenant_slug (fn_err is authenticated/service_role only)');
 select is((select string_agg(name, ',' order by name) from _fn where has_function_privilege('authenticated', oid, 'execute')),
-          'current_restaurant_id,current_role_id,current_station_ids,current_tenant_writable,current_user_id,fn_adjust_stock,fn_approve_pin_change,fn_change_user_role,fn_create_ingredient,fn_create_menu_item,fn_create_staff_profile,fn_err,fn_get_open_day,fn_get_restaurant_settings,fn_get_session_context,fn_get_session_timers,fn_list_kiosks,fn_list_pending_pin_changes,fn_list_stock_movements,fn_mark_notification_read,fn_prepare_staff_creation,fn_provision_tenant,fn_reactivate_tenant,fn_receive_stock,fn_register_kiosk,fn_reject_pin_change,fn_reset_pin_lockout,fn_reset_session_timers,fn_resolve_tenant_slug,fn_reverse_stock_movement,fn_revoke_kiosk,fn_set_ingredient_active,fn_set_menu_item_active,fn_set_recipe,fn_set_stock_stepup_threshold,fn_suspend_tenant,fn_update_ingredient,fn_update_menu_item,fn_update_role_permissions,fn_update_session_timers,has_permission,has_station_access,is_order_owner,is_platform_admin,is_platform_super_admin,is_tenant_admin',
+          'current_restaurant_id,current_role_id,current_station_ids,current_tenant_writable,current_user_id,fn_accept_tenant_admin_invitation,fn_adjust_stock,fn_approve_pin_change,fn_change_user_role,fn_create_ingredient,fn_create_menu_item,fn_create_role,fn_create_staff_profile,fn_delete_role,fn_err,fn_get_my_invitation,fn_get_open_day,fn_get_restaurant_profile,fn_get_restaurant_settings,fn_get_session_context,fn_get_session_timers,fn_get_subscription_usage,fn_list_kiosks,fn_list_pending_pin_changes,fn_list_roles,fn_list_stock_movements,fn_list_tenant_admin_invitations,fn_list_users,fn_mark_notification_read,fn_platform_cancel_tenant,fn_platform_change_plan,fn_platform_create_invoice,fn_platform_create_plan,fn_platform_create_tenant,fn_platform_get_tenant,fn_platform_list_admins,fn_platform_list_audit_log,fn_platform_list_backup_runs,fn_platform_list_invoices,fn_platform_list_plans,fn_platform_list_tenants,fn_platform_set_admin_active,fn_platform_set_billing_status,fn_platform_set_invoice_status,fn_platform_set_plan_active,fn_platform_system_health,fn_platform_update_plan,fn_prepare_pin_reset,fn_prepare_staff_creation,fn_prepare_tenant_admin_invitation,fn_prepare_tenant_admin_invitation_resend,fn_provision_tenant,fn_reactivate_tenant,fn_receive_stock,fn_register_kiosk,fn_reject_pin_change,fn_reset_pin_lockout,fn_reset_session_timers,fn_resolve_tenant_slug,fn_reverse_stock_movement,fn_revoke_kiosk,fn_revoke_tenant_admin_invitation,fn_set_ingredient_active,fn_set_menu_item_active,fn_set_recipe,fn_set_role_active,fn_set_role_station_access,fn_set_stock_stepup_threshold,fn_set_user_active,fn_suspend_tenant,fn_update_business_settings,fn_update_ingredient,fn_update_menu_item,fn_update_restaurant_branding,fn_update_restaurant_profile,fn_update_role,fn_update_role_permissions,fn_update_session_timers,fn_update_user,has_permission,has_station_access,is_order_owner,is_platform_admin,is_platform_super_admin,is_tenant_admin',
           'authenticated executes exactly the reviewed RPC + RLS helper list (update this list consciously)');
 select is((select string_agg(name, ',' order by name) from _fn where has_function_privilege('authenticated', oid, 'execute') and has_function_privilege('anon', oid, 'execute')
            and name not in ('fn_resolve_tenant_slug')), null, 'nothing anon can run beyond the allowlist is also open to authenticated');
@@ -36,7 +36,13 @@ select is((select string_agg(name, ',' order by name) from _fn
                           'fn_store_session_timers', 'fn_require_aal2', 'fn_session_timers_json', 'fn_create_session_settings', 'fn_kiosk_terminal_bootstrap',
                           'fn_require_step_up', 'fn_post_stock_movement', 'fn_apply_recipe_consumption', 'fn_reverse_order_consumption', 'fn_stock_day',
                           'fn_stock_step_up', 'fn_stock_stepup_threshold', 'fn_check_idempotency_key', 'fn_menu_check_refs', 'fn_menu_check_image',
-                          'fn_menu_item_json', 'fn_ingredient_json')
+                          'fn_menu_item_json', 'fn_ingredient_json',
+                          -- 0030 / 0031 (Phase 3B)
+                          'fn_platform_guard', 'fn_platform_mfa_satisfied', 'fn_identity_lock', 'fn_tenant_usage', 'fn_platform_tenant_json', 'fn_plan_json',
+                          'fn_plan_normalize', 'fn_invoice_json', 'fn_invitation_actor', 'fn_invitation_json', 'fn_attach_tenant_admin_invitation',
+                          'fn_abort_tenant_admin_invitation', 'fn_ops_register_platform_admin', 'fn_json_pos_int', 'fn_json_text', 'fn_json_money',
+                          'fn_check_patch', 'fn_platform_reason', 'fn_role_json', 'fn_role_normalize', 'fn_role_for_edit', 'fn_user_json',
+                          'fn_user_for_edit', 'fn_restaurant_profile_json')
              and (has_function_privilege('authenticated', oid, 'execute') or has_function_privilege('anon', oid, 'execute'))),
           null, 'PIN, audit, seeding, counter, idempotency, session-timer, step-up and stock-ledger internal functions are not client-executable');
 select is((select string_agg(name, ',' order by name) from _fn where prorettype = 'trigger'::regtype
@@ -48,12 +54,20 @@ select is((select string_agg(name, ',' order by name) from _fn
              and name not in ('current_restaurant_id', 'current_role_id', 'current_station_ids', 'current_tenant_writable', 'current_user_id', 'has_permission', 'has_station_access',
                               'is_order_owner', 'is_platform_admin', 'is_platform_super_admin', 'is_tenant_admin', 'order_has_station_access',
                               'fn_err', 'fn_resolve_tenant_slug')
-             and prosrc !~ '(fn_tenant_status_guard|is_platform_super_admin|is_service_role|auth\.uid)'),
+             and prosrc !~ '(fn_tenant_status_guard|fn_platform_guard|is_platform_super_admin|is_service_role|auth\.uid)'),
           null, 'every client-callable RPC authorises in its body');
 select is((select string_agg(name, ',' order by name) from _fn
            where has_function_privilege('authenticated', oid, 'execute') and proargnames is not null
              and exists (select 1 from unnest(proargnames) a where a ~* 'restaurant')),
-          'fn_reactivate_tenant,fn_suspend_tenant', 'only the platform RPCs accept a tenant id from the caller');
+          'fn_platform_cancel_tenant,fn_platform_change_plan,fn_platform_create_invoice,fn_platform_get_tenant,fn_platform_list_audit_log,fn_platform_list_invoices,fn_platform_set_billing_status,fn_prepare_tenant_admin_invitation,fn_reactivate_tenant,fn_suspend_tenant', 'only the platform RPCs (and the platform branch of the invitation RPC) accept a tenant id from the caller');
+-- Phase 3B: every platform RPC goes through the single aal2 gate, and nobody but authenticated (never anon / service_role) can call one
+select is((select string_agg(name, ',' order by name) from _fn where name like 'fn\_platform\_%' and name not in ('fn_platform_guard', 'fn_platform_mfa_satisfied', 'fn_platform_tenant_json', 'fn_platform_reason')
+           and prosrc !~ 'perform public\.fn_platform_guard\(\)|:= public\.fn_platform_guard\(\)'), null, 'every fn_platform_* RPC calls fn_platform_guard()');
+select is((select string_agg(name, ',' order by name) from _fn where name like 'fn\_platform\_%'
+           and (has_function_privilege('anon', oid, 'execute') or has_function_privilege('service_role', oid, 'execute'))), null, 'no platform RPC is executable by anon or service_role');
+select is((select string_agg(name, ',' order by name) from _fn where has_function_privilege('service_role', oid, 'execute') and name in
+           ('fn_attach_tenant_admin_invitation', 'fn_abort_tenant_admin_invitation', 'fn_ops_register_platform_admin')), 'fn_abort_tenant_admin_invitation,fn_attach_tenant_admin_invitation,fn_ops_register_platform_admin',
+          'the invitation binding and Super Admin registration are service_role only (Edge Function / ops)');
 -- a definer function must never hand rows of tenant tables to a client (it would bypass RLS)
 select is((select string_agg(name, ',' order by name) from _fn
            where definer and has_function_privilege('authenticated', oid, 'execute')
@@ -61,7 +75,7 @@ select is((select string_agg(name, ',' order by name) from _fn
           null, 'no client-callable definer function returns rows or table row types');
 select is((select string_agg(name, ',' order by name) from _fn
            where has_function_privilege('authenticated', oid, 'execute') and prorettype in ('jsonb'::regtype, 'json'::regtype, 'text'::regtype, 'record'::regtype)),
-          'fn_adjust_stock,fn_approve_pin_change,fn_change_user_role,fn_create_ingredient,fn_create_menu_item,fn_create_staff_profile,fn_get_open_day,fn_get_restaurant_settings,fn_get_session_context,fn_get_session_timers,fn_list_kiosks,fn_list_pending_pin_changes,fn_list_stock_movements,fn_mark_notification_read,fn_prepare_staff_creation,fn_provision_tenant,fn_reactivate_tenant,fn_receive_stock,fn_register_kiosk,fn_reject_pin_change,fn_reset_pin_lockout,fn_reset_session_timers,fn_resolve_tenant_slug,fn_reverse_stock_movement,fn_revoke_kiosk,fn_set_ingredient_active,fn_set_menu_item_active,fn_set_recipe,fn_set_stock_stepup_threshold,fn_suspend_tenant,fn_update_ingredient,fn_update_menu_item,fn_update_role_permissions,fn_update_session_timers',
+          'fn_accept_tenant_admin_invitation,fn_adjust_stock,fn_approve_pin_change,fn_change_user_role,fn_create_ingredient,fn_create_menu_item,fn_create_role,fn_create_staff_profile,fn_delete_role,fn_get_my_invitation,fn_get_open_day,fn_get_restaurant_profile,fn_get_restaurant_settings,fn_get_session_context,fn_get_session_timers,fn_get_subscription_usage,fn_list_kiosks,fn_list_pending_pin_changes,fn_list_roles,fn_list_stock_movements,fn_list_tenant_admin_invitations,fn_list_users,fn_mark_notification_read,fn_platform_cancel_tenant,fn_platform_change_plan,fn_platform_create_invoice,fn_platform_create_plan,fn_platform_create_tenant,fn_platform_get_tenant,fn_platform_list_admins,fn_platform_list_audit_log,fn_platform_list_backup_runs,fn_platform_list_invoices,fn_platform_list_plans,fn_platform_list_tenants,fn_platform_set_admin_active,fn_platform_set_billing_status,fn_platform_set_invoice_status,fn_platform_set_plan_active,fn_platform_system_health,fn_platform_update_plan,fn_prepare_pin_reset,fn_prepare_staff_creation,fn_prepare_tenant_admin_invitation,fn_prepare_tenant_admin_invitation_resend,fn_provision_tenant,fn_reactivate_tenant,fn_receive_stock,fn_register_kiosk,fn_reject_pin_change,fn_reset_pin_lockout,fn_reset_session_timers,fn_resolve_tenant_slug,fn_reverse_stock_movement,fn_revoke_kiosk,fn_revoke_tenant_admin_invitation,fn_set_ingredient_active,fn_set_menu_item_active,fn_set_recipe,fn_set_role_active,fn_set_role_station_access,fn_set_stock_stepup_threshold,fn_set_user_active,fn_suspend_tenant,fn_update_business_settings,fn_update_ingredient,fn_update_menu_item,fn_update_restaurant_branding,fn_update_restaurant_profile,fn_update_role,fn_update_role_permissions,fn_update_session_timers,fn_update_user',
           'the set of client-callable functions returning free-form json/text is the reviewed one');
 select is((select string_agg(name, ',' order by name) from _fn where prorettype = 'public.profile_secrets'::regtype or proargnames @> array['pin_hash']
            or (name <> 'fn_audit_row' and prosrc ~* '''pin_hash''') or prosrc ~* 'returning\s+(ps\.)?pin_hash' or prosrc ~* 'to_jsonb\(\s*(ps|profile_secrets)'),
@@ -76,9 +90,9 @@ grant select on _tbl to public;
 select is((select string_agg(name, ',') from _tbl where not rls), null, 'RLS is enabled on every public table');
 select is((select string_agg(name, ',') from _tbl where not forced), null, 'RLS is FORCED on every public table (owner included)');
 select is((select string_agg(t.name, ',' order by t.name) from _tbl t where not exists (select 1 from pg_policies p where p.schemaname = 'public' and p.tablename = t.name)),
-          'idempotency_keys,profile_secrets,tenant_counters', 'the only policy-less (deny-all) tables are the intended internal ones');
+          'idempotency_keys,platform_backup_runs,profile_secrets,tenant_admin_invitations,tenant_counters', 'the only policy-less (deny-all) tables are the intended internal ones (0030: invitations and backup runs are RPC-only)');
 select is((select string_agg(t.name, ',') from _tbl t
-           where t.name in ('idempotency_keys', 'profile_secrets', 'tenant_counters')
+           where t.name in ('idempotency_keys', 'profile_secrets', 'tenant_counters', 'platform_backup_runs', 'tenant_admin_invitations')
              and (has_any_column_privilege('anon', t.oid, 'select,insert,update,references') or has_any_column_privilege('authenticated', t.oid, 'select,insert,update,references')
                   or has_table_privilege('anon', t.oid, 'delete,truncate,trigger') or has_table_privilege('authenticated', t.oid, 'delete,truncate,trigger'))),
           null, 'deny-all tables carry no privilege for any client role');
@@ -102,7 +116,7 @@ select is((select string_agg(p.tablename || '.' || p.policyname, ',' order by p.
           null, 'every policy on a tenant table is scoped by current_restaurant_id() or is platform-only');
 select is((select string_agg(t.name, ',' order by t.name) from _tbl t
            where not exists (select 1 from pg_attribute a where a.attrelid = t.oid and a.attname = 'restaurant_id' and not a.attisdropped)),
-          'permissions,plans,platform_admins,restaurants', 'only platform/global tables lack restaurant_id');
+          'permissions,plans,platform_admins,platform_backup_runs,restaurants', 'only platform/global tables lack restaurant_id');
 select is((select string_agg(t, ',') from tests.tenant_tables() t
            where not exists (select 1 from pg_trigger g where g.tgrelid = ('public.' || t)::regclass and g.tgname = 'trg_lock_restaurant_id')),
           null, 'restaurant_id is immutable (trigger) on every tenant table');

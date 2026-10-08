@@ -1,4 +1,4 @@
-# RLS matrix (migrations 0007 + 0010 + 0022 + 0023 + 0024 + 0025 + 0026 + 0027 + 0028 + 0029; 83 policies; RLS enabled AND forced on every public table)
+# RLS matrix (migrations 0007 + 0010 + 0022 ... 0029 + 0030 + 0031; 83 policies; RLS enabled AND forced on every public table)
 
 Helpers (SECURITY DEFINER, empty search_path, identity from `profiles` via `auth.uid()`, never from JWT claims):
 `current_restaurant_id()`, `current_user_id()`, `current_role_id()`, `has_permission(key)`, `has_station_access(station_id)` (RPC use), `current_station_ids()` (policies; one InitPlan per statement),
@@ -8,17 +8,19 @@ Suspended/cancelled tenants resolve to NULL (no access); `past_due` is read-only
 
 | table | SELECT | INSERT | UPDATE | DELETE |
 |---|---|---|---|---|
-| plans | anon/auth: active; platform: all | platform super admin | platform super admin | platform super admin |
-| restaurants | own row; platform admins all (`stock_stepup_threshold` readable, written only by `fn_set_stock_stepup_threshold`) | none (fn_provision_tenant) | `settings.manage` + W, columns: name, phone, address, tin, vat_rate, opening_float, auto_consume_stock, timezone, branding; platform super admin | none |
-| subscriptions | own; platform admins | platform super admin | platform super admin | platform super admin |
-| platform_admins | self; platform admins | platform super admin | platform super admin | none (deactivate) |
-| platform_invoices | own with `settings.manage`; platform admins (aal2) | super admin | super admin | super admin (all platform writes audited in `admin_audit_log`) |
+| plans | anon/auth: active; platform: all | **no client grant since 0030** (`fn_platform_create_plan`); policy kept as ceiling | none (`fn_platform_update_plan` / `fn_platform_set_plan_active`) | none (deactivate; RESTRICT) |
+| restaurants | own row; platform admins all (`stock_stepup_threshold` readable, written only by `fn_set_stock_stepup_threshold`) | none (fn_provision_tenant / fn_platform_create_tenant) | **no client grant since 0031**: `fn_update_restaurant_profile`, `fn_update_business_settings` (aal2), `fn_update_restaurant_branding`; status only through the platform RPCs | none |
+| subscriptions | own with `settings.manage`; platform admins | none (provisioning RPCs) | none (`fn_platform_change_plan`, status mirror triggers; billing webhook = service_role) | none |
+| platform_admins | self; platform admins | none (ops: `fn_ops_register_platform_admin`, service_role) | none (`fn_platform_set_admin_active`; last-super-admin trigger) | none (deactivate) |
+| platform_invoices | own with `settings.manage`; platform admins (aal2) | none (`fn_platform_create_invoice`; billing webhook = service_role) | none (`fn_platform_set_invoice_status`) | none (all platform writes audited in `admin_audit_log`) |
 | admin_audit_log | platform admins | none (definer fns) | trigger-blocked | trigger-blocked |
 | audit_logs | T + `audit.view` | none (definer fns) | trigger-blocked for all roles | trigger-blocked for all roles |
 | permissions | any active member | none | none | none |
-| profiles | T and (self or `users.view`/`users.manage`) | none (server-side creation) | T + `users.manage` + W; columns: names, username, is_active; tenant_admin profiles only by tenant_admin | none |
+| profiles | T and (self or `users.view`/`users.manage`) | none (staff-create / fn_accept_tenant_admin_invitation) | **no client grant since 0031**: `fn_update_user` (names), `fn_set_user_active`, `fn_change_user_role`; the 0007 policy stays as ceiling | none |
 | profile_secrets, tenant_counters, idempotency_keys | none (RLS on, zero policies, no grants) | none | none | none |
-| roles | T | T + `roles.manage` + W (non-system only) | same, non-system only | same, non-system only (RESTRICT if users) |
+| tenant_admin_invitations (0030) | none (RPC only: `fn_list_tenant_admin_invitations`, `fn_platform_get_tenant`) | none (`fn_prepare_tenant_admin_invitation`) | none (attach / resend / revoke / accept RPCs) | none (trigger-blocked) |
+| platform_backup_runs (0030) | none (`fn_platform_list_backup_runs`, `fn_platform_system_health`) | service_role only (ops job) | service_role only, while `running` | none |
+| roles | T | **no client grant since 0031** (`fn_create_role`) | none (`fn_update_role`, `fn_set_role_active`: `role_in_use` while active users hold it) | none (`fn_delete_role`: only a role no profile ever held) |
 | role_permissions, role_station_access | T and (own role or `roles.manage`) | none | none | none (only `fn_update_role_permissions`) |
 | stations, categories, payment_methods, table_areas, expense_categories | T | T + `config.manage` + W | same | same (RESTRICT) |
 | menu_items, recipe_lines | T + (`menu.view`/`menu.manage`/`orders.create`; recipes also `inventory.view`) | **no client grant since 0029** (RPCs only); policy kept as ceiling: T + `menu.manage` + W | same | same |
@@ -41,7 +43,7 @@ Policies per table: admin_audit_log 1, audit_logs 1, categories 4, customer_sess
 ingredients 4, installments 1, kiosk_devices 1, menu_items 4, order_items 1, orders 1, payment_methods 4, payments 1, permissions 1, plans 5,
 platform_admins 3, platform_invoices 4, profiles 2, qr_credentials 1, recipe_lines 4, restaurant_session_settings 1, restaurants 3, role_permissions 1,
 role_station_access 1, roles 4, stations 4, stock_movements 1, subscriptions 4, table_areas 4, table_sessions 1, tables 4, user_notifications 1, vouchers 1;
-profile_secrets, tenant_counters, idempotency_keys: 0 (deny all).
+profile_secrets, tenant_counters, idempotency_keys, tenant_admin_invitations, platform_backup_runs: 0 (deny all).
 
 ## Migration 0010 hardening (found by the adversarial suite, `supabase/tests/database/1*_*.test.sql`)
 - **Realtime**: `qr_credentials` was removed from `supabase_realtime`. postgres_changes streams whole rows (column privileges do not apply),
@@ -112,3 +114,22 @@ execute by default and a role-global default privilege now prevents it for FUTUR
 
   The stock RPCs write the ledger as the definer; clients still have no INSERT / UPDATE / DELETE on `stock_movements` and no privilege on `ingredients.stock`, `opening_stock`, `received_today`, `consumed_today`.
   `fn_list_stock_movements` repeats the `stock_movements_select` predicate explicitly (it is a definer function).
+
+- 0030 / 0031 (Phase 3B, two portals): **no new public policy (83)**. Two new deny-all tables (`tenant_admin_invitations`, `platform_backup_runs`: RLS forced, zero
+  policies, no client grant; `13_security_hygiene` pins the deny-all list). **Grants changed** (RPCs are now the only client write path; the 0007 write policies stay as a
+  second ceiling no client privilege reaches):
+  - `plans`, `subscriptions`, `platform_invoices`: INSERT / UPDATE / DELETE revoked from `authenticated`; `platform_admins`: INSERT / UPDATE revoked.
+  - `roles`: INSERT / UPDATE / DELETE revoked; `profiles`: UPDATE revoked; `restaurants`: UPDATE revoked.
+  - Platform reads that stay direct (RLS `is_platform_admin()`): `restaurants`, `subscriptions`, `plans`, `platform_invoices`, `platform_admins`, `admin_audit_log`. Every
+    platform RPC additionally requires `fn_platform_guard()` (active super admin + aal2 + verified factor, no GUC opt-out). `fn_platform_mfa_satisfied()` (behind the RLS
+    helpers) now also needs a verified factor behind an aal2 claim.
+  - A platform admin has no `profiles` row, so every tenant policy (`current_restaurant_id()` / `has_permission()`) resolves to nothing: zero rows of every tenant
+    operational table, proven per table by `34_portal_separation` (and every tenant RPC answers `permission_denied`).
+  New **storage.objects** policies (not in the public count), bucket `tenant-branding` (private, 1 MiB, png / jpeg / webp; no SVG):
+
+  | verb | predicate (tenant prefix from `current_restaurant_id()`) |
+  |---|---|
+  | SELECT | `restaurants/<own id>/branding/<file>` (every active member: the shell shows the logo) |
+  | INSERT | same prefix + extension `png|jpg|jpeg|webp`, no `..`, `settings.manage`, writable tenant |
+  | UPDATE | USING: prefix, `settings.manage`, writable, and the object is not the current `branding.logo_path`; WITH CHECK: as INSERT |
+  | DELETE | prefix, `settings.manage`, writable, and the object is not the current logo (real Storage refuses a direct SQL DELETE; this governs the Storage API) |

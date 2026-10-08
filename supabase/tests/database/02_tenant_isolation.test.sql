@@ -98,7 +98,7 @@ select throws_ok(format($q$select public.fn_suspend_tenant(%L, 'attempt by tenan
                  'P0001', 'permission_denied', 'tenant admin cannot suspend a tenant');
 select tests.clear_auth();
 
-select tests.authenticate_as('00000000-0000-4000-8000-0000000000c1');
+select tests.aal2('00000000-0000-4000-8000-0000000000c1');
 select is((select count(*)::int from public.restaurants), 2, 'platform admin lists every tenant');
 select lives_ok(format($q$select public.fn_suspend_tenant(%L, 'ToS violation test')$q$, (select b from _f)), 'platform admin suspends');
 select is((select count(*)::int from public.admin_audit_log where action = 'tenant.suspend'), 1, 'suspension written to admin_audit_log');
@@ -119,7 +119,7 @@ select is((select public.fn_resolve_tenant_slug('central-cafe') ->> 'name'), 'Ce
 select ok(not ((select public.fn_resolve_tenant_slug('central-cafe')) ?| array['status', 'id']), 'resolver leaks nothing beyond name/branding (no status, no tenant id)');
 select tests.clear_auth();
 
-select tests.authenticate_as('00000000-0000-4000-8000-0000000000c1');
+select tests.aal2('00000000-0000-4000-8000-0000000000c1');
 select lives_ok(format($q$select public.fn_reactivate_tenant(%L, 'resolved test')$q$, (select b from _f)), 'platform admin reactivates');
 select is((select status from public.restaurants where id = (select b from _f)), 'past_due', 'reactivation restores the pre-suspension status');
 select tests.clear_auth();

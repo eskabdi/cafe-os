@@ -143,6 +143,8 @@ insert into public.tenant_counters (restaurant_id, counter_key, last_value) sele
 insert into public.platform_invoices (restaurant_id, subscription_id, amount, period_start, period_end, status)
   select b, (select id from public.subscriptions where restaurant_id = f.b), 990, current_date, current_date + 30, 'pending' from _f f;
 insert into public.admin_audit_log (action, platform_admin_id, restaurant_id) select 'fixture.sweep', su1, b from _f;
+insert into public.tenant_admin_invitations (restaurant_id, email, first_name, username, invited_by, invited_by_type, expires_at)
+  select b, 'sweep@secondcafe.example.com', 'Sweep', 'sweep', b_admin, 'tenant_admin', now() + interval '1 day' from _f;
 insert into public.day_sessions (restaurant_id, day_no, status, opened_by, closed_at, closed_by, order_count, gross_collected, cash_collected, cash_expenses,
                                  expenses_total, expected_cash, counted_cash, cash_variance, net_profit, station_snapshot, expense_snapshot, payment_snapshot, inventory_variance)
   select b, 900, 'closed', b_admin, now(), b_admin, 0, 0, 0, 0, 0, 0, 0, 0, 0, '[]', '[]', '[]', 0 from _f;
@@ -238,12 +240,7 @@ select is(tests.col_grants('authenticated', 'insert'), $m$categories: color,desc
 expense_categories: color,description,icon,is_active,name,restaurant_id,sort_order
 expenses: amount,description,expense_category_id,expense_date,payment_method_id,restaurant_id
 payment_methods: affects_cash_drawer,color,description,icon,is_active,name,requires_reference,restaurant_id,sort_order
-plans: created_at,features,id,is_active,max_menu_items,max_staff,name,price_etb_monthly,updated_at
-platform_admins: full_name,id,role
-platform_invoices: amount,created_at,id,method,paid_at,period_end,period_start,reference,restaurant_id,status,subscription_id,updated_at
-roles: color,description,icon,is_active,name,restaurant_id,sort_order
 stations: color,description,icon,is_active,name,restaurant_id,sort_order
-subscriptions: cancel_at_period_end,created_at,current_period_end,current_period_start,id,plan_id,restaurant_id,status,trial_ends_at,updated_at
 table_areas: color,description,icon,is_active,name,restaurant_id,sort_order
 tables: capacity,is_active,label,qr_enabled,restaurant_id,sort_order,status,table_area_id$m$,
   'authenticated: column INSERT grants are exactly the reviewed allowlist (no id, system_key, stock, actor, day, status of money rows)');
@@ -251,14 +248,7 @@ select is(tests.col_grants('authenticated', 'update'), $m$categories: color,desc
 expense_categories: color,description,icon,is_active,name,sort_order
 expenses: amount,description,expense_category_id,expense_date,payment_method_id
 payment_methods: affects_cash_drawer,color,description,icon,is_active,name,requires_reference,sort_order
-plans: created_at,features,id,is_active,max_menu_items,max_staff,name,price_etb_monthly,updated_at
-platform_admins: full_name,is_active,role
-platform_invoices: amount,created_at,id,method,paid_at,period_end,period_start,reference,restaurant_id,status,subscription_id,updated_at
-profiles: first_name,is_active,last_name,middle_name
-restaurants: address,auto_consume_stock,branding,name,opening_float,phone,timezone,tin,vat_rate
-roles: color,description,icon,is_active,name,sort_order
 stations: color,description,icon,is_active,name,sort_order
-subscriptions: cancel_at_period_end,created_at,current_period_end,current_period_start,id,plan_id,restaurant_id,status,trial_ends_at,updated_at
 table_areas: color,description,icon,is_active,name,sort_order
 tables: capacity,is_active,label,qr_enabled,sort_order,status,table_area_id$m$,
   'authenticated: column UPDATE grants are exactly the reviewed allowlist (never restaurant_id / role_id / auth_method / status / slug / stock)');
@@ -277,17 +267,17 @@ order_items: SELECT
 payment_methods: DELETE,SELECT
 payments: SELECT
 permissions: SELECT
-plans: DELETE,INSERT,SELECT,UPDATE
+plans: SELECT
 platform_admins: SELECT
-platform_invoices: DELETE,INSERT,SELECT,UPDATE
+platform_invoices: SELECT
 profiles: SELECT
 recipe_lines: SELECT
 role_permissions: SELECT
 role_station_access: SELECT
-roles: DELETE,SELECT
+roles: SELECT
 stations: DELETE,SELECT
 stock_movements: SELECT
-subscriptions: DELETE,INSERT,SELECT,UPDATE
+subscriptions: SELECT
 table_areas: DELETE,SELECT
 table_sessions: SELECT
 tables: DELETE,SELECT
@@ -333,8 +323,8 @@ select is((select string_agg(p.tablename || '.' || p.policyname, ',') from pg_po
 -- ═════════ S7: delegated users.manage cannot escalate through staff creation / lockout reset ═════════
 -- a delegated role holding ONLY users.manage + users.view, assigned to Meron by the admin
 select tests.authenticate_as((select a_admin from _f));
-insert into public.roles (restaurant_id, name) values ((select a from _f), 'HR Lead');
-insert into public.roles (restaurant_id, name) values ((select a from _f), 'Viewer');
+select public.fn_create_role('{"name": "HR Lead"}');
+select public.fn_create_role('{"name": "Viewer"}');
 select public.fn_update_role_permissions((select id from public.roles where restaurant_id = (select a from _f) and name = 'HR Lead'), array['users.manage', 'users.view'], '{}');
 select public.fn_update_role_permissions((select id from public.roles where restaurant_id = (select a from _f) and name = 'Viewer'), array['users.view'], '{}');
 select public.fn_change_user_role((select a_deleg from _f), (select id from public.roles where restaurant_id = (select a from _f) and name = 'HR Lead'));

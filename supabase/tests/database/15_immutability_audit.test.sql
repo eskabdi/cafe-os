@@ -102,9 +102,9 @@ select is(tests.run(format($q$insert into public.categories (restaurant_id, name
 select is(tests.run(format($q$insert into public.payment_methods (restaurant_id, name) values (%L, 'Amole')$q$, (select a from _f))), 'ok:1', 'admin creates a payment method');
 select is(tests.run(format($q$insert into public.table_areas (restaurant_id, name) values (%L, 'Garden')$q$, (select a from _f))), 'ok:1', 'admin creates a table area');
 select is(tests.run(format($q$insert into public.expense_categories (restaurant_id, name) values (%L, 'Fuel')$q$, (select a from _f))), 'ok:1', 'admin creates an expense category');
-select is(tests.run(format($q$insert into public.roles (restaurant_id, name) values (%L, 'Runner')$q$, (select a from _f))), 'ok:1', 'admin creates a role');
+select is(tests.run($q$select public.fn_create_role('{"name": "Runner"}')$q$), 'ok:1', 'admin creates a role (RPC; the row trigger still audits the insert)');
 select is(tests.run($q$update public.stations set color = '#112233' where name = 'Wok'$q$), 'ok:1', 'admin edits a station');
-select is(tests.run($q$update public.restaurants set name = 'Central Cafe & Bakery'$q$), 'ok:1', 'admin edits the restaurant');
+select is(tests.run($q$select public.fn_update_restaurant_profile('{"name": "Central Cafe & Bakery"}')$q$), 'ok:1', 'admin edits the restaurant (RPC)');
 select is(tests.run(format($q$select public.fn_update_role_permissions((select id from public.roles where name = 'Runner' and restaurant_id = %L), array['orders.view'], '{}')$q$, (select a from _f))), 'ok:1', 'admin edits a role matrix');
 select is(tests.run($q$delete from public.stations where name = 'Wok'$q$), 'ok:1', 'admin deletes an unused station');
 select tests.clear_auth();
@@ -129,7 +129,7 @@ select tests.authenticate_as((select admin from _f));
 select is(tests.run(format($q$select public.fn_update_role_permissions((select id from public.roles where name = 'Waiter' and restaurant_id = %L), array['orders.view','orders.create','menu.view','users.view','users.manage'], '{}')$q$, (select a from _f))), 'ok:1', 'admin gives Waiter users.manage for the next check');
 select tests.clear_auth();
 select tests.authenticate_as((select waiter from _f));
-select is(tests.run(format($q$update public.profiles set first_name = 'Meron-Edited' where id = %L$q$, (select meron from _f))), 'ok:1', 'delegated waiter edits a colleague');
+select is(tests.run(format($q$select public.fn_update_user(%L, '{"first_name": "Meron-Edited"}')$q$, (select meron from _f))), 'ok:1', 'delegated waiter edits a colleague (RPC)');
 select tests.clear_auth();
 select is((select actor_id from public.audit_logs where event = 'profiles.update' and record_id = (select meron::text from _f)), (select waiter from _f), 'the audit row names the delegated waiter, not the admin and not the edited user');
 
@@ -151,14 +151,14 @@ begin
 end $$;
 select is(tests.moved_tenant_rows((select a from _f), (select b from _f)), '', 'no table lets even the owner re-home rows to another tenant (restaurant_id is immutable)');
 
--- ═════════ branding scope ═════════
+-- ═════════ branding scope (the CHECK backstop, owner path: clients write branding only through fn_update_restaurant_branding, 0031) ═════════
+select matches(tests.run(format($q$update public.restaurants set branding = jsonb_set(branding, '{logo_path}', to_jsonb('restaurants/' || %2$L || '/logo.png')) where id = %1$L$q$, (select a from _f), (select b from _f))),
+          '^23514\|new row for relation "restaurants" violates check constraint "restaurants_logo_own_tenant_check"\|', 'logo path cannot point into another tenant''s storage prefix');
+select is(tests.run(format($q$update public.restaurants set branding = jsonb_set(branding, '{logo_path}', to_jsonb('restaurants/' || %1$L || '/logo.png')) where id = %1$L$q$, (select a from _f))), 'ok:1', 'logo path inside the own prefix is accepted');
+select matches(tests.run(format($q$update public.restaurants set branding = jsonb_set(branding, '{logo_path}', '"https://evil.example.com/x.png"') where id = %L$q$, (select a from _f))), '^23514\|', 'logo path as a URL is rejected');
+select matches(tests.run(format($q$update public.restaurants set branding = jsonb_set(branding, '{logo_path}', '"data:image/png;base64,AAAA"') where id = %L$q$, (select a from _f))), '^23514\|', 'logo path as a data: URI is rejected');
+select matches(tests.run(format($q$update public.restaurants set branding = jsonb_set(branding, '{logo_path}', to_jsonb('restaurants/' || %1$L || '/../%2$s/x.png')) where id = %1$L$q$, (select a from _f), (select b from _f))), '^23514\|', 'path traversal in logo path is rejected');
 select tests.authenticate_as((select admin from _f));
-select is(tests.run(format($q$update public.restaurants set branding = jsonb_set(branding, '{logo_path}', to_jsonb('restaurants/' || %L || '/logo.png'))$q$, (select b from _f))),
-          '23514|new row for relation "restaurants" violates check constraint "restaurants_logo_own_tenant_check"|', 'logo path cannot point into another tenant''s storage prefix');
-select is(tests.run(format($q$update public.restaurants set branding = jsonb_set(branding, '{logo_path}', to_jsonb('restaurants/' || %L || '/logo.png'))$q$, (select a from _f))), 'ok:1', 'logo path inside the own prefix is accepted');
-select matches(tests.run($q$update public.restaurants set branding = jsonb_set(branding, '{logo_path}', '"https://evil.example.com/x.png"')$q$), '^23514\|', 'logo path as a URL is rejected');
-select matches(tests.run($q$update public.restaurants set branding = jsonb_set(branding, '{logo_path}', '"data:image/png;base64,AAAA"')$q$), '^23514\|', 'logo path as a data: URI is rejected');
-select matches(tests.run(format($q$update public.restaurants set branding = jsonb_set(branding, '{logo_path}', to_jsonb('restaurants/' || %L || '/../%s/x.png'))$q$, (select a from _f), (select b from _f))), '^23514\|', 'path traversal in logo path is rejected');
 -- menu items are written only through fn_update_menu_item since 0029 (the menu_items_image_path_check CHECK stays as the DB backstop)
 select is(tests.run(format($q$select public.fn_update_menu_item((select id from public.menu_items where name = 'Doro Wat' and restaurant_id = %L), jsonb_build_object('image_path', 'restaurants/%s/menu/dish.png'))$q$, (select a from _f), (select b from _f))),
           'P0001|invalid_input|image_path', 'menu image path into another tenant''s prefix is rejected');
@@ -205,13 +205,13 @@ select is(tests.run(format($q$insert into public.categories (restaurant_id, name
 select is(tests.run(format($q$insert into public.payment_methods (restaurant_id, name) values (%L, 'Sneaky')$q$, (select a from _f))), '42501|new row violates row-level security policy for table "payment_methods"|', 'no-permission user: payment method insert denied');
 select is(tests.run(format($q$insert into public.table_areas (restaurant_id, name) values (%L, 'Sneaky')$q$, (select a from _f))), '42501|new row violates row-level security policy for table "table_areas"|', 'no-permission user: table area insert denied');
 select is(tests.run(format($q$insert into public.expense_categories (restaurant_id, name) values (%L, 'Sneaky')$q$, (select a from _f))), '42501|new row violates row-level security policy for table "expense_categories"|', 'no-permission user: expense category insert denied');
-select is(tests.run(format($q$insert into public.roles (restaurant_id, name) values (%L, 'Sneaky')$q$, (select a from _f))), '42501|new row violates row-level security policy for table "roles"|', 'no-permission user: role insert denied');
+select is(tests.run(format($q$insert into public.roles (restaurant_id, name) values (%L, 'Sneaky')$q$, (select a from _f))), '42501|permission denied for table roles|', 'no-permission user: role insert denied');
 select is(tests.run(format($q$insert into public.expenses (restaurant_id, expense_category_id, payment_method_id, amount) values (%L, %L, %L, 1)$q$, (select a from _f), (select exp_rent from _f), (select pm_cash from _f))), '42501|new row violates row-level security policy for table "expenses"|', 'no-permission user: expense insert denied');
 select is(tests.run($q$update public.stations set name = 'x'$q$), 'ok:0', 'no-permission user: station update changes nothing');
-select is(tests.run($q$update public.roles set name = 'x'$q$), 'ok:0', 'no-permission user: role update changes nothing');
-select is(tests.run($q$update public.restaurants set name = 'x'$q$), 'ok:0', 'no-permission user: restaurant update changes nothing');
+select is(tests.run($q$update public.roles set name = 'x'$q$), '42501|permission denied for table roles|', 'no-permission user: role update denied');
+select is(tests.run($q$update public.restaurants set name = 'x'$q$), '42501|permission denied for table restaurants|', 'no-permission user: restaurant update denied');
 select is(tests.run($q$delete from public.payment_methods$q$), 'ok:0', 'no-permission user: payment method delete changes nothing');
-select is(tests.run($q$delete from public.roles$q$), 'ok:0', 'no-permission user: role delete changes nothing');
+select is(tests.run($q$delete from public.roles$q$), '42501|permission denied for table roles|', 'no-permission user: role delete denied');
 select tests.clear_auth();
 
 select * from finish();

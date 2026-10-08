@@ -1,6 +1,6 @@
 -- SM6: platform audit, last super admin, composite billing FK, status mirror, MFA (aal2) gate, tenant-admin step-up.
 begin;
-select plan(36);
+select plan(39);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -13,54 +13,60 @@ select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
 grant all on _f to public;
 do $$ begin perform tests.create_auth_user('00000000-0000-4000-8000-0000000000c3', 'second.super@cafeos.example.com'); end $$;
 
--- ═════════ audit triggers ═════════
-select tests.authenticate_as((select su1 from _f));
-select lives_ok($q$insert into public.plans (name, price_etb_monthly) values ('Audit Plan', 10)$q$, 'super admin creates a plan');
-select lives_ok($q$update public.plans set price_etb_monthly = 20 where name = 'Audit Plan'$q$, 'and changes its price');
-select lives_ok(format($q$insert into public.platform_admins (id, full_name, role) values (%L, 'Second Super', 'platform_super_admin')$q$, (select su2 from _f)), 'and adds a second super admin');
-select lives_ok(format($q$insert into public.platform_invoices (restaurant_id, subscription_id, amount, period_start, period_end, status) values (%L, %L, 99, current_date, current_date, 'pending')$q$, (select a from _f), (select a_sub from _f)), 'and issues an invoice');
+-- ═════════ audit triggers (writes now go through the aal2 platform RPCs / ops, 0030) ═════════
+select tests.aal2((select su1 from _f));
+select lives_ok($q$select public.fn_platform_create_plan('{"name": "Audit Plan", "price_etb_monthly": 10}')$q$, 'super admin creates a plan (RPC)');
+select lives_ok($q$select public.fn_platform_update_plan((select id from public.plans where name = 'Audit Plan'), '{"price_etb_monthly": 20}')$q$, 'and changes its price');
+select lives_ok(format($q$select public.fn_platform_create_invoice(%L, 99, current_date, current_date)$q$, (select a from _f)), 'and issues an invoice');
+select tests.clear_auth();
+select tests.authenticate_as_service_role();
+select lives_ok(format($q$select public.fn_ops_register_platform_admin(%L, 'Second Super')$q$, (select su2 from _f)), 'ops (service role) registers a second super admin');
 select tests.clear_auth();
 select is((select count(*)::int from public.admin_audit_log where action = 'plans.insert' and platform_admin_id = (select su1 from _f)), 1, 'plans.insert audited with the real actor');
 select is((select detail -> 'new' ->> 'price_etb_monthly' from public.admin_audit_log where action = 'plans.update' and platform_admin_id = (select su1 from _f)), '20.00', 'plans.update carries only the changed column');
-select is((select count(*)::int from public.admin_audit_log where action = 'platform_admins.insert' and platform_admin_id = (select su1 from _f)), 1, 'platform_admins.insert audited');
+select is((select count(*)::int from public.admin_audit_log where action = 'platform_admins.insert' and platform_admin_id is null and detail ->> 'record_id' = (select su2::text from _f)), 1, 'platform_admins.insert audited (service job: no platform actor)');
 select is((select restaurant_id from public.admin_audit_log where action = 'platform_invoices.insert'), (select a from _f), 'platform_invoices.insert audited with its tenant');
 
 -- ═════════ platform_admins columns / last super admin ═════════
-select tests.authenticate_as((select su1 from _f));
-select is(tests.run(format($q$update public.platform_admins set id = gen_random_uuid() where id = %L$q$, (select su2 from _f))), '42501|permission denied for table platform_admins|', 'platform_admins.id is not updatable');
+select tests.aal2((select su1 from _f));
+select is(tests.run(format($q$update public.platform_admins set id = gen_random_uuid() where id = %L$q$, (select su2 from _f))), '42501|permission denied for table platform_admins|', 'platform_admins.id is not client-updatable');
 select is(tests.run(format($q$update public.platform_admins set created_at = now() where id = %L$q$, (select su2 from _f))), '42501|permission denied for table platform_admins|', 'nor created_at');
-select lives_ok(format($q$update public.platform_admins set is_active = false where id = %L$q$, (select su2 from _f)), 'one of two super admins can be deactivated');
-select is(tests.run(format($q$update public.platform_admins set is_active = false where id = %L$q$, (select su1 from _f))), 'P0001|last_platform_super_admin|', 'the last active super admin cannot be deactivated');
-select is(tests.run(format($q$update public.platform_admins set role = 'platform_support' where id = %L$q$, (select su1 from _f))), 'P0001|last_platform_super_admin|', 'nor demoted');
+select lives_ok(format($q$select public.fn_platform_set_admin_active(%L, false, 'offboarding test')$q$, (select su2 from _f)), 'one of two super admins can be deactivated (RPC)');
+select is(tests.run(format($q$select public.fn_platform_set_admin_active(%L, false, 'self lockout')$q$, (select su1 from _f))), 'P0001|invalid_state|self', 'a super admin cannot deactivate itself through the RPC');
 select tests.clear_auth();
+select is(tests.run(format($q$update public.platform_admins set is_active = false where id = %L$q$, (select su1 from _f))), 'P0001|last_platform_super_admin|', 'the last active super admin cannot be deactivated (trigger, any path)');
+select is(tests.run(format($q$update public.platform_admins set role = 'platform_support' where id = %L$q$, (select su1 from _f))), 'P0001|last_platform_super_admin|', 'nor demoted');
 select is(tests.run(format($q$delete from public.platform_admins where id = %L$q$, (select su1 from _f))), 'P0001|last_platform_super_admin|', 'nor deleted (even by the owner)');
 update public.platform_admins set is_active = true where id = (select su2 from _f);
 select is(tests.run(format($q$delete from public.platform_admins where id = %L$q$, (select su2 from _f))), 'ok:1', 'with two active, one can be removed');
 insert into public.platform_admins (id, full_name, role) select su2, 'Second Super', 'platform_super_admin' from _f;
 
--- ═════════ composite billing FK ═════════
-select tests.authenticate_as((select su1 from _f));
-select matches(tests.run(format($q$insert into public.platform_invoices (restaurant_id, subscription_id, amount, period_start, period_end, status) values (%L, %L, 1, current_date, current_date, 'pending')$q$, (select a from _f), (select b_sub from _f))),
+-- ═════════ composite billing FK (owner path: the RPC derives the subscription from the tenant) ═════════
+select matches(tests.run(format($q$insert into public.platform_invoices (restaurant_id, subscription_id, amount, period_start, period_end, status) values (%L, %L, 1, current_date + 40, current_date + 70, 'pending')$q$, (select a from _f), (select b_sub from _f))),
                '^23503\|', 'an invoice cannot reference another tenant''s subscription');
-select tests.clear_auth();
 
 -- ═════════ subscriptions <-> restaurants status mirror ═════════
-select tests.authenticate_as((select su1 from _f));
-select lives_ok(format($q$update public.subscriptions set status = 'past_due' where id = %L$q$, (select a_sub from _f)), 'billing marks the subscription past_due');
+select tests.authenticate_as_service_role();
+select lives_ok(format($q$update public.subscriptions set status = 'past_due' where id = %L$q$, (select a_sub from _f)), 'billing (service role) marks the subscription past_due');
 select tests.clear_auth();
 select is((select status from public.restaurants where id = (select a from _f)), 'past_due', 'subscription -> restaurant: access status follows');
 update public.restaurants set status = 'active' where id = (select a from _f);
 select is((select status from public.subscriptions where id = (select a_sub from _f)), 'active', 'restaurant -> subscription: mirror follows');
-select tests.authenticate_as((select su1 from _f));
+select tests.authenticate_as_service_role();
 select is(tests.run(format($q$update public.subscriptions set status = 'suspended' where id = %L$q$, (select a_sub from _f))), 'P0001|use_suspend_rpc|suspension changes go through fn_suspend_tenant / fn_reactivate_tenant', 'entering suspended is only possible through fn_suspend_tenant');
+select tests.clear_auth();
+select tests.aal2((select su1 from _f));
 select lives_ok(format($q$select public.fn_suspend_tenant(%L, 'mirror test')$q$, (select a from _f)), 'fn_suspend_tenant');
 select tests.clear_auth();
 select is((select status from public.subscriptions where id = (select a_sub from _f)), 'suspended', 'suspension reaches the subscription');
-select tests.authenticate_as((select su1 from _f));
+select tests.authenticate_as_service_role();
 select is(tests.run(format($q$update public.subscriptions set status = 'active' where id = %L$q$, (select a_sub from _f))), 'P0001|use_suspend_rpc|suspension changes go through fn_suspend_tenant / fn_reactivate_tenant', 'leaving suspended is only possible through fn_reactivate_tenant');
+select tests.clear_auth();
+select tests.aal2((select su1 from _f));
 select lives_ok(format($q$select public.fn_reactivate_tenant(%L, 'mirror test')$q$, (select a from _f)), 'fn_reactivate_tenant');
 select tests.clear_auth();
 select is((select status from public.subscriptions where id = (select a_sub from _f)), (select status from public.restaurants where id = (select a from _f)), 'mirror consistent after reactivation');
+delete from auth.mfa_factors;
 
 -- ═════════ MFA gate for platform admins ═════════
 create function tests.claims(p_uid uuid, p_aal text) returns void language plpgsql as $$
@@ -77,12 +83,18 @@ select ok(not public.is_platform_super_admin() and not public.is_platform_admin(
 select is((select count(*)::int from public.restaurants), 0, 'required + aal1: no tenant visible');
 select tests.clear_auth();
 select tests.claims((select su1 from _f), 'aal2');
-select ok(public.is_platform_super_admin(), 'required + aal2: super admin');
+select ok(not public.is_platform_super_admin(), 'required + an aal2 claim WITHOUT a verified authenticator behind it: refused (0030)');
+select tests.clear_auth();
+select tests.add_verified_factor(su1) from _f;
+select tests.claims((select su1 from _f), 'aal2');
+select ok(public.is_platform_super_admin(), 'required + aal2 + verified factor: super admin');
 select is((select (public.fn_get_session_context() ->> 'platform_mfa')::boolean), true, 'session context reports platform_mfa');
 select tests.clear_auth();
+delete from auth.mfa_factors;
 select set_config('app.platform_mfa_required', 'off', true);
 select tests.claims((select su1 from _f), 'aal1');
-select ok(public.is_platform_super_admin(), 'opted out (local/CI) + no verified factor: aal1 is enough');
+select ok(public.is_platform_super_admin(), 'opted out (local/CI) + no verified factor: aal1 is enough for the read helpers');
+select is(tests.run('select public.fn_platform_list_tenants()'), 'P0001|mfa_required|', 'but never for a platform RPC: fn_platform_guard has no opt-out');
 select tests.clear_auth();
 select tests.add_verified_factor(su1) from _f;
 select tests.claims((select su1 from _f), 'aal1');

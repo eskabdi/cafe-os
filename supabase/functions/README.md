@@ -32,6 +32,12 @@ brute-forced offline without the pepper. Rules:
 | `pin-change` | a signed-in PIN staff member changes their own PIN (the only way out of `must_change_pin`; a flagged change then waits for tenant_admin approval), revokes their other sessions | service-role key, `PIN_PEPPER` |
 | `staff-create` | a `users.manage` caller creates a PIN-login staff member (Auth user + profile + PIN, rollback on failure) | service-role key, `PIN_PEPPER` |
 | `staff-roster` | PIN-staff tiles for a registered kiosk (token + `<slug>.cafeos.et`) | service-role key |
+| `staff-pin-reset` | a `users.manage` caller sets a new PIN for a PIN staff member of its tenant (`fn_prepare_pin_reset` as the caller, then `fn_set_user_pin`) | service-role key, `PIN_PEPPER` |
+| `tenant-admin-invite` | invite / resend / revoke a Tenant Admin invitation (Super Admin for a named tenant, or a tenant_admin for its own tenant; authorisation by the database as the caller) | service-role key, `INVITE_REDIRECT_URL` |
+
+`INVITE_REDIRECT_URL`: absolute https URL of the Tenant Portal's accept-invitation page (http only for localhost); must also be listed in the
+Auth redirect allow-list (`additional_redirect_urls` locally, Authentication > URL Configuration on the hosted project). Missing or unsafe = function disabled.
+
 
 `ALLOWED_ORIGINS` accepts exactly one wildcard form for tenant subdomains, e.g. `https://*.cafeos.et` (one valid non-reserved label; `platform.cafeos.et`
 must be listed explicitly). See `docs/architecture/tenant-routing.md`.

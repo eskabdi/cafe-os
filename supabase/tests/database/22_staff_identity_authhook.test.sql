@@ -87,7 +87,7 @@ select ok(not has_table_privilege('supabase_auth_admin', 'public.profiles', 'sel
 
 -- ═════════ provisioning flags ═════════
 insert into auth.users (id, email) values ('00000000-0000-4000-8000-000000000201', 'unconfirmed@demo-owner.example.com');
-select tests.authenticate_as((select platform from _f));
+select tests.aal2((select platform from _f));
 select is(tests.run(format($q$select public.fn_provision_tenant('Demo', 'demo-owner', '00000000-0000-4000-8000-000000000201', 'unconfirmed@demo-owner.example.com', 'Demo', null, null, %L, null, false)$q$, (select id from public.plans limit 1))),
           'P0001|permission_denied|', 'a platform admin cannot waive the email-confirmation check');
 select tests.clear_auth();

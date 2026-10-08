@@ -55,6 +55,11 @@ Read this first in the next session, then `CLAUDE.md` and `docs/spec/execution-p
 ## Phase 3B — Two portals (inserted 2026-10-08, before Phase 4; Phase 4 paused)
 
 Owner decision, non-negotiable: Platform Admin Portal (Super Admin) and Tenant Portal (Tenant Admin), fully separated. See execution prompt §34A and Phase 3B. Roles/permission matrix/user management/branding moved from Phase 10 into 3B. Phase 4 DB work had started in a worktree but stopped on a rate limit with nothing committed; it resumes after 3B.
+- **3B DB + Edge Function layer done (2026-10-08, branch `ccr-013f0187-mxaao1`, review gate NOT yet run):** migrations `20261003003000_platform_portal.sql`,
+  `20261003003100_tenant_portal.sql`; Edge Functions `tenant-admin-invite`, `staff-pin-reset`; pgTAP `32`-`35` (+ updated 02-28 for the RPC-only write path);
+  race test for the dual-identity race; docs `docs/api/portals.md` (+ erd, rls-matrix, rpc-conventions, security-controls, dfd, auth-flows).
+  Next: frontend portals (routes `/platform/*` vs `/r/<slug>/*`, guards, generated nav per portal), regenerate `types.ts`, Playwright cross-portal denial tests,
+  then the review gate. Open owner questions: end of `docs/api/portals.md`.
 
 ## Remaining roadmap (§58)
 

@@ -282,7 +282,7 @@ select is((select count(*)::int from public.audit_logs where event in ('auth.pin
 
 -- delegate (users.manage, lower rights) cannot decide for a role it does not cover
 select tests.aal2((select admin from _f));   -- (the admin holds a verified factor by now, so role changes need aal2 step-up)
-insert into public.roles (restaurant_id, name) values ((select a from _f), 'HR Lead');
+select public.fn_create_role('{"name": "HR Lead"}');
 select public.fn_update_role_permissions((select id from public.roles where restaurant_id = (select a from _f) and name = 'HR Lead'), array['users.manage', 'users.view'], '{}');
 select public.fn_change_user_role((select deleg from _f), (select id from public.roles where restaurant_id = (select a from _f) and name = 'HR Lead'));
 select tests.clear_auth();

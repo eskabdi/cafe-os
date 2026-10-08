@@ -1,7 +1,7 @@
 -- Adversarial: the platform / tenant boundary. Tenant staff (admin and waiter) and anon versus the platform
 -- surface, platform_support (read-only) and platform_super_admin versus tenant data.
 begin;
-select plan(70);
+select plan(71);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -26,19 +26,19 @@ select is((select count(*)::int from public.admin_audit_log), 0, 'tenant admin r
 select is((select count(*)::int from public.restaurants), 1, 'tenant admin reads only its own restaurants row');
 select is((select count(*)::int from public.subscriptions), 1, 'tenant admin reads only its own subscription');
 select is(tests.run($q$insert into public.plans (name, price_etb_monthly) values ('Free forever', 0)$q$),
-          '42501|new row violates row-level security policy for table "plans"|', 'tenant admin cannot create a plan');
-select is(tests.run($q$update public.plans set price_etb_monthly = 0$q$), 'ok:0', 'tenant admin cannot change any plan (RLS hides write)');
-select is(tests.run($q$delete from public.plans$q$), 'ok:0', 'tenant admin cannot delete any plan');
+          '42501|permission denied for table plans|', 'tenant admin cannot create a plan');
+select is(tests.run($q$update public.plans set price_etb_monthly = 0$q$), '42501|permission denied for table plans|', 'tenant admin cannot change any plan (no client UPDATE since 0030)');
+select is(tests.run($q$delete from public.plans$q$), '42501|permission denied for table plans|', 'tenant admin cannot delete any plan');
 select is(tests.run(format($q$update public.subscriptions set plan_id = (select id from public.plans where name = 'Pro'), status = 'active' where id = %L$q$, (select a_sub from _f))),
-          'ok:0', 'tenant admin cannot upgrade its own subscription');
+          '42501|permission denied for table subscriptions|', 'tenant admin cannot upgrade its own subscription');
 select is(tests.run(format($q$insert into public.subscriptions (restaurant_id, plan_id, status, current_period_end) values (%L, %L, 'active', now() + interval '1 year')$q$, (select b from _f), (select plan_id from _f))),
-          '42501|new row violates row-level security policy for table "subscriptions"|', 'tenant admin cannot insert subscriptions');
+          '42501|permission denied for table subscriptions|', 'tenant admin cannot insert subscriptions');
 select is(tests.run(format($q$insert into public.platform_invoices (restaurant_id, subscription_id, amount, period_start, period_end, status) values (%L, %L, 1, current_date, current_date, 'paid')$q$, (select a from _f), (select a_sub from _f))),
-          '42501|new row violates row-level security policy for table "platform_invoices"|'::text, 'tenant admin cannot insert invoices');
-select is(tests.run($q$update public.platform_invoices set status = 'paid'$q$), 'ok:0', 'tenant admin cannot mark invoices paid');
+          '42501|permission denied for table platform_invoices|'::text, 'tenant admin cannot insert invoices');
+select is(tests.run($q$update public.platform_invoices set status = 'paid'$q$), '42501|permission denied for table platform_invoices|', 'tenant admin cannot mark invoices paid');
 select is(tests.run(format($q$insert into public.platform_admins (id, full_name, role) values (%L, 'Self promote', 'platform_super_admin')$q$, (select a_admin from _f))),
-          '42501|new row violates row-level security policy for table "platform_admins"|', 'tenant admin cannot make itself a platform admin');
-select is(tests.run($q$update public.platform_admins set role = 'platform_super_admin', is_active = true$q$), 'ok:0', 'tenant admin cannot modify platform admins');
+          '42501|permission denied for table platform_admins|', 'tenant admin cannot make itself a platform admin');
+select is(tests.run($q$update public.platform_admins set role = 'platform_super_admin', is_active = true$q$), '42501|permission denied for table platform_admins|', 'tenant admin cannot modify platform admins');
 select is(tests.run($q$insert into public.admin_audit_log (action) values ('forged')$q$),
           '42501|permission denied for table admin_audit_log|', 'tenant admin cannot write admin_audit_log');
 select is(tests.run($q$update public.restaurants set status = 'active', slug = 'hijack', custom_domain = 'evil.example.com'$q$),
@@ -60,7 +60,7 @@ select tests.clear_auth();
 select tests.authenticate_as((select a_waiter from _f));
 select is(tests.run(format($q$select public.fn_suspend_tenant(%L, 'waiter says no')$q$, (select a from _f))), 'P0001|permission_denied|', 'waiter cannot suspend');
 select is(tests.run($q$insert into public.plans (name, price_etb_monthly) values ('x', 0)$q$),
-          '42501|new row violates row-level security policy for table "plans"|', 'waiter cannot create plans');
+          '42501|permission denied for table plans|', 'waiter cannot create plans');
 select is((select count(*)::int from public.admin_audit_log) + (select count(*)::int from public.platform_admins), 0, 'waiter reads no platform tables');
 select tests.clear_auth();
 
@@ -91,10 +91,10 @@ select is((select count(*)::int from public.platform_admins), 2, 'support sees t
 select is((select public.current_restaurant_id()), null::uuid, 'support has no tenant identity');
 select is(tests.run(format($q$select public.fn_suspend_tenant(%L, 'support cannot suspend')$q$, (select a from _f))), 'P0001|permission_denied|', 'support cannot suspend tenants');
 select is(tests.run($q$insert into public.plans (name, price_etb_monthly) values ('x', 0)$q$),
-          '42501|new row violates row-level security policy for table "plans"|', 'support cannot write plans');
+          '42501|permission denied for table plans|', 'support cannot write plans');
 select is(tests.run(format($q$insert into public.platform_admins (id, full_name, role) values (%L, 'x', 'platform_super_admin')$q$, (select a_admin from _f))),
-          '42501|new row violates row-level security policy for table "platform_admins"|', 'support cannot add platform admins');
-select is(tests.run(format($q$update public.platform_admins set role = 'platform_super_admin' where id = %L$q$, (select support_admin from _f))), 'ok:0', 'support cannot promote itself');
+          '42501|permission denied for table platform_admins|', 'support cannot add platform admins');
+select is(tests.run(format($q$update public.platform_admins set role = 'platform_super_admin' where id = %L$q$, (select support_admin from _f))), '42501|permission denied for table platform_admins|', 'support cannot promote itself');
 select is(tests.run(format($q$select public.fn_provision_tenant('Evil', 'evil-cafe', gen_random_uuid(), 'e@e.example.com', 'E', null, null, %L, null)$q$, (select plan_id from _f))),
           'P0001|permission_denied|', 'support cannot provision tenants');
 select tests.clear_auth();
@@ -116,7 +116,11 @@ select is(tests.run($q$update public.restaurants set status = 'active'$q$), '425
 select is(tests.run($q$insert into public.admin_audit_log (action) values ('forged')$q$), '42501|permission denied for table admin_audit_log|', 'super admin cannot forge admin_audit_log rows');
 select is(tests.run($q$update public.admin_audit_log set action = 'x'$q$), '42501|permission denied for table admin_audit_log|', 'super admin cannot edit admin_audit_log rows');
 select is(tests.run(format($q$insert into public.platform_admins (id, full_name, role) values (%L, 'Dual Identity', 'platform_support')$q$, (select a_waiter from _f))),
-          'P0001|auth_method_mismatch|tenant staff cannot become platform admins', 'a tenant staff account cannot also be made a platform admin (identities stay disjoint)');
+          '42501|permission denied for table platform_admins|', 'no client INSERT on platform_admins at all (0030; ops registers super admins)');
+select tests.clear_auth();
+select is(tests.run(format($q$insert into public.platform_admins (id, full_name, role) values (%L, 'Dual Identity', 'platform_support')$q$, (select a_waiter from _f))),
+          'P0001|auth_method_mismatch|tenant staff cannot become platform admins', 'a tenant staff account cannot also be made a platform admin, on any path (identities stay disjoint)');
+select tests.aal2((select super_admin from _f));
 select lives_ok(format($q$select public.fn_suspend_tenant(%L, 'boundary test suspension')$q$, (select b from _f)), 'super admin suspends a tenant');
 select tests.clear_auth();
 select is((select platform_admin_id from public.admin_audit_log where action = 'tenant.suspend' and restaurant_id = (select b from _f)),

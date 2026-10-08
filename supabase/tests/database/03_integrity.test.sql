@@ -123,9 +123,10 @@ select lives_ok(format($q$select public.fn_change_user_role(%L, %L)$q$, tests.us
 select throws_ok(format($q$select public.fn_change_user_role(%L, %L)$q$, tests.user_id('selam', 'central-cafe'),
                         (select id from public.roles where name = 'Cashier' and restaurant_id = (select a from _f))),
                  'P0001', 'last_tenant_admin', 'last tenant_admin cannot be demoted');
+select tests.clear_auth();
+-- (clients have no UPDATE on profiles since 0031; the trigger guard holds for every path, owner included)
 select throws_ok(format($q$update public.profiles set is_active = false where id = %L$q$, tests.user_id('selam', 'central-cafe')),
                  'P0001', 'last_tenant_admin', 'last tenant_admin cannot be deactivated');
-select tests.clear_auth();
 
 -- ── closed business day is frozen ──
 update public.day_sessions set status = 'closed', closed_at = now(), closed_by = tests.user_id('selam', 'central-cafe'),

@@ -1,4 +1,4 @@
-# Authentication flows (Phase 1)
+# Authentication flows (Phase 1, extended through Phase 3B)
 
 Binding rule: `platform_super_admin` and `tenant_admin` NEVER use a PIN. They sign in with Supabase Auth email + password (TOTP MFA capable).
 PIN login is only for non-admin staff (`profiles.auth_method = 'pin'`); the PIN path answers admins exactly like a wrong PIN.
@@ -93,8 +93,45 @@ sequenceDiagram
 ```
 
 ## Platform admins
-`is_platform_admin()` / `is_platform_super_admin()` additionally require `aal2` (TOTP verified this session) unless `app.platform_mfa_required = 'off'` and the
-user has no verified factor. Production default = required. Local/CI opt out per session; the pgTAP helpers do it per transaction.
+`is_platform_admin()` / `is_platform_super_admin()` (the RLS read helpers) additionally require `aal2` with a verified factor behind it (0030) unless
+`app.platform_mfa_required = 'off'` and the user has no verified factor. Production default = required. Local/CI opt out per session; the pgTAP helpers do it per transaction.
+
+**Every platform RPC (Phase 3B, 0030) uses `fn_platform_guard()` instead, which has NO opt-out**: active `platform_super_admin` row, JWT `aal = 'aal2'`, and a
+verified `auth.mfa_factors` row the account still owns. Consequence for local development: the demo Super Admin (`admin@cafeos.example.com`) must enrol a TOTP
+factor (Supabase Auth MFA) and complete the challenge before the Platform Admin Portal works; the GUC only relaxes the direct table reads. Errors:
+`permission_denied` (not an active super admin; every tenant user), `mfa_required` (aal1, or no live factor).
+
+### Adding a Super Admin (ops procedure; no client path exists)
+There is deliberately no RPC or Edge Function that lets a signed-in user create a platform admin (a compromised Super Admin session must not be able to mint
+more). Two-person ops procedure, recorded in the change log:
+1. Create (or invite) the Auth user with a real, CONFIRMED e-mail in the Supabase dashboard (Authentication > Users). It must not be a tenant user.
+2. With the service-role key (SQL editor or a one-off script, never a browser): `select public.fn_ops_register_platform_admin('<auth user id>', '<full name>');`
+   It refuses an unconfirmed / synthetic e-mail (`owner_email_unconfirmed`), an existing tenant profile or pending tenant invitation (`owner_already_assigned`)
+   and writes `admin_audit_log` (`platform_admin.registered`; actor null = service job).
+3. The new admin signs in, enrols TOTP (aal2 is mandatory for every platform RPC) and is visible in the portal's Super Admin list
+   (`fn_platform_list_admins`). Deactivation is `fn_platform_set_admin_active` (never yourself; the last active super admin is protected by trigger).
+
+### Tenant Admin invitation (Phase 3B, `tenant-admin-invite`)
+```mermaid
+sequenceDiagram
+    participant SA as Super Admin (aal2) / tenant_admin (aal2)
+    participant EF as tenant-admin-invite
+    participant DB as Postgres
+    participant GT as Supabase Auth
+    participant IN as Invitee
+    SA->>EF: POST {action: invite, restaurant_id (platform only), email, names, username} + JWT
+    EF->>DB: fn_prepare_tenant_admin_invitation(...) AS THE CALLER (guard, validation, reservation, audit)
+    EF->>GT: auth.admin.inviteUserByEmail(email, redirectTo = INVITE_REDIRECT_URL) (service role)
+    EF->>DB: fn_attach_tenant_admin_invitation(invitation, auth user) (service role)
+    Note over EF,DB: failure -> fn_abort_tenant_admin_invitation (+ delete the never-confirmed user)
+    GT-->>IN: invitation e-mail
+    IN->>GT: follows the link (e-mail confirmed, session), sets a password (min 12, policy)
+    IN->>DB: fn_get_my_invitation() (where am I invited?)
+    IN->>DB: fn_accept_tenant_admin_invitation() -> tenant_admin profile (auth_method password)
+    IN->>GT: enrol TOTP (recommended; required for aal2 actions)
+```
+The first Tenant Admin of a tenant created with `fn_platform_create_tenant` arrives this way. Invitations expire after 7 days (resend renews; at most 5 sends,
+60 s apart); an existing Auth account is never re-bound (`email_in_use`), so a platform admin can never also become a tenant admin.
 
 ## PIN length by role (documented exception, user decision 2026-10-03)
 The role named `Cashier` signs in with a 6-digit PIN; every other PIN role with exactly 4. It is the ONLY name-keyed rule in the system and lives in two twin
