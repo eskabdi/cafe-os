@@ -115,6 +115,62 @@ revoke all on function public.fn_guard_profile_identity() from public, anon, aut
 create trigger trg_00_identity_disjoint before insert or update of id on public.profiles
   for each row execute function public.fn_guard_profile_identity();
 
+-- ── snapshot-independent arbiter (review 14) ────────────────────────────────
+-- The advisory lock above serialises the two checks, but a REPEATABLE READ / SERIALIZABLE transaction keeps the snapshot it took
+-- BEFORE the lock, so its EXISTS check can miss a row the other transaction committed meanwhile. A deferred constraint trigger
+-- would not help either (it runs with the same transaction snapshot). A UNIQUE index is checked against every committed and
+-- in-flight tuple regardless of snapshot, so every account identity claims ONE row here: (user_id, kind). Whatever the isolation
+-- level, the second portal claim for the same user fails (auth_method_mismatch, or 40001 under REPEATABLE READ).
+create table public.identity_claims (
+  user_id    uuid primary key,
+  kind       text not null check (kind in ('profile', 'platform_admin')),
+  created_at timestamptz not null default now()
+);
+alter table public.identity_claims enable row level security;
+alter table public.identity_claims force row level security;
+revoke all on public.identity_claims from public, anon, authenticated, service_role;
+insert into public.identity_claims (user_id, kind) select p.id, 'profile' from public.profiles p on conflict do nothing;
+insert into public.identity_claims (user_id, kind) select a.id, 'platform_admin' from public.platform_admins a on conflict do nothing;
+
+create or replace function public.fn_identity_claim(p_user_id uuid, p_kind text)
+returns void
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  v_kind text;
+begin
+  insert into public.identity_claims (user_id, kind) values (p_user_id, p_kind) on conflict (user_id) do nothing;
+  select c.kind into v_kind from public.identity_claims c where c.user_id = p_user_id;
+  if v_kind is distinct from p_kind then
+    perform public.fn_err('auth_method_mismatch',
+      case when p_kind = 'profile' then 'platform admins cannot hold a tenant profile' else 'tenant staff cannot become platform admins' end);
+  end if;
+end;
+$$;
+revoke all on function public.fn_identity_claim(uuid, text) from public, anon, authenticated;
+
+create or replace function public.fn_identity_claim_row()
+returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  v_kind text := tg_argv[0];
+begin
+  if tg_op in ('UPDATE', 'DELETE') and (tg_op = 'DELETE' or new.id is distinct from old.id) then
+    delete from public.identity_claims c where c.user_id = old.id and c.kind = v_kind;
+  end if;
+  if tg_op = 'INSERT' or (tg_op = 'UPDATE' and new.id is distinct from old.id) then
+    perform public.fn_identity_claim(new.id, v_kind);
+  end if;
+  return null;
+end;
+$$;
+revoke all on function public.fn_identity_claim_row() from public, anon, authenticated;
+create trigger trg_identity_claim after insert or update of id or delete on public.profiles
+  for each row execute function public.fn_identity_claim_row('profile');
+create trigger trg_identity_claim after insert or update of id or delete on public.platform_admins
+  for each row execute function public.fn_identity_claim_row('platform_admin');
+
 -- ════════════════════════════════════════ 2. platform tables: RPC-only writes ════════════════════════════════════════
 revoke insert, update, delete on public.plans, public.subscriptions, public.platform_invoices from authenticated;
 revoke insert, update, delete on public.platform_admins from authenticated;
@@ -127,6 +183,27 @@ alter table public.plans
   add column max_storage_bytes    bigint  check (max_storage_bytes is null or max_storage_bytes > 0),
   add column max_orders_per_month integer check (max_orders_per_month is null or max_orders_per_month > 0),
   add column sort_order           integer not null default 0;
+
+-- ── cancellation timestamp (owner decision: 1-year retention, restore within it) ──
+-- Maintained by a trigger on EVERY path (RPC, ops, tests): set when the status becomes 'cancelled', cleared when it leaves it.
+alter table public.restaurants add column cancelled_at timestamptz, add column purged_at timestamptz;
+create or replace function public.fn_track_cancelled_at()
+returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+begin
+  if new.status = 'cancelled' then
+    if tg_op = 'INSERT' or old.status is distinct from 'cancelled' then new.cancelled_at := coalesce(new.cancelled_at, now()); end if;
+  else
+    new.cancelled_at := null;
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.fn_track_cancelled_at() from public, anon, authenticated;
+create trigger trg_track_cancelled_at before insert or update of status on public.restaurants
+  for each row execute function public.fn_track_cancelled_at();
+create index restaurants_cancelled_idx on public.restaurants (cancelled_at) where status = 'cancelled';
 
 -- ── small validators (internal) ─────────────────────────────────────────────
 -- positive integer (<= p_max) or null; anything else is invalid_input with the key as detail
@@ -228,6 +305,10 @@ declare
   v_usage jsonb;
   v_limits jsonb;
   v_over jsonb;
+  -- Storage: only the buckets CafeOS writes tenant objects to, and an index-friendly prefix on the C-collated name (Supabase's
+  -- storage.objects index is (bucket_id, name COLLATE "C")); the uuid in the prefix contains no LIKE wildcard.
+  v_buckets text[] := array['menu-images', 'tenant-branding'];
+  v_prefix text := 'restaurants/' || p_rid::text || '/';
 begin
   select r.timezone into v_tz from public.restaurants r where r.id = p_rid;
   if not found then perform public.fn_err('not_found'); end if;
@@ -240,12 +321,13 @@ begin
     'stations',            (select count(*) from public.stations s where s.restaurant_id = p_rid and s.is_active),
     'kiosks',              (select count(*) from public.kiosk_devices k where k.restaurant_id = p_rid and k.revoked_at is null),
     'storage_bytes',       (select coalesce(sum(case when (o.metadata ->> 'size') ~ '^[0-9]{1,18}$' then (o.metadata ->> 'size')::bigint else 0 end), 0)
-                            from storage.objects o where starts_with(o.name, 'restaurants/' || p_rid::text || '/')),
-    'storage_objects',     (select count(*) from storage.objects o where starts_with(o.name, 'restaurants/' || p_rid::text || '/')),
+                            from storage.objects o where o.bucket_id = any (v_buckets) and (o.name collate "C") like (v_prefix || '%')),
+    'storage_objects',     (select count(*) from storage.objects o where o.bucket_id = any (v_buckets) and (o.name collate "C") like (v_prefix || '%')),
     'orders_last_30_days', (select count(*) from public.orders o where o.restaurant_id = p_rid and o.created_at >= now() - interval '30 days'),
     'orders_this_month',   (select count(*) from public.orders o where o.restaurant_id = p_rid
                             and o.created_at >= (date_trunc('month', now() at time zone v_tz) at time zone v_tz)),
-    'pending_invitations', (select count(*) from public.tenant_admin_invitations i where i.restaurant_id = p_rid and i.status = 'pending')
+    'pending_invitations', (select count(*) from public.tenant_admin_invitations i where i.restaurant_id = p_rid and i.status = 'pending'
+                            and i.expires_at > now())
   ) into v_usage;
 
   select jsonb_build_object(
@@ -276,29 +358,40 @@ create table public.tenant_admin_invitations (
   middle_name      text check (middle_name is null or char_length(btrim(middle_name)) between 1 and 60),
   last_name        text check (last_name is null or char_length(btrim(last_name)) between 1 and 60),
   username         text not null check (username ~ '^[a-z0-9][a-z0-9._-]{1,31}$'),
-  auth_user_id     uuid,                 -- set by fn_attach_tenant_admin_invitation once Auth created the invited user
-  status           text not null default 'pending' check (status in ('pending', 'accepted', 'revoked')),
+  auth_user_id     uuid,                 -- set by fn_attach_tenant_admin_invitation once Auth created / re-used the invited user
+  status           text not null default 'pending' check (status in ('pending', 'accepted', 'revoked', 'expired')),
   invited_by       uuid not null,        -- auth.uid() of the inviter; deliberately no FK (platform admin OR tenant profile)
   invited_by_type  text not null check (invited_by_type in ('platform_admin', 'tenant_admin')),
   expires_at       timestamptz not null,
-  send_count       integer not null default 1 check (send_count between 0 and 100),
-  last_sent_at     timestamptz not null default now(),
+  -- send budget: counts SUCCESSFUL sends only (fn_record_tenant_admin_invitation_sent); attempts are throttled by last_attempt_at
+  send_count       integer not null default 0 check (send_count between 0 and 100),
+  last_sent_at     timestamptz,
+  last_attempt_at  timestamptz not null default now(),
+  -- existence-oracle decoy (review M2): a TENANT caller who invites an address that is already taken elsewhere (another account,
+  -- another tenant's pending invitation) gets a normal-looking invitation that is never delivered, attached or accepted
+  suppressed       boolean not null default false,
   accepted_at      timestamptz,
   revoked_at       timestamptz,
   revoked_by       uuid,
+  revoke_reason    text check (revoke_reason is null or revoke_reason in ('revoked', 'send_failed', 'inviter_removed', 'tenant_cancelled')),
+  expired_at       timestamptz,
   created_at       timestamptz not null default now(),
   updated_at       timestamptz not null default now(),
   constraint tenant_admin_invitations_tenant_id_key unique (restaurant_id, id),
   constraint tenant_admin_invitations_accepted_check check ((status = 'accepted') = (accepted_at is not null)),
   constraint tenant_admin_invitations_revoked_check check ((status = 'revoked') = (revoked_at is not null)),
-  constraint tenant_admin_invitations_accepted_user_check check (status <> 'accepted' or auth_user_id is not null)
+  constraint tenant_admin_invitations_expired_check check ((status = 'expired') = (expired_at is not null)),
+  constraint tenant_admin_invitations_accepted_user_check check (status <> 'accepted' or (auth_user_id is not null and not suppressed)),
+  constraint tenant_admin_invitations_decoy_check check (not suppressed or auth_user_id is null)
 );
--- an e-mail can be invited by ONE pending invitation platform-wide (an auth user belongs to one tenant at most)
-create unique index tenant_admin_invitations_pending_email_idx on public.tenant_admin_invitations (email) where status = 'pending';
+-- an e-mail can be invited by ONE deliverable pending invitation platform-wide (an auth user belongs to one tenant at most);
+-- revoked / expired / accepted rows free the address
+create unique index tenant_admin_invitations_pending_email_idx on public.tenant_admin_invitations (email) where status = 'pending' and not suppressed;
 create unique index tenant_admin_invitations_pending_user_idx on public.tenant_admin_invitations (auth_user_id)
   where status = 'pending' and auth_user_id is not null;
 create unique index tenant_admin_invitations_pending_username_idx on public.tenant_admin_invitations (restaurant_id, username)
   where status = 'pending';
+create index tenant_admin_invitations_inviter_idx on public.tenant_admin_invitations (invited_by, created_at desc);
 create index tenant_admin_invitations_tenant_idx on public.tenant_admin_invitations (restaurant_id, created_at desc);
 
 alter table public.tenant_admin_invitations enable row level security;
@@ -312,6 +405,19 @@ create trigger trg_lock_restaurant_id before update on public.tenant_admin_invit
   for each row execute function public.fn_lock_restaurant_id();
 create trigger trg_00_no_delete before delete on public.tenant_admin_invitations
   for each row execute function public.fn_forbid_mutation();
+
+-- The state every reader sees. A pending invitation is EXPIRED once expires_at passed, or when it was never delivered
+-- (send_count = 0: the Edge Function died between reservation and send, or a direct RPC caller never sent it) 15 minutes after
+-- the reservation. Writers turn that state into status 'expired' lazily (fn_expire_tenant_admin_invitations).
+create or replace function public.fn_invitation_state(p_status text, p_expires_at timestamptz, p_send_count integer, p_created_at timestamptz)
+returns text
+language sql stable set search_path = ''
+as $$
+  select case when p_status = 'pending'
+                   and (p_expires_at <= now() or (p_send_count = 0 and p_created_at <= now() - interval '15 minutes'))
+              then 'expired' else p_status end
+$$;
+revoke all on function public.fn_invitation_state(text, timestamptz, integer, timestamptz) from public, anon, authenticated;
 
 -- ════════════════════════════════════════ 7. backups: table ════════════════════════════════════════
 create table public.platform_backup_runs (
@@ -541,6 +647,7 @@ as $$
     'id', r.id, 'name', r.name, 'slug', r.slug, 'status', r.status, 'custom_domain', r.custom_domain,
     'timezone', r.timezone, 'phone', r.phone, 'address', r.address, 'tin', r.tin,
     'onboarded_at', r.onboarded_at, 'suspended_at', r.suspended_at, 'suspension_reason', r.suspension_reason,
+    'cancelled_at', r.cancelled_at,
     'created_at', r.created_at, 'updated_at', r.updated_at,
     'subscription', (select jsonb_build_object('id', s.id, 'status', s.status, 'trial_ends_at', s.trial_ends_at,
                                                 'current_period_start', s.current_period_start, 'current_period_end', s.current_period_end,
@@ -588,7 +695,7 @@ begin
   from (
     select r.id, r.created_at,
            jsonb_build_object('id', r.id, 'name', r.name, 'slug', r.slug, 'status', r.status, 'created_at', r.created_at,
-                              'suspended_at', r.suspended_at,
+                              'suspended_at', r.suspended_at, 'cancelled_at', r.cancelled_at,
                               'plan', case when pl.id is null then null else jsonb_build_object('id', pl.id, 'name', pl.name) end,
                               'subscription_status', s.status, 'trial_ends_at', s.trial_ends_at,
                               'current_period_end', s.current_period_end) j
@@ -606,9 +713,12 @@ begin
 end;
 $$;
 
+-- Reading ONE tenant's detail is audited (admin_audit_log 'tenant.viewed', review 13): it is the platform's window onto a named
+-- customer. The list RPCs (tenants, plans, invoices, audit log, admins, backups, health) are deliberately NOT audited: they are
+-- catalogue / aggregate views, and auditing them would drown the trail.
 create or replace function public.fn_platform_get_tenant(p_restaurant_id uuid)
 returns jsonb
-language plpgsql stable security definer set search_path = ''
+language plpgsql volatile security definer set search_path = ''
 as $$
 declare
   v jsonb;
@@ -617,10 +727,11 @@ begin
   if p_restaurant_id is null then perform public.fn_err('invalid_input', 'restaurant_id'); end if;
   v := public.fn_platform_tenant_json(p_restaurant_id);
   if v is null then perform public.fn_err('not_found'); end if;
+  perform public.fn_write_admin_audit('tenant.viewed', p_restaurant_id, '{}'::jsonb);
   return v || public.fn_tenant_usage(p_restaurant_id) || jsonb_build_object(
     'invitations', (select coalesce(jsonb_agg(jsonb_build_object(
                        'id', i.id, 'email', i.email, 'status', i.status,
-                       'state', case when i.status = 'pending' and i.expires_at <= now() then 'expired' else i.status end,
+                       'state', public.fn_invitation_state(i.status, i.expires_at, i.send_count, i.created_at),
                        'invited_by_type', i.invited_by_type, 'expires_at', i.expires_at, 'send_count', i.send_count,
                        'last_sent_at', i.last_sent_at, 'accepted_at', i.accepted_at, 'revoked_at', i.revoked_at,
                        'created_at', i.created_at) order by i.created_at desc), '[]'::jsonb)
@@ -708,6 +819,7 @@ declare
   v_status text;
   v_old uuid;
   v_usage jsonb;
+  v_over_list text;
 begin
   perform public.fn_platform_guard();
   v_reason := public.fn_platform_reason(p_reason);
@@ -725,13 +837,36 @@ begin
                               'over_quota', public.fn_tenant_usage(p_restaurant_id) -> 'over_quota');
   end if;
 
+  -- Owner decision (2026-10-08): a plan change that would put the tenant OVER any quota of the target plan is REFUSED
+  -- (plan_limit_reached, detail = the comma-separated metric names, e.g. 'staff,menu_items'); nothing is changed. The check
+  -- runs on the TARGET plan's limits against current usage (all six counters, monitor-only ones included: a downgrade must fit).
+  select coalesce(string_agg(m.metric, ',' order by m.metric), '') into v_over_list
+  from (select public.fn_tenant_usage(p_restaurant_id) -> 'usage' u,
+               (select jsonb_build_object('max_staff', pl.max_staff, 'max_menu_items', pl.max_menu_items, 'max_stations', pl.max_stations,
+                                          'max_kiosks', pl.max_kiosks, 'max_storage_bytes', pl.max_storage_bytes,
+                                          'max_orders_per_month', pl.max_orders_per_month)
+                from public.plans pl where pl.id = p_plan_id) l) x,
+       (values ('staff', 'active_staff', 'max_staff'), ('menu_items', 'menu_items', 'max_menu_items'),
+               ('stations', 'stations', 'max_stations'), ('kiosks', 'kiosks', 'max_kiosks'),
+               ('storage', 'storage_bytes', 'max_storage_bytes'), ('orders', 'orders_this_month', 'max_orders_per_month')) m(metric, used, lim)
+  where jsonb_typeof(x.l -> m.lim) = 'number' and (x.u ->> m.used)::numeric > (x.l ->> m.lim)::numeric;
+  -- staff also counts pending invitations (the same rule as every staff create path)
+  if (select pl.max_staff from public.plans pl where pl.id = p_plan_id) is not null
+     and public.fn_staff_slots_used(p_restaurant_id, null) > (select pl.max_staff from public.plans pl where pl.id = p_plan_id)
+     and v_over_list !~ '(^|,)staff(,|$)' then
+    v_over_list := case when v_over_list = '' then 'staff' else 'staff,' || v_over_list end;
+  end if;
+  if v_over_list <> '' then perform public.fn_err('plan_limit_reached', v_over_list); end if;
+
   update public.subscriptions set plan_id = p_plan_id where restaurant_id = p_restaurant_id;
   v_usage := public.fn_tenant_usage(p_restaurant_id);
 
   perform public.fn_write_admin_audit('subscription.plan_changed', p_restaurant_id,
-    jsonb_build_object('from_plan_id', v_old, 'to_plan_id', p_plan_id, 'reason', v_reason, 'over_quota', v_usage -> 'over_quota'));
+    jsonb_build_object('from_plan_id', v_old, 'to_plan_id', p_plan_id, 'reason', v_reason));
   perform public.fn_write_audit('subscription.plan_changed', jsonb_build_object('from_plan_id', v_old, 'to_plan_id', p_plan_id), p_restaurant_id);
-  -- a downgrade below current usage is allowed (existing rows stay); the tenant's create paths refuse new rows over the cap
+  -- Enforcement at CREATE time (tenant paths): max_staff (staff-create, reactivation, invitations, acceptance) and max_menu_items.
+  -- max_stations / max_kiosks / max_storage_bytes / max_orders_per_month are MONITOR-ONLY for now (owner decision 2026-10-08):
+  -- reported as usage vs quota / over_quota, never blocking a tenant's create path; only a plan change must fit them.
   return jsonb_build_object('restaurant_id', p_restaurant_id, 'plan_id', p_plan_id, 'changed', true, 'over_quota', v_usage -> 'over_quota');
 end;
 $$;
@@ -790,7 +925,8 @@ begin
   end if;
 
   update public.restaurants set status = 'cancelled', status_before_suspension = null where id = p_restaurant_id;
-  update public.tenant_admin_invitations set status = 'revoked', revoked_at = now(), revoked_by = (select auth.uid())
+  update public.tenant_admin_invitations
+     set status = 'revoked', revoked_at = now(), revoked_by = (select auth.uid()), revoke_reason = 'tenant_cancelled'
    where restaurant_id = p_restaurant_id and status = 'pending';
   get diagnostics v_revoked = row_count;
 
@@ -798,6 +934,134 @@ begin
     jsonb_build_object('reason', v_reason, 'previous_status', v_status, 'invitations_revoked', v_revoked));
   perform public.fn_write_audit('tenant.cancelled', jsonb_build_object('reason', v_reason), p_restaurant_id);
   return jsonb_build_object('restaurant_id', p_restaurant_id, 'status', 'cancelled', 'changed', true);
+end;
+$$;
+
+-- Restore a cancelled tenant (owner decision 2026-10-08): only within the 1-year retention window (cancelled_at + 1 year), slug
+-- confirmation like the cancellation, back to 'active' (billing is then handled with fn_platform_set_billing_status /
+-- invoices). After the window -> invalid_state 'retention_expired' (the data may already be purged). Invitations revoked at
+-- cancellation stay revoked (invite again).
+create or replace function public.fn_platform_restore_tenant(p_restaurant_id uuid, p_reason text, p_confirm_slug text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_reason text;
+  v_status text;
+  v_slug text;
+  v_cancelled timestamptz;
+  v_purged boolean;
+begin
+  perform public.fn_platform_guard();
+  v_reason := public.fn_platform_reason(p_reason);
+  select r.status, r.slug, r.cancelled_at, r.purged_at is not null into v_status, v_slug, v_cancelled, v_purged
+  from public.restaurants r where r.id = p_restaurant_id for update;
+  if not found then perform public.fn_err('not_found'); end if;
+  if p_confirm_slug is null or lower(btrim(p_confirm_slug)) <> v_slug then perform public.fn_err('invalid_input', 'confirm_slug'); end if;
+  if v_status <> 'cancelled' then perform public.fn_err('invalid_state', v_status); end if;
+  if v_purged or v_cancelled is null or v_cancelled <= now() - interval '1 year' then
+    perform public.fn_err('invalid_state', 'retention_expired');
+  end if;
+
+  update public.restaurants set status = 'active' where id = p_restaurant_id;   -- trg_track_cancelled_at clears cancelled_at
+  perform public.fn_write_admin_audit('tenant.restore', p_restaurant_id,
+    jsonb_build_object('reason', v_reason, 'cancelled_at', v_cancelled));
+  perform public.fn_write_audit('tenant.restored', jsonb_build_object('reason', v_reason), p_restaurant_id);
+  return jsonb_build_object('restaurant_id', p_restaurant_id, 'status', 'active', 'changed', true);
+end;
+$$;
+
+-- OPS ONLY (service_role; never a client): end of the 1-year retention of cancelled tenants. For every tenant cancelled more than
+-- 1 year ago and not yet purged (at most p_limit per call, oldest first), in ONE transaction per tenant:
+--   * every row of every public table carrying restaurant_id is DELETED, except the platform's own records of that customer:
+--     restaurants (kept, anonymised), subscriptions, platform_invoices (billing records) and admin_audit_log (platform trail).
+--     The tenant's own audit_logs go too: their retention ended with the tenant's.
+--   * dependency order is found at run time (repeat: delete what no remaining row references; FKs stay ON and RESTRICT is
+--     respected; no CASCADE). Row guards (immutability, closed day, audit triggers) are suspended ONLY for these tables and
+--     ONLY inside this transaction (ALTER TABLE ... DISABLE TRIGGER USER takes an ACCESS EXCLUSIVE lock, so no other session
+--     can write unguarded meanwhile; the change is rolled back / re-enabled before commit). Schedule it off-peak.
+--   * the restaurants row is anonymised (name, slug, contact, tin, branding, domain) and stamped purged_at.
+--   * returns, per tenant, the auth user ids and the Storage prefix the ops job must remove through the Auth Admin API /
+--     Storage API (SQL cannot: GoTrue and Storage own them). One admin_audit_log row 'tenant.purged' per tenant.
+create or replace function public.fn_ops_purge_expired_cancelled_tenants(p_limit integer default 10)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_keep text[] := array['restaurants', 'subscriptions', 'platform_invoices', 'admin_audit_log'];
+  v_tables text[];
+  v_rid uuid;
+  v_users uuid[];
+  v_out jsonb := '[]'::jsonb;
+  v_t text;
+  v_left text[];
+  v_progress boolean;
+  v_n bigint;
+  v_total bigint;
+  v_pass integer;
+begin
+  if not public.is_service_role() then perform public.fn_err('permission_denied'); end if;
+  if p_limit is null or p_limit not between 1 and 100 then perform public.fn_err('invalid_input', 'limit'); end if;
+
+  select array_agg(c.relname::text order by c.relname) into v_tables
+  from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+  where n.nspname = 'public' and c.relkind = 'r' and c.relname <> all (v_keep)
+    and exists (select 1 from pg_catalog.pg_attribute a where a.attrelid = c.oid and a.attname = 'restaurant_id' and a.attnum > 0 and not a.attisdropped);
+
+  for v_rid in
+    select r.id from public.restaurants r
+    where r.status = 'cancelled' and r.purged_at is null and r.cancelled_at <= now() - interval '1 year'
+    order by r.cancelled_at limit p_limit
+  loop
+    select coalesce(array_agg(p.id), '{}') into v_users from public.profiles p where p.restaurant_id = v_rid;
+    foreach v_t in array v_tables || array['restaurants'] loop
+      execute format('alter table public.%I disable trigger user', v_t);
+    end loop;
+
+    v_left := v_tables;
+    v_total := 0;
+    v_pass := 0;
+    loop
+      v_pass := v_pass + 1;
+      v_progress := false;
+      foreach v_t in array v_left loop
+        begin
+          execute format('delete from public.%I where restaurant_id = $1', v_t) using v_rid;
+          get diagnostics v_n = row_count;
+          v_total := v_total + v_n;
+          v_left := array_remove(v_left, v_t);
+          v_progress := true;
+        exception when foreign_key_violation then
+          null;   -- still referenced by a table not purged yet: next pass
+        end;
+      end loop;
+      exit when cardinality(v_left) = 0;
+      if not v_progress or v_pass > 50 then
+        perform public.fn_err('invalid_state', 'purge_blocked:' || array_to_string(v_left, ','));
+      end if;
+    end loop;
+    delete from public.identity_claims c where c.user_id = any (v_users) and c.kind = 'profile';
+
+    update public.restaurants
+       set name = 'Purged tenant', slug = 'purged-' || left(replace(v_rid::text, '-', ''), 12), custom_domain = null,
+           phone = null, address = null, tin = null, suspension_reason = null,
+           branding = '{"logo_path": null, "primary_color": "#dc2626", "accent_color": "#b91c1c"}'::jsonb, purged_at = now()
+     where id = v_rid;
+
+    foreach v_t in array v_tables || array['restaurants'] loop
+      execute format('alter table public.%I enable trigger user', v_t);
+    end loop;
+
+    perform public.fn_write_admin_audit('tenant.purged', v_rid, jsonb_build_object('rows_deleted', v_total, 'auth_users', cardinality(v_users)));
+    v_out := v_out || jsonb_build_array(jsonb_build_object('restaurant_id', v_rid, 'rows_deleted', v_total,
+                                                           'auth_user_ids', to_jsonb(v_users),
+                                                           'storage_prefix', 'restaurants/' || v_rid::text || '/'));
+  end loop;
+  return jsonb_build_object('purged', v_out);
 end;
 $$;
 
