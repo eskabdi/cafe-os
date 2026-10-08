@@ -6,7 +6,7 @@
 -- guard, overflow pre-check, recipe/reactivation locking, unit lock by recipe, idempotency key checked first, Phase-4 hooks deriving
 -- the tenant from the order row, narrow duplicate_name mapping.
 begin;
-select plan(190);
+select plan(263);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -85,7 +85,8 @@ select ok(not has_column_privilege('authenticated', 'public.ingredients', 'stock
       and not has_column_privilege('authenticated', 'public.ingredients', 'stock', 'insert')
       and not has_table_privilege('authenticated', 'public.stock_movements', 'insert,update,delete'), 'clients cannot write stock / the ledger directly');
 select is((select string_agg(t || ':' || p, ',' order by t, p) from unnest(array['menu_items', 'recipe_lines', 'ingredients']) t, unnest(array['insert', 'update', 'delete']) p
-           where has_table_privilege('authenticated', ('public.' || t)::regclass, p) or has_any_column_privilege('authenticated', ('public.' || t)::regclass, p)),
+           where case when p = 'delete' then has_table_privilege('authenticated', ('public.' || t)::regclass, p)
+                      else has_any_column_privilege('authenticated', ('public.' || t)::regclass, p) end),
           null, 'menu_items / recipe_lines / ingredients: no client INSERT / UPDATE / DELETE (table or column level); the RPCs are the only write path');
 select ok(has_table_privilege('authenticated', 'public.menu_items', 'select') and has_table_privilege('authenticated', 'public.recipe_lines', 'select')
       and has_table_privilege('authenticated', 'public.ingredients', 'select'), '... SELECT (under RLS) stays');
@@ -385,7 +386,8 @@ select tests.clear_auth();
 select tests.authenticate_as((select a_admin from _f));
 select is(jsonb_array_length(public.fn_list_stock_movements(tests.nv('flour'))), 9, 'admin log for flour: receive, 3 adjusts, 1 reversal, 2 consumptions, 2 consumption reversals');
 select is((public.fn_list_stock_movements(tests.nv('flour'), 1) -> 0 ->> 'ingredient_name'), 'Gate Flour', 'log rows carry the ingredient name');
-select is((public.fn_list_stock_movements(tests.nv('flour'), 1) -> 0 ->> 'created_by_name'), (select short_name from public.profiles where id = (select a_admin from _f)), 'log rows carry the actor short name');
+select is((select string_agg(distinct coalesce(e ->> 'created_by_name', 'NULL'), ',') from jsonb_array_elements(public.fn_list_stock_movements(tests.nv('flour'), 200)) e
+           where e ->> 'created_by' = (select a_admin from _f)::text), (select short_name from public.profiles where id = (select a_admin from _f)), 'log rows carry the actor short name');
 select is(jsonb_array_length(public.fn_list_stock_movements(tests.nv('flour'), 3)), 3, 'limit respected');
 select is(tests.run($q$select public.fn_list_stock_movements(null, 0)$q$), 'P0001|invalid_input|limit', 'limit 0 refused');
 select is(tests.run($q$select public.fn_list_stock_movements(null, 1000)$q$), 'P0001|invalid_input|limit', 'limit 1000 refused');

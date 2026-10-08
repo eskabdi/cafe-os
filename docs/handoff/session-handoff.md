@@ -31,6 +31,12 @@ Read this first in the next session, then `CLAUDE.md` and `docs/spec/execution-p
     - `types.ts` is still a placeholder
     - the main bundle is 840 kB (needs code-splitting)
   - Next step: start Phase 3 (menu and inventory) in a fresh session, beginning with the schema and RLS work.
+- **Phase 3 DB layer (in progress, unmerged):** migration `20261003002900_menu_inventory.sql` (hardened in place after review: RPC-only writes on
+  menu_items / recipe_lines / ingredients, per-tenant `stock_stepup_threshold`, keyset `(created_at, id)`, case-sensitive Storage paths), pgTAP `30_*`, `31_*`.
+  - **Phase 4 TODO:** `fn_reverse_order_consumption` raises `day_closed` for an order of a closed day; `fn_cancel_order` must handle it. The consumption
+    hooks derive the tenant from the order row; the Phase-4 caller owns authorisation, tenant status and the order lock.
+  - **Phase 9 TODO (deferred on purpose):** reset / derive `ingredients.received_today` / `consumed_today` in `fn_open_day` / `fn_close_day`;
+    exclude the stock columns from the `ingredients` row-audit trigger (the ledger is the record).
 
 ## Remaining roadmap (§58)
 

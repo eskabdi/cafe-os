@@ -1,4 +1,4 @@
--- Phase 3 (migration 0029) adversarial supplement to 30_menu_inventory.test.sql. NOT YET RUN by its author.
+-- Phase 3 (migration 0029) adversarial supplement to 30_menu_inventory.test.sql.
 --
 -- Adds: every command/read RPC x {anon, no-permission role, view-only role, past_due, suspended}; B-to-A and A-to-B IDOR with real vs unknown
 -- ids on every RPC not already probed in 30_*; foreign category / station / image references from the other direction; the internal
@@ -6,10 +6,12 @@
 -- SELECT as well as the RPC); role escalation with only inventory.receive; replay of another tenant's idempotency key; deterministic
 -- substitutes for the concurrent-adjust race; extra storage policy cases (sub-folder, move to a foreign prefix, anon, waiter, status).
 --
--- The last two sections of probes ("KNOWN-GAP probes") assert the SECURE behaviour for gaps found while reading 0029. They are expected to
--- FAIL until the migration is hardened; a failure there is a finding, not a flaky test (see the report that accompanies this file).
+-- The two "KNOWN-GAP probe" sections assert the SECURE behaviour for gaps found while reading the first version of 0029; 0029 was
+-- hardened in place (RPC-only writes on menu_items / recipe_lines / ingredients, step-up on receive and cost edits, storage rename
+-- guard, case-sensitive paths) and they must pass. Since 0029 clients hold NO write privilege on those three tables, so direct DML
+-- answers 42501 permission denied (no row count, no RLS / FK message); the composite-FK backstops are probed as the owner.
 begin;
-select plan(106);
+select plan(110);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -144,23 +146,24 @@ select is(jsonb_array_length(public.fn_list_stock_movements(tests.nv('adv_b'))),
 select is((select count(*)::int from jsonb_array_elements(public.fn_list_stock_movements(null, 200)) e where e ->> 'ingredient_id' = tests.nv('adv_b')::text), 0, 'the unfiltered log never contains a B ingredient');
 select is((select count(*)::int from public.ingredients where id = tests.nv('adv_b')), 0, 'direct SELECT cannot see a B ingredient');
 select is((select count(*)::int from public.stock_movements where restaurant_id = (select b from _f)), 0, 'direct SELECT cannot see B ledger rows');
-select is(tests.run(format($q$update public.ingredients set name = 'pwned' where id = %L$q$, tests.nv('adv_b'))), 'ok:0', 'direct UPDATE of a B ingredient touches 0 rows');
-select is(tests.run(format($q$delete from public.ingredients where id = %L$q$, tests.nv('adv_b'))), 'ok:0', 'direct DELETE of a B ingredient touches 0 rows');
-select is(tests.run(format($q$update public.menu_items set price = 1 where id = %L$q$, tests.nv('b_menu'))), 'ok:0', 'direct UPDATE of a B menu item touches 0 rows');
-select is(tests.run(format($q$delete from public.menu_items where id = %L$q$, tests.nv('b_menu'))), 'ok:0', 'direct DELETE of a B menu item touches 0 rows');
-select matches(tests.run(format($q$insert into public.ingredients (restaurant_id, name, station_id, unit) values (%L, 'Adv Planted', %L, 'kg')$q$, (select b from _f), tests.nv('b_kit'))),
-               '^42501\|new row violates row-level security', 'direct INSERT of an ingredient into tenant B refused by RLS');
-select matches(tests.run(format($q$insert into public.recipe_lines (restaurant_id, menu_item_id, ingredient_id, qty_per_serving) values (%L, %L, %L, 1)$q$, (select b from _f), tests.nv('b_menu'), tests.nv('adv_b'))),
-               '^42501\|new row violates row-level security', 'direct INSERT of a recipe line into tenant B refused by RLS');
-select matches(tests.run(format($q$insert into public.recipe_lines (restaurant_id, menu_item_id, ingredient_id, qty_per_serving) values (%L, %L, %L, 1)$q$, (select a from _f), tests.nv('a_menu'), tests.nv('adv_b'))),
-               '^23503\|', 'direct recipe line (A menu item + B ingredient): composite FK refuses the cross-tenant link');
-select matches(tests.run(format($q$insert into public.menu_items (restaurant_id, name, category_id, station_id, price) values (%L, 'Adv X', %L, %L, 1)$q$, (select a from _f), tests.nv('b_cat'), tests.nv('a_kit'))),
-               '^23503\|', 'direct menu item with a B category: composite FK refuses it');
-select matches(tests.run(format($q$update public.ingredients set station_id = %L where id = %L$q$, tests.nv('b_kit'), tests.nv('adv_k'))),
-               '^23503\|', 'direct move of an A ingredient onto a B station: composite FK refuses it');
+select is(tests.run(format($q$update public.ingredients set name = 'pwned' where id = %L$q$, tests.nv('adv_b'))), '42501|permission denied for table ingredients|', 'direct UPDATE of a B ingredient: no client UPDATE privilege at all');
+select is(tests.run(format($q$delete from public.ingredients where id = %L$q$, tests.nv('adv_b'))), '42501|permission denied for table ingredients|', 'direct DELETE of a B ingredient: no client DELETE privilege');
+select is(tests.run(format($q$update public.menu_items set price = 1 where id = %L$q$, tests.nv('b_menu'))), '42501|permission denied for table menu_items|', 'direct UPDATE of a B menu item: no client UPDATE privilege');
+select is(tests.run(format($q$delete from public.menu_items where id = %L$q$, tests.nv('b_menu'))), '42501|permission denied for table menu_items|', 'direct DELETE of a B menu item: no client DELETE privilege');
+select is(tests.run(format($q$insert into public.ingredients (restaurant_id, name, station_id, unit) values (%L, 'Adv Planted', %L, 'kg')$q$, (select b from _f), tests.nv('b_kit'))),
+          '42501|permission denied for table ingredients|', 'direct INSERT of an ingredient into tenant B: no client INSERT privilege');
+select is(tests.run(format($q$insert into public.recipe_lines (restaurant_id, menu_item_id, ingredient_id, qty_per_serving) values (%L, %L, %L, 1)$q$, (select b from _f), tests.nv('b_menu'), tests.nv('adv_b'))),
+          '42501|permission denied for table recipe_lines|', 'direct INSERT of a recipe line into tenant B: no client INSERT privilege');
 select is(tests.run(format($q$update public.ingredients set restaurant_id = %L where id = %L$q$, (select b from _f), tests.nv('adv_k'))),
           '42501|permission denied for table ingredients|', 'restaurant_id of an ingredient is not client-updatable');
 select tests.clear_auth();
+-- DB backstops behind the RPCs, probed as the owner (no client can issue these statements any more)
+select matches(tests.run(format($q$insert into public.recipe_lines (restaurant_id, menu_item_id, ingredient_id, qty_per_serving) values (%L, %L, %L, 1)$q$, (select a from _f), tests.nv('a_menu'), tests.nv('adv_b'))),
+               '^23503\|', 'owner: recipe line (A menu item + B ingredient): composite FK refuses the cross-tenant link');
+select matches(tests.run(format($q$insert into public.menu_items (restaurant_id, name, category_id, station_id, price) values (%L, 'Adv X', %L, %L, 1)$q$, (select a from _f), tests.nv('b_cat'), tests.nv('a_kit'))),
+               '^23503\|', 'owner: menu item with a B category: composite FK refuses it');
+select matches(tests.run(format($q$update public.ingredients set station_id = %L where id = %L$q$, tests.nv('b_kit'), tests.nv('adv_k'))),
+               '^23503\|', 'owner: move of an A ingredient onto a B station: composite FK refuses it');
 select is(tests.snapshot((select b from _f)), (select b from _snap), 'tenant B data byte-for-byte unchanged after every A attack');
 
 -- replay of another tenant's idempotency key
@@ -189,7 +192,7 @@ select is(tests.run(format($q$insert into public.stock_movements (restaurant_id,
 select is(tests.run(format($q$update public.stock_movements set qty_delta = 1 where id = %L$q$, tests.nv('a_kmov'))), '42501|permission denied for table stock_movements|', 'UPDATE of a ledger row refused');
 select is(tests.run(format($q$delete from public.stock_movements where id = %L$q$, tests.nv('a_kmov'))), '42501|permission denied for table stock_movements|', 'DELETE of a ledger row refused');
 select is(tests.run($q$truncate public.stock_movements$q$), '42501|permission denied for table stock_movements|', 'TRUNCATE of the ledger refused');
-select matches(tests.run(format($q$delete from public.ingredients where id = %L$q$, tests.nv('adv_k'))), '^23503\|', 'DELETE of an ingredient that has ledger rows: restrict dependency error, row kept');
+select is(tests.run(format($q$delete from public.ingredients where id = %L$q$, tests.nv('adv_k'))), '42501|permission denied for table ingredients|', 'DELETE of an ingredient (with ledger rows): no client DELETE privilege, row kept');
 select is(tests.ledger_gap((select a from _f)), 0::bigint, 'LEDGER INVARIANT intact (on-hand = sum of movements) after the direct-DML attempts');
 select tests.clear_auth();
 
@@ -200,11 +203,11 @@ select is((select count(*)::int from public.ingredients where name like 'Adv %')
 select is((select count(*)::int from public.stock_movements where ingredient_id in (tests.nv('adv_k'), tests.nv('adv_p'), tests.nv('adv_c'))), 3, 'kitchen: direct SELECT sees the 3 Kitchen ledger rows, none of Pastry');
 select is((select count(*)::int from public.stock_movements where ingredient_id = tests.nv('adv_p')), 0, 'kitchen: a Pastry ingredient''s ledger is invisible');
 select is(jsonb_array_length(public.fn_list_stock_movements(tests.nv('adv_p'))), 0, 'kitchen: the RPC agrees with the policy for a Pastry ingredient');
-select is(tests.run(format($q$update public.ingredients set min_level = 99 where id = %L$q$, tests.nv('adv_k'))), 'ok:0', 'kitchen: no inventory.adjust, so a direct UPDATE touches 0 rows');
-select is(tests.run(format($q$delete from public.ingredients where id = %L$q$, tests.nv('adv_c'))), 'ok:0', 'kitchen: no inventory.adjust, so a direct DELETE touches 0 rows');
-select matches(tests.run(format($q$insert into public.ingredients (restaurant_id, name, station_id, unit) values (%L, 'Adv Kit Made', %L, 'kg')$q$, (select a from _f), tests.nv('a_kit'))),
-               '^42501\|new row violates row-level security', 'kitchen: direct INSERT of an ingredient refused');
-select is(tests.run(format($q$update public.menu_items set price = 1 where id = %L$q$, tests.nv('a_menu'))), 'ok:0', 'kitchen: no menu.manage, so a direct menu UPDATE touches 0 rows');
+select is(tests.run(format($q$update public.ingredients set min_level = 99 where id = %L$q$, tests.nv('adv_k'))), '42501|permission denied for table ingredients|', 'kitchen: direct UPDATE refused (no client write privilege)');
+select is(tests.run(format($q$delete from public.ingredients where id = %L$q$, tests.nv('adv_c'))), '42501|permission denied for table ingredients|', 'kitchen: direct DELETE refused');
+select is(tests.run(format($q$insert into public.ingredients (restaurant_id, name, station_id, unit) values (%L, 'Adv Kit Made', %L, 'kg')$q$, (select a from _f), tests.nv('a_kit'))),
+          '42501|permission denied for table ingredients|', 'kitchen: direct INSERT of an ingredient refused');
+select is(tests.run(format($q$update public.menu_items set price = 1 where id = %L$q$, tests.nv('a_menu'))), '42501|permission denied for table menu_items|', 'kitchen: direct menu UPDATE refused');
 select tests.clear_auth();
 select tests.authenticate_as((select a_pastry from _f));
 select is((select count(*)::int from public.ingredients where name like 'Adv %'), 1, 'pastry: direct SELECT sees only the Pastry ingredient');
@@ -251,17 +254,17 @@ select is(tests.ledger_gap((select a from _f)), 0::bigint, 'LEDGER INVARIANT aft
 select set_config('app.tenant_admin_mfa_required', 'on', true);
 select tests.authenticate_as((select a_admin from _f));
 select is(tests.run(format($q$select public.fn_adjust_stock(%L, 100, 'control recount', 'key-adv-mfa-0001')$q$, tests.nv('adv_k'))), 'P0001|mfa_required|', 'control: 100 x 1000 ETB adjust without aal2 needs step-up');
-select is(tests.run(format($q$select public.fn_receive_stock(%L, 1000, 'key-adv-mfa-0002')$q$, tests.nv('adv_k'))), 'P0001|mfa_required|', 'PROBE receive: 1,000,000 ETB of stock received with no step-up at all (fn_receive_stock never calls fn_require_step_up)');
-select tests.run(format($q$select public.fn_update_ingredient(%L, '{"cost_per_unit": 0}')$q$, tests.nv('adv_k')));
+select is(tests.run(format($q$select public.fn_receive_stock(%L, 1000, 'key-adv-mfa-0002')$q$, tests.nv('adv_k'))), 'P0001|mfa_required|', 'PROBE receive: a 1,000,000 ETB receive needs step-up like an adjustment');
+select is(tests.run(format($q$select public.fn_update_ingredient(%L, '{"cost_per_unit": 0}')$q$, tests.nv('adv_k'))), 'P0001|mfa_required|', 'PROBE cost edit via RPC: zeroing cost_per_unit of an ingredient with movements needs step-up');
 select is(tests.run(format($q$select public.fn_adjust_stock(%L, 100, 'after cost edit', 'key-adv-mfa-0003')$q$, tests.nv('adv_k'))), 'P0001|mfa_required|', 'PROBE cost edit via RPC: zeroing cost_per_unit (no step-up) then adjusting evades the value threshold');
-select tests.run(format($q$update public.ingredients set cost_per_unit = 0 where id = %L$q$, tests.nv('adv_c')));
+select is(tests.run(format($q$update public.ingredients set cost_per_unit = 0 where id = %L$q$, tests.nv('adv_c'))), '42501|permission denied for table ingredients|', 'PROBE cost edit via direct DML: no client UPDATE privilege');
 select is(tests.run(format($q$select public.fn_adjust_stock(%L, 100, 'after dml cost edit', 'key-adv-mfa-0004')$q$, tests.nv('adv_c'))), 'P0001|mfa_required|', 'PROBE cost edit via direct DML: same evasion');
 select tests.clear_auth();
 select set_config('app.tenant_admin_mfa_required', 'off', true);
 
 -- ═════════ KNOWN-GAP probe 2: direct DML skips RPC-only invariants (expected to FAIL on 0029) ═════════
 select tests.authenticate_as((select a_admin from _f));
-select tests.run(format($q$select public.fn_set_recipe(%L, '[{"ingredient_id": "%s", "qty_per_serving": 0.5}]')$q$, tests.nv('a_menu'), tests.nv('adv_k')));
+select is(tests.run(format($q$select public.fn_set_recipe(%L, '[{"ingredient_id": "%s", "qty_per_serving": 0.5}]')$q$, tests.nv('a_menu'), tests.nv('adv_k'))), 'ok:1', 'fixture: Adv Burger recipe uses Adv Kitchen');
 select isnt(tests.run(format($q$update public.ingredients set is_active = false where id = %L$q$, tests.nv('adv_k'))), 'ok:1', 'PROBE: direct UPDATE can deactivate an ingredient used by an active recipe (RPC refuses with ingredient_in_active_recipe)');
 select isnt(tests.run(format($q$update public.ingredients set unit = 'g' where id = %L$q$, tests.nv('adv_c'))), 'ok:1', 'PROBE: direct UPDATE can change the unit of an ingredient that has ledger rows (RPC refuses with unit_locked)');
 select tests.clear_auth();
@@ -276,7 +279,8 @@ select tests.authenticate_as((select a_admin from _f));
 select isnt(tests.run(format($q$insert into public.menu_items (restaurant_id, name, category_id, station_id, price, image_path) values (%L, 'Adv Ghost', %L, %L, 1, %L)$q$,
                              (select a from _f), tests.nv('a_cat'), tests.nv('a_kit'), 'restaurants/' || (select a from _f) || '/menu/ghost.png')),
             'ok:1', 'PROBE: direct INSERT accepts an image_path for an object that was never uploaded (RPC refuses)');
-select tests.run(format($q$update storage.objects set name = 'restaurants/%s/menu/renamed.png' where bucket_id = 'menu-images' and name = 'restaurants/%s/menu/adv.png'$q$, (select a from _f), (select a from _f)));
+select is(tests.run(format($q$update storage.objects set name = 'restaurants/%s/menu/renamed.png' where bucket_id = 'menu-images' and name = 'restaurants/%s/menu/adv.png'$q$, (select a from _f), (select a from _f))), 'ok:0',
+          'PROBE storage: rename of a referenced image touches 0 rows (update USING has the same not-referenced guard as delete)');
 select is((select count(*)::int from storage.objects where bucket_id = 'menu-images' and name = 'restaurants/' || (select a from _f) || '/menu/adv.png'), 1,
           'PROBE storage: renaming (UPDATE) an image a menu item still points at must be refused like DELETE is (dangling image_path otherwise)');
 select matches(tests.run(format($q$insert into storage.objects (bucket_id, name) values ('menu-images', 'RESTAURANTS/%s/MENU/upper.png')$q$, (select a from _f))), '^42501\|',
@@ -306,7 +310,7 @@ update public.restaurants set status = 'past_due' where id = (select a from _f);
 select tests.authenticate_as((select a_admin from _f));
 select is(tests.adv_matrix('P0001|tenant_read_only|', 'ok:1'), 'all as expected', 'past_due: all 10 writes tenant_read_only, the log stays readable');
 select matches(tests.run(format($q$insert into storage.objects (bucket_id, name) values ('menu-images', 'restaurants/%s/menu/pd.png')$q$, (select a from _f))), '^42501\|', 'past_due: image upload refused');
-select is(tests.run(format($q$update public.ingredients set min_level = 3 where id = %L$q$, tests.nv('adv_k'))), 'ok:0', 'past_due: direct UPDATE of an ingredient touches 0 rows');
+select is(tests.run(format($q$update public.ingredients set min_level = 3 where id = %L$q$, tests.nv('adv_k'))), '42501|permission denied for table ingredients|', 'past_due: direct UPDATE of an ingredient refused (no client write privilege in any status)');
 select tests.clear_auth();
 update public.restaurants set status = 'suspended' where id = (select a from _f);
 select tests.authenticate_as((select a_admin from _f));
