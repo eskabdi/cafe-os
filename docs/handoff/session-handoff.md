@@ -101,3 +101,8 @@ Work order in every phase: schema → migration → RPCs → RLS → pgTAP → t
   - `persist-credentials: false` on checkout steps
   - hash-pin the Supabase CLI download
   - the Playwright report artifact may contain seeded test data
+
+## Requirements added by the user (build in the named phase)
+
+- **Order-fired sound (Phase 5 KDS, wired in Phase 4 fire flow):** every order firing plays a notification sound at the receiving station's screen. Use Realtime on the station's tickets, a WebAudio tone (no binary asset), unlock audio with a user gesture ("Enable sound" button, remembered per device), per-station mute/volume as a UI-only convenience, repeat alert for unacknowledged tickets optional. Never name-keyed: the receiver station is the UUID on the order line.
+- **Menu photo upload (Phase 3 UI):** picker, preview, replace/remove, thumbnails on the menu list.
