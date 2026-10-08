@@ -35,7 +35,8 @@ select is((select count(*)::int from public.profiles where restaurant_id = (sele
 select is((select count(*)::int from public.orders), 2, 'A admin sees all A orders');
 select throws_ok(format($q$insert into public.stations (restaurant_id, name) values (%L, 'Forged')$q$, (select b from _f)),
                  '42501', null, 'cannot create data in another tenant');
-select lives_ok(format($q$update public.menu_items set price = 1 where restaurant_id = %L$q$, (select b from _f)), 'cross-tenant update is a silent no-op');
+select throws_ok(format($q$update public.menu_items set price = 1 where restaurant_id = %L$q$, (select b from _f)),
+                 '42501', null, 'menu_items has no client UPDATE at all since 0029 (RPCs only), so no cross-tenant update either');
 select throws_ok(format($q$update public.stations set restaurant_id = %L$q$, (select b from _f)),
                  '42501', null, 'restaurant_id is not client-writable');
 select throws_ok($q$select 1 from public.profile_secrets$q$, '42501', null, 'profile_secrets unreadable by tenant admin');
