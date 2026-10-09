@@ -2,7 +2,6 @@ import { FunctionsFetchError, FunctionsHttpError, FunctionsRelayError } from '@s
 import { z } from 'zod'
 import { supabase } from './client'
 import { RpcError } from './rpc'
-import { isAttestedSession } from './trusted-devices'
 import { uuid } from './schemas'
 
 // Typed wrappers for the Phase 3B Edge Functions used by the portals: tenant-admin-invite, staff-create, staff-pin-reset.
@@ -56,19 +55,6 @@ export async function invokeEdge(name: string, body: Record<string, unknown>, ti
     throw new RpcError('server_error')
   }
   return data
-}
-
-/**
- * staff-create answers `forbidden` (not `mfa_required`) when the database asks for step-up. To keep the step-up prompt
- * working, a caller with an enrolled authenticator on aal1 is asked to verify BEFORE the call. The server still decides.
- */
-export async function requireStepUpIfEnrolled(): Promise<void> {
-  // a session attested by a trusted device (0032) satisfies the server's step-up without a code
-  const { data: s } = await supabase.auth.getSession()
-  if (isAttestedSession(s.session?.access_token)) return
-  const { data, error } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
-  if (error || !data) return
-  if (data.nextLevel === 'aal2' && data.currentLevel !== 'aal2') throw new RpcError('mfa_required')
 }
 
 const trimOrNull = (v: string | null | undefined) => {
@@ -128,7 +114,6 @@ export interface CreateStaffInput {
 
 /** Creates a PIN staff member. The PIN is sent once over TLS to the function and never stored in client state by callers. */
 export async function createStaff(i: CreateStaffInput): Promise<{ profile_id: string }> {
-  await requireStepUpIfEnrolled()
   const body: Record<string, unknown> = {
     username: i.username.trim().toLowerCase(),
     first_name: i.firstName.trim(),

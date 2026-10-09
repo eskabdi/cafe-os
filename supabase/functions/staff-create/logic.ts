@@ -98,7 +98,7 @@ export function pinLengthMatchesRole(pin: string, roleName: string): boolean {
 }
 
 export type FailureKind =
-  | 'invalid_request' | 'weak_pin' | 'invalid_pin_length' | 'unauthorized' | 'forbidden' | 'username_taken' | 'staff_limit_reached'
+  | 'invalid_request' | 'weak_pin' | 'invalid_pin_length' | 'unauthorized' | 'forbidden' | 'mfa_required' | 'username_taken' | 'staff_limit_reached'
   | 'rate_limited' | 'payload_too_large' | 'method_not_allowed' | 'forbidden_origin' | 'server_error'
 
 /**
@@ -111,8 +111,11 @@ export function mapRpcError(message: unknown): FailureKind {
     case 'not_authenticated':
     case 'tenant_suspended':
     case 'tenant_read_only':
-    case 'mfa_required':
       return 'forbidden'
+    case 'mfa_required':
+      // like tenant-admin-invite / staff-pin-reset: the portal shows the step-up prompt and retries (a trusted-device session
+      // never gets here; only the server knows whether this session is attested)
+      return 'mfa_required'
     case 'username_taken':
       return 'username_taken'
     case 'staff_limit_reached':
@@ -147,6 +150,8 @@ export function shapeFailure(kind: FailureKind, retryAfterSec?: number): ShapedR
       return { status: 403, body: { error: 'forbidden' }, headers: { ...NO_STORE } }
     case 'forbidden_origin':
       return { status: 403, body: { error: 'forbidden' }, headers: { ...NO_STORE } }
+    case 'mfa_required':
+      return { status: 403, body: { error: 'mfa_required' }, headers: { ...NO_STORE } }
     case 'username_taken':
       return { status: 409, body: { error: 'username_taken' }, headers: { ...NO_STORE } }
     case 'staff_limit_reached':

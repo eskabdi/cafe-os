@@ -82,14 +82,14 @@ enable_confirmations = false
 # staff-create additionally verifies the caller's user JWT itself. Secrets (PIN_PEPPER, ALLOWED_ORIGINS) are set with
 # `supabase secrets set`, never here. See supabase/functions/README.md.
 
-# Tenant Admin invitations land on /invite with a one-time token hash (verifyOtp; detectSessionInUrl stays off, no tokens in the
-# URL fragment). Hosted projects: set the same templates in the dashboard (Auth > Email Templates).
+# Tenant Admin invitations land on INVITE_REDIRECT_URL (the app's /invite page, passed as redirectTo by tenant-admin-invite) with a
+# one-time token hash (verifyOtp; detectSessionInUrl stays off, no tokens in the URL fragment). Hosted projects: set the same templates in the dashboard (Auth > Email Templates).
 [auth.email.template.invite]
 subject = "You are invited to CafeOS"
 content_path = "./supabase/templates/invite.html"
 
 [auth.email.template.magic_link]
-subject = "Continue your CafeOS invitation"
+subject = "Your CafeOS sign-in link"
 content_path = "./supabase/templates/magic_link.html"
 
 [functions.pin-login]

@@ -1,10 +1,9 @@
-// Browser-side storage for the trusted-device token (0032) and the "this session is attested" hint. Allow-listed in
+// Browser-side storage for the trusted-device token (0032). Allow-listed in
 // scripts/check-forbidden-patterns.mjs like kiosk-token.ts: a per-user device credential, never domain data. Every access is
 // wrapped: private mode or blocked storage simply means the device is not remembered (the code is asked again).
 
 const TOKEN_RE = /^[0-9a-f]{64}$/
 const KEY_PREFIX = 'cafeos.trusted-device.v1.'
-const ATTESTED_KEY = 'cafeos.attested-session.v1'
 
 /** The `session_id` claim of an access token (null when unreadable). */
 export function sessionIdOf(accessToken: string | null | undefined): string | null {
@@ -17,28 +16,6 @@ export function sessionIdOf(accessToken: string | null | undefined): string | nu
     return typeof sid === 'string' && /^[0-9a-f-]{36}$/i.test(sid) ? sid : null
   } catch {
     return null
-  }
-}
-
-/** Remembers (per browser tab) that the server attested this session, so the UI does not ask a code it would not need. */
-export function markAttested(accessToken: string | null | undefined): void {
-  const sid = sessionIdOf(accessToken)
-  if (!sid) return
-  try {
-    globalThis.sessionStorage?.setItem(ATTESTED_KEY, sid)
-  } catch {
-    // UX hint only
-  }
-}
-
-/** UX hint only (the server re-checks the attestation on every call). */
-export function isAttestedSession(accessToken: string | null | undefined): boolean {
-  const sid = sessionIdOf(accessToken)
-  if (!sid) return false
-  try {
-    return globalThis.sessionStorage?.getItem(ATTESTED_KEY) === sid
-  } catch {
-    return false
   }
 }
 

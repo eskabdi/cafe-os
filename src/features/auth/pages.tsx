@@ -1,8 +1,8 @@
 import { useEffect, useRef } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { portalOf } from '@/lib/domain/portal'
-import { isPlatformSuperAdmin, resolveTenantSlug } from '@/lib/supabase/rpc'
+import { PLATFORM_SUPER_ADMIN, portalOf } from '@/lib/domain/portal'
+import { getSessionContext, resolveTenantSlug } from '@/lib/supabase/rpc'
 import { fetchTenantLogoUrl } from '@/lib/supabase/tenant-logo'
 import { AdminLoginForm } from './AdminLoginForm'
 import { StaffLogin } from './StaffLogin'
@@ -112,6 +112,16 @@ export function TenantAdminLoginPage() {
   )
 }
 
+/**
+ * The sign-in form only checks WHO this is (an active Super Admin identity, server-derived). The MFA step (verify a code, or
+ * set up an authenticator for a new Super Admin) is RequirePlatformAdmin's mfaGate: checking MFA here would sign out an
+ * account that has no authenticator yet and lock it out of enrolment.
+ */
+async function isPlatformIdentity(): Promise<boolean> {
+  const ctx = await getSessionContext()
+  return ctx?.platform_role === PLATFORM_SUPER_ADMIN
+}
+
 export function PlatformLoginPage() {
   const navigate = useNavigate()
   const { context } = useAuth()
@@ -123,7 +133,7 @@ export function PlatformLoginPage() {
   return (
     <AuthShell title="Platform sign-in" subtitle="Platform administrators only">
       <AdminLoginForm
-        verify={isPlatformSuperAdmin}
+        verify={isPlatformIdentity}
         deniedMessage="This account is not authorised for platform administration."
         onSignedIn={() => navigate('/platform', { replace: true })}
       />

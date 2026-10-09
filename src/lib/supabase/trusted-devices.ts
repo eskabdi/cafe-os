@@ -1,9 +1,8 @@
 import { z } from 'zod'
-import { forgetDeviceToken, markAttested, readDeviceToken, writeDeviceToken } from '@/lib/utils/device-token'
-import { supabase } from './client'
+import { forgetDeviceToken, readDeviceToken, writeDeviceToken } from '@/lib/utils/device-token'
 import { callRpc } from './rpc'
 
-export { forgetDeviceToken, isAttestedSession, readDeviceToken, sessionIdOf } from '@/lib/utils/device-token'
+export { forgetDeviceToken, readDeviceToken, sessionIdOf } from '@/lib/utils/device-token'
 
 // Trusted devices (migration 0032, owner decision 2026-10-09). The TOTP code is asked on the first sign-in from a new device;
 // the device then stays trusted for 30 days. The server stores only a hash of the device token and decides everything:
@@ -62,7 +61,6 @@ const trustSchema = z.object({ device_id: z.string().uuid(), token: z.string().r
 export async function trustThisDevice(userId: string): Promise<void> {
   const r = trustSchema.parse(await callRpc('fn_trust_device', { p_label: deviceLabel() }))
   writeDeviceToken(userId, r.token)
-  markAttested((await supabase.auth.getSession()).data.session?.access_token)
 }
 
 const checkSchema = z.object({ trusted: z.boolean(), expires_at: z.string().optional() })
@@ -77,7 +75,6 @@ export async function checkThisDevice(userId: string): Promise<boolean> {
   try {
     const r = checkSchema.parse(await callRpc('fn_check_trusted_device', { p_token: token }))
     if (!r.trusted) forgetDeviceToken(userId)
-    else markAttested((await supabase.auth.getSession()).data.session?.access_token)
     return r.trusted
   } catch {
     return false

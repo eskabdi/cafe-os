@@ -390,7 +390,9 @@ begin
     begin
       perform public.fn_device_admin_scope(d.user_id);
     exception when sqlstate 'P0001' then
-      perform public.fn_err('not_found');
+      -- only "may not" becomes "unknown"; mfa_required / tenant_suspended keep their meaning (the UI can step up)
+      if sqlerrm in ('permission_denied', 'not_found') then perform public.fn_err('not_found'); end if;
+      raise;
     end;
   end if;
   if d.revoked_at is not null then return jsonb_build_object('device_id', d.id, 'changed', false); end if;

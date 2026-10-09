@@ -8,6 +8,7 @@ import { InvitationList, type InvitationRow } from '@/features/invitations/Invit
 import { InviteTenantAdminDialog, type InviteValues } from '@/features/invitations/InviteTenantAdminDialog'
 import { EmptyState, ErrorState, PageSkeleton } from '@/features/shell/states'
 import { fullName, isTenantAdminRole } from '@/lib/domain/portal'
+import { errorCode } from '@/lib/supabase/menu-inventory-errors'
 import { portalErrorMessage } from '@/lib/supabase/portal-errors'
 import type { TenantUser } from '@/lib/supabase/tenant-admin'
 import { CreateStaffDialog, EditUserDialog, ResetPinDialog, type NewStaffValues } from './UserDialogs'
@@ -172,6 +173,15 @@ export function UsersPage() {
         </ul>
       )}
       {devicesOf && <TrustedDevicesCard userId={devicesOf.id} title={`Trusted devices of ${fullName(devicesOf)}`} />}
+      {isAdmin && invitations.isError && (
+        <Card title="Tenant Admin invitations">
+          <p className="text-sm text-muted-foreground">
+            {errorCode(invitations.error).code === 'mfa_required'
+              ? 'Invitations are shown after verification with your authenticator app. Set one up on the Security page, then sign in again.'
+              : 'Invitations could not be loaded.'}
+          </p>
+        </Card>
+      )}
       {isAdmin && invitations.isSuccess && (
         <Card title="Tenant Admin invitations">
           <InvitationList

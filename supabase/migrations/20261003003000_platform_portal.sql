@@ -1052,6 +1052,12 @@ begin
       end if;
     end loop;
     delete from public.identity_claims c where c.user_id = any (v_users) and c.kind = 'profile';
+    -- trusted devices (0032) carry no restaurant_id: remove them with their users, so the ops job can delete the Auth users
+    -- (RESTRICT FK) and no trust outlives the tenant. Guarded: 0032 is applied after this migration.
+    if to_regclass('public.session_device_attestations') is not null then
+      execute 'delete from public.session_device_attestations where user_id = any ($1)' using v_users;
+      execute 'delete from public.trusted_devices where user_id = any ($1)' using v_users;
+    end if;
 
     update public.restaurants
        set name = 'Purged tenant', slug = 'purged-' || left(replace(v_rid::text, '-', ''), 12), custom_domain = null,
@@ -1431,7 +1437,7 @@ begin
                 from (select o.bucket_id, count(*) n,
                              coalesce(sum(case when (o.metadata ->> 'size') ~ '^[0-9]{1,18}$' then (o.metadata ->> 'size')::bigint else 0 end), 0) bytes
                       from storage.objects o group by o.bucket_id) s),
-    'tenants', (select jsonb_build_object('total', count(*),
+    'tenants', (select jsonb_build_object('total', coalesce(sum(x.n), 0),
                                           'by_status', coalesce(jsonb_object_agg(x.status, x.n), '{}'::jsonb))
                 from (select r.status, count(*) n from public.restaurants r group by r.status) x),
     'counters', jsonb_build_object(
@@ -1905,6 +1911,21 @@ begin
   select r.status into v_status from public.restaurants r where r.id = v.restaurant_id;
   if v_status in ('suspended', 'cancelled') then perform public.fn_err('tenant_suspended'); end if;
 
+  -- a decoy whose address is free again (the conflicting invitation was revoked / expired / accepted elsewhere is still taken)
+  -- becomes a real invitation at its next delivery (isolation review L1: no silent, renewable blocking by another tenant)
+  if v.suppressed
+     and not exists (select 1 from public.tenant_admin_invitations i where i.email = v.email and i.status = 'pending' and not i.suppressed and i.id <> v.id)
+     and not exists (select 1 from auth.users u
+                     where lower(u.email) = v.email
+                       and (exists (select 1 from public.profiles p where p.id = u.id)
+                            or exists (select 1 from public.platform_admins a where a.id = u.id))) then
+    begin
+      update public.tenant_admin_invitations set suppressed = false where id = v.id;
+      v.suppressed := false;
+    exception when unique_violation then
+      null;   -- a concurrent real invitation took the address: stays a decoy
+    end;
+  end if;
   if v.suppressed then
     perform public.fn_record_tenant_admin_invitation_sent(v.id);
     return jsonb_build_object('invitation_id', v.id, 'email', v.email, 'mode', 'none', 'auth_user_id', null, 'not_before', clock_timestamp());

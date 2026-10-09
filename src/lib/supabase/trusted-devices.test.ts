@@ -7,7 +7,7 @@ vi.mock('./client', () => ({
   supabase: { auth: { getSession: () => Promise.resolve({ data: { session: session.token ? { access_token: session.token } : null } }) } },
 }))
 
-import { forgetDeviceToken, isAttestedSession, readDeviceToken, sessionIdOf, writeDeviceToken } from '@/lib/utils/device-token'
+import { forgetDeviceToken, readDeviceToken, sessionIdOf, writeDeviceToken } from '@/lib/utils/device-token'
 import { checkThisDevice, deviceLabel, trustThisDevice } from './trusted-devices'
 
 const SID = '11111111-1111-4111-8111-111111111111'
@@ -36,12 +36,11 @@ describe('trusted devices (client)', () => {
     expect(readDeviceToken('u2')).toBeNull()
   })
 
-  it('trust: stores the returned token and marks the session attested', async () => {
+  it('trust: stores the returned token', async () => {
     rpc.callRpc.mockResolvedValue({ device_id: SID, token: TOKEN, expires_at: '2026-11-08T00:00:00Z' })
     await trustThisDevice('u1')
     expect(rpc.callRpc).toHaveBeenCalledWith('fn_trust_device', { p_label: expect.any(String) })
     expect(readDeviceToken('u1')).toBe(TOKEN)
-    expect(isAttestedSession(session.token)).toBe(true)
   })
 
   it('check: no token, no call', async () => {
@@ -56,12 +55,10 @@ describe('trusted devices (client)', () => {
     expect(readDeviceToken('u1')).toBeNull()
   })
 
-  it('check: trusted attests this session (UX hint only)', async () => {
+  it('check: trusted', async () => {
     writeDeviceToken('u1', TOKEN)
     rpc.callRpc.mockResolvedValue({ trusted: true, expires_at: '2026-11-08T00:00:00Z' })
     expect(await checkThisDevice('u1')).toBe(true)
-    expect(isAttestedSession(session.token)).toBe(true)
-    expect(isAttestedSession(jwt({ session_id: '22222222-2222-4222-8222-222222222222' }))).toBe(false)
   })
 
   it('check: a failing call is simply "not trusted"', async () => {
