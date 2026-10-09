@@ -19,6 +19,10 @@ export class RpcError extends Error {
 type RpcResult = PromiseLike<{ data: unknown; error: { message: string; details?: string | null } | null }>
 
 const MACHINE_CODE = /^[a-z_]{3,48}$/
+/** A counted dependency detail such as role_in_use's `active_users:3` (identifier + integer, nothing else). */
+const COUNTED_DETAIL = /^[a-z_]{3,32}:[0-9]{1,9}$/
+/** A short list of identifiers such as plan_limit_reached's `staff,menu_items` (metric names only). */
+const IDENT_LIST_DETAIL = /^[a-z_]{2,32}(?:,[a-z_]{2,32}){1,9}$/
 
 export async function callRpc(fn: string, args?: Record<string, unknown>): Promise<unknown> {
   const client = supabase as unknown as { rpc: (fn: string, args?: Record<string, unknown>) => RpcResult }
@@ -27,7 +31,12 @@ export async function callRpc(fn: string, args?: Record<string, unknown>): Promi
   // Anything that is not a bare identifier is dropped, so no SQL text or foreign data can reach the UI.
   if (error) {
     const code = MACHINE_CODE.test(error.message) ? error.message : 'rpc_failed'
-    const detail = typeof error.details === 'string' && MACHINE_CODE.test(error.details) ? error.details : undefined
+    const detail =
+      typeof error.details === 'string' && (MACHINE_CODE.test(error.details) ||
+        COUNTED_DETAIL.test(error.details) ||
+        IDENT_LIST_DETAIL.test(error.details))
+        ? error.details
+        : undefined
     throw new RpcError(code, detail)
   }
   return data
@@ -95,6 +104,8 @@ const sessionContextSchema = z
     station_ids: z.array(z.string()).default([]),
     tenant_writable: z.boolean().optional(),
     platform_role: z.string().optional(),
+    // aal2 + a live verified factor (fn_platform_mfa_satisfied). Every platform RPC re-checks it (fn_platform_guard).
+    platform_mfa: z.boolean().optional(),
     // Forced PIN change / maker-checker (migrations 0023, 0024). Absent for platform-only identities. An unknown status
     // fails the parse (contextStatus 'error') instead of being guessed: guessing 'none' would hide the restriction screen.
     must_change_pin: z.boolean().optional(),

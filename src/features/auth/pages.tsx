@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
+import { portalOf } from '@/lib/domain/portal'
 import { isPlatformSuperAdmin, resolveTenantSlug } from '@/lib/supabase/rpc'
 import { AdminLoginForm } from './AdminLoginForm'
 import { StaffLogin } from './StaffLogin'
@@ -103,7 +104,11 @@ export function TenantAdminLoginPage() {
 export function PlatformLoginPage() {
   const navigate = useNavigate()
   const { context } = useAuth()
-  useRedirectIfAlreadySignedIn(context?.platform_role ? '/platform' : null)
+  // one account = one portal: a signed-in tenant identity is sent to its own Tenant Portal, never into this one
+  const portal = portalOf(context)
+  useRedirectIfAlreadySignedIn(
+    portal === 'platform' ? '/platform' : portal === 'tenant' && context?.restaurant ? `/r/${context.restaurant.slug}` : null,
+  )
   return (
     <AuthShell title="Platform sign-in" subtitle="Platform administrators only">
       <AdminLoginForm

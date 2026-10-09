@@ -1,6 +1,6 @@
 export { AuthProvider } from './AuthProvider'
 export { useAuth } from './useAuth'
-export { RequireAuth, RequirePermission, RequirePlatformAdmin } from './guards'
+export { RequireAuth, RequirePermission, RequirePlatformAdmin, RequireTenantIdentity } from './guards'
 export { PinPad } from './PinPad'
 export { StaffLogin } from './StaffLogin'
 export { AdminLoginForm } from './AdminLoginForm'
