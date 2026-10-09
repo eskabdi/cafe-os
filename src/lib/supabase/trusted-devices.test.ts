@@ -7,7 +7,7 @@ vi.mock('./client', () => ({
   supabase: { auth: { getSession: () => Promise.resolve({ data: { session: session.token ? { access_token: session.token } : null } }) } },
 }))
 
-import { isAttestedSession, readDeviceToken, sessionIdOf, writeDeviceToken } from '@/lib/utils/device-token'
+import { forgetDeviceToken, isAttestedSession, readDeviceToken, sessionIdOf, writeDeviceToken } from '@/lib/utils/device-token'
 import { checkThisDevice, deviceLabel, trustThisDevice } from './trusted-devices'
 
 const SID = '11111111-1111-4111-8111-111111111111'
@@ -16,8 +16,8 @@ const TOKEN = 'a'.repeat(64)
 
 describe('trusted devices (client)', () => {
   beforeEach(() => {
-    localStorage.clear()
-    sessionStorage.clear()
+    forgetDeviceToken('u1')
+    forgetDeviceToken('u2')
     rpc.callRpc.mockReset()
     session.token = jwt({ session_id: SID })
   })
