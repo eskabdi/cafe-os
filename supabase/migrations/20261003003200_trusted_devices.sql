@@ -381,18 +381,28 @@ as $$
 declare
   v_uid uuid := (select auth.uid());
   d public.trusted_devices%rowtype;
+  v_found boolean;
 begin
   if v_uid is null then perform public.fn_err('not_authenticated'); end if;
   select * into d from public.trusted_devices t where t.id = p_device_id for update;
-  if not found then perform public.fn_err('not_found'); end if;
+  v_found := found;
+  if not v_found or d.user_id <> v_uid then
+    -- caller capability FIRST, identical for an unknown and a foreign id (no existence oracle): an aal1 admin gets mfa_required
+    -- either way, anyone who may not administer devices gets not_found either way
+    if exists (select 1 from public.platform_admins a where a.id = v_uid) then
+      perform public.fn_platform_guard();
+    else
+      perform public.fn_tenant_status_guard(false);
+      if not public.is_tenant_admin() then perform public.fn_err('not_found'); end if;
+      perform public.fn_require_aal2();
+    end if;
+    if not v_found then perform public.fn_err('not_found'); end if;
+  end if;
   if d.user_id <> v_uid then
-    -- a foreign device answers exactly like an unknown one (no existence oracle on device ids)
     begin
       perform public.fn_device_admin_scope(d.user_id);
     exception when sqlstate 'P0001' then
-      -- only "may not" becomes "unknown"; mfa_required / tenant_suspended keep their meaning (the UI can step up)
-      if sqlerrm in ('permission_denied', 'not_found') then perform public.fn_err('not_found'); end if;
-      raise;
+      perform public.fn_err('not_found');
     end;
   end if;
   if d.revoked_at is not null then return jsonb_build_object('device_id', d.id, 'changed', false); end if;
