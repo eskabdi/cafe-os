@@ -102,11 +102,13 @@ trusted device (below). There is no opt-out (owner decision 7). The local seed e
 ### Adding a Super Admin (ops procedure; no client path exists)
 There is deliberately no RPC or Edge Function that lets a signed-in user create a platform admin (a compromised Super Admin session must not be able to mint
 more). Two-person ops procedure, recorded in the change log:
-1. Create (or invite) the Auth user with a real, CONFIRMED e-mail in the Supabase dashboard (Authentication > Users). It must not be a tenant user.
+1. Create the Auth user with a real e-mail, already CONFIRMED ("Auto confirm"), in the Supabase dashboard (Authentication > Users), and do step 2
+   right away. Do not use "invite" here: until step 2 the account is an orphan, and a pending Tenant Admin invitation to the same address could
+   attach to it or replace an unconfirmed one (isolation review L3). It must not be a tenant user.
 2. With the service-role key (SQL editor or a one-off script, never a browser): `select public.fn_ops_register_platform_admin('<auth user id>', '<full name>');`
    It refuses an unconfirmed / synthetic e-mail (`owner_email_unconfirmed`), an existing tenant profile or pending tenant invitation (`owner_already_assigned`)
    and writes `admin_audit_log` (`platform_admin.registered`; actor null = service job).
-3. The new admin signs in, enrols TOTP (aal2 is mandatory for every platform RPC) and is visible in the portal's Super Admin list
+3. The new admin signs in (password only: the sign-in checks the identity), is taken to the MFA gate, enrols TOTP (mandatory for every platform RPC) and is visible in the portal's Super Admin list
    (`fn_platform_list_admins`). Deactivation is `fn_platform_set_admin_active` (never yourself; the last active super admin is protected by trigger).
 
 ### Tenant Admin invitation (Phase 3B, `tenant-admin-invite`)
