@@ -101,7 +101,10 @@ create function tests.tenant_rpcs() returns setof oid language sql stable as $$
     and p.oid not in (select tests.platform_rpcs())
     -- neutral surface: error helper, pre-auth resolver, session bootstrap, the invitee's own functions, the dual-actor invitation RPCs
     and p.proname not in ('fn_err', 'fn_resolve_tenant_slug', 'fn_get_session_context', 'fn_get_my_invitation', 'fn_accept_tenant_admin_invitation',
-                          'fn_prepare_tenant_admin_invitation', 'fn_prepare_tenant_admin_invitation_resend', 'fn_revoke_tenant_admin_invitation') $$;
+                          'fn_prepare_tenant_admin_invitation', 'fn_prepare_tenant_admin_invitation_resend', 'fn_revoke_tenant_admin_invitation',
+                          -- 0032: both portals manage their own trusted devices (the device admin scope is per portal, tested in 36)
+                          'fn_trust_device', 'fn_check_trusted_device', 'fn_list_my_trusted_devices', 'fn_list_user_trusted_devices',
+                          'fn_revoke_trusted_device', 'fn_revoke_all_trusted_devices') $$;
 -- every outcome of p_rpcs (as the current role) that does NOT match p_expected
 create function tests.rpc_sweep(p_rpcs text, p_expected text) returns text language plpgsql as $$
 declare v_oid oid; v_out text; v_bad text := '';

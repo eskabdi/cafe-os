@@ -89,7 +89,7 @@ select is(tests.run($q$update public.ingredients set name = 'x'$q$), '42501|perm
 select tests.clear_auth();
 
 -- ═════════ audit integrity ═════════
-select tests.authenticate_as((select admin from _f));
+select tests.aal2((select admin from _f));
 select is(tests.run(format($q$insert into public.audit_logs (restaurant_id, actor_id, actor_type, event, action) values (%L, %L, 'user', 'forged', 'event')$q$, (select a from _f), (select waiter from _f))),
           '42501|permission denied for table audit_logs|', 'tenant_admin cannot insert audit rows (no forged actor / fake history)');
 select is(tests.run(format($q$select public.fn_write_audit('forged', null, %L)$q$, (select a from _f))),
@@ -125,7 +125,7 @@ select is((select count(*)::int from public.audit_logs where actor_id = (select 
 select is((select count(*)::int from public.audit_logs where actor_id is null and actor_type <> 'system'), 0, 'rows without an actor are explicitly typed system');
 
 -- another actor: the audit row carries THAT actor (tenant staff delegated users.manage)
-select tests.authenticate_as((select admin from _f));
+select tests.aal2((select admin from _f));
 select is(tests.run(format($q$select public.fn_update_role_permissions((select id from public.roles where name = 'Waiter' and restaurant_id = %L), array['orders.view','orders.create','menu.view','users.view','users.manage'], '{}')$q$, (select a from _f))), 'ok:1', 'admin gives Waiter users.manage for the next check');
 select tests.clear_auth();
 select tests.authenticate_as((select waiter from _f));

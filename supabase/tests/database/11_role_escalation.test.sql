@@ -21,7 +21,7 @@ create temp table _ctx (supervisor_role uuid);
 grant all on _ctx to public;
 
 -- the admin delegates: creates the Supervisor role (users.manage + users.view + roles.manage + a few view rights)
-select tests.authenticate_as((select admin1 from _f));
+select tests.aal2((select admin1 from _f));
 insert into _ctx select (public.fn_create_role('{"name": "Supervisor", "description": "delegated staff management"}') ->> 'id')::uuid;
 select lives_ok(format($q$select public.fn_update_role_permissions(%L, array['users.manage','users.view','roles.manage','menu.view','orders.view','dashboard.view'], array[%L]::uuid[])$q$,
                        (select supervisor_role from _ctx), (select st_kitchen from _f)),
@@ -59,7 +59,7 @@ select is(tests.run($q$update public.permissions set key = 'orders.view' where k
 select tests.clear_auth();
 
 -- ═════════ delegated Supervisor (users.manage + roles.manage, not admin) ═════════
-select tests.authenticate_as((select supervisor from _f));
+select tests.aal2((select supervisor from _f));
 select ok(public.has_permission('users.manage') and public.has_permission('roles.manage'), 'supervisor holds the delegated rights');
 select ok(not public.is_tenant_admin(), 'supervisor is not a tenant_admin');
 select is(tests.run(format($q$select public.fn_change_user_role(%L, %L)$q$, (select waiter from _f), (select admin_role from _f))),
@@ -132,7 +132,7 @@ select ok((select is_active from public.profiles where id = (select admin1 from 
 select is((select count(*)::int from public.roles where system_key is not null and restaurant_id = (select a from _f)), 1, 'still exactly one system role');
 
 -- ═════════ tenant_admin ═════════
-select tests.authenticate_as((select admin1 from _f));
+select tests.aal2((select admin1 from _f));
 select is(tests.run(format($q$insert into public.roles (restaurant_id, name, is_system, system_key) values (%L, 'Admin Clone', true, 'tenant_admin')$q$, (select a from _f))),
           '42501|permission denied for table roles|', 'even tenant_admin cannot create another system role');
 select is(tests.run($q$update public.roles set is_active = false where system_key = 'tenant_admin'$q$), '42501|permission denied for table roles|', 'no client UPDATE on roles (0031)');
@@ -168,7 +168,7 @@ select is((select count(*)::int from public.profiles p join public.roles r on r.
            where p.restaurant_id = (select a from _f) and r.system_key = 'tenant_admin' and p.is_active), 1, 'exactly one active tenant_admin remains');
 
 -- ═════════ deactivated users and deactivated roles lose everything ═════════
-select tests.authenticate_as((select admin1 from _f));
+select tests.aal2((select admin1 from _f));
 select lives_ok(format($q$select public.fn_set_user_active(%L, false)$q$, (select supervisor from _f)), 'admin deactivates the supervisor');
 select tests.clear_auth();
 select tests.authenticate_as((select supervisor from _f));
@@ -179,7 +179,7 @@ select is(tests.run(format($q$select public.fn_change_user_role(%L, %L)$q$, (sel
 select is((select count(*)::int from public.profiles), 0, 'deactivated user reads no profile');
 select tests.clear_auth();
 update public.profiles set is_active = true where id = (select supervisor from _f);
-select tests.authenticate_as((select admin1 from _f));
+select tests.aal2((select admin1 from _f));
 select is(tests.run(format($q$select public.fn_set_role_active(%L, false)$q$, (select supervisor_role from _ctx))),
           'P0001|role_in_use|active_users:1', 'a role still held by an active user cannot be deactivated (dependency guard)');
 select tests.clear_auth();
@@ -190,7 +190,7 @@ select ok(not public.has_station_access((select st_kitchen from _f)), 'a deactiv
 select tests.clear_auth();
 
 -- ═════════ platform-level escalation attempts by tenant staff ═════════
-select tests.authenticate_as((select admin1 from _f));
+select tests.aal2((select admin1 from _f));
 select is(tests.run(format($q$insert into public.platform_admins (id, full_name, role) values (%L, 'Me', 'platform_super_admin')$q$, (select admin1 from _f))),
           '42501|permission denied for table platform_admins|', 'tenant_admin cannot register itself as platform admin');
 select is(tests.run($q$select public.fn_provision_tenant('Evil', 'evil-cafe', gen_random_uuid(), 'e@e.example.com', 'E', null, null, gen_random_uuid(), null)$q$),

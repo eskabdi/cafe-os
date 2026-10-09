@@ -81,7 +81,7 @@ select throws_ok($q$select public.fn_provision_tenant('X Cafe', 'x-cafe', gen_ra
 select throws_ok($q$update public.restaurants set status = 'active', slug = 'hijack'$q$, '42501', null, 'status/slug are not tenant-writable columns');
 select is((select count(*)::int from public.subscriptions), 1, 'tenant sees only its subscription');
 select tests.clear_auth();
-select tests.authenticate_as('00000000-0000-4000-8000-0000000000c1');
+select tests.aal2('00000000-0000-4000-8000-0000000000c1');
 select ok(public.is_platform_super_admin(), 'platform admin recognised via platform_admins');
 select is((select public.current_restaurant_id()), null::uuid, 'platform admin has no tenant identity');
 select tests.clear_auth();
@@ -95,7 +95,7 @@ select throws_ok(format($q$select public.fn_change_user_role(%L, %L)$q$, tests.u
                  'P0001', 'permission_denied', 'waiter cannot self-promote to tenant_admin');
 select tests.clear_auth();
 
-select tests.authenticate_as(tests.user_id('selam', 'central-cafe'));
+select tests.aal2(tests.user_id('selam', 'central-cafe'));
 select lives_ok(format($q$select public.fn_update_role_permissions(%L, array['orders.view','orders.create','expenses.view'], '{}')$q$,
                        (select id from public.roles where name = 'Waiter' and restaurant_id = (select a from _f))), 'admin edits waiter matrix');
 select is((select count(*)::int from public.role_permissions rp join public.roles r on r.id = rp.role_id where r.name = 'Waiter' and r.restaurant_id = (select a from _f)),

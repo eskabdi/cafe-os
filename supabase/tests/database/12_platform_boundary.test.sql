@@ -84,7 +84,7 @@ select is(tests.run($q$select public.fn_get_session_context()$q$), '42501|permis
 select tests.clear_auth();
 
 -- ═════════ platform_support: read-only staff ═════════
-select tests.authenticate_as((select support_admin from _f));
+select tests.aal2((select support_admin from _f));
 select ok(public.is_platform_admin() and not public.is_platform_super_admin(), 'support is a platform admin but not a super admin');
 select is((select count(*)::int from public.restaurants), 2, 'support lists every tenant');
 select is((select count(*)::int from public.platform_admins), 2, 'support sees the platform admin roster');
@@ -100,7 +100,7 @@ select is(tests.run(format($q$select public.fn_provision_tenant('Evil', 'evil-ca
 select tests.clear_auth();
 
 -- ═════════ platform_super_admin: platform power, but no tenant business data ═════════
-select tests.authenticate_as((select super_admin from _f));
+select tests.aal2((select super_admin from _f));
 select ok(public.is_platform_super_admin(), 'super admin recognised via platform_admins only');
 select is((select public.current_restaurant_id()), null::uuid, 'super admin has no tenant identity');
 select is((select count(*)::int from public.restaurants), 2, 'super admin lists every tenant');

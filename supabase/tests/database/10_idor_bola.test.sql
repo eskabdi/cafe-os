@@ -306,7 +306,7 @@ select is(tests.oracle($q$select 1 from public.orders where id = {id}$q$, (selec
 select tests.clear_auth();
 
 -- ═════════ tenant B admin and waiter against tenant A (the other direction) ═════════
-select tests.authenticate_as((select b_admin from _f));
+select tests.aal2((select b_admin from _f));
 select is(tests.leaks_read((select b from _f)), '', 'B admin: no row of any other tenant is readable');
 select is(tests.leaks_write((select a from _f)), '', 'B admin: no write reaches tenant A');
 select is(tests.oracle(format($q$select public.fn_change_user_role({id}, %L)$q$, (select b_waiter_role from _f)), (select a_waiter from _f)),

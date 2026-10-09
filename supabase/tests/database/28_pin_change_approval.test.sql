@@ -116,7 +116,8 @@ select is(tests.run('select public.fn_require_step_up()'), 'P0001|mfa_required|'
 delete from auth.mfa_factors;
 select tests.clear_auth();
 select ok((select prosrc ~ 'auth_method' and prosrc ~ 'auth\.uid' from pg_proc where proname = 'fn_require_aal2' and pronamespace = 'public'::regnamespace), 'fn_require_aal2 reads auth_method of the caller''s own profile (id = auth.uid())');
-select ok((select prosrc ~ 'auth\.mfa_factors' and prosrc ~ '''verified''' and prosrc ~ 'f\.user_id = \(select auth\.uid\(\)\)' from pg_proc where proname = 'fn_require_aal2' and pronamespace = 'public'::regnamespace), 'fn_require_aal2 reads auth.mfa_factors of the caller''s own id for a verified factor (like fn_require_step_up)');
+select ok((select prosrc ~ 'auth\.mfa_factors' and prosrc ~ '''verified''' and prosrc ~ 'f\.user_id = \(select auth\.uid\(\)\)' from pg_proc where proname = 'fn_mfa_session_ok' and pronamespace = 'public'::regnamespace)
+      and (select prosrc ~ 'fn_mfa_session_ok' from pg_proc where proname = 'fn_require_aal2' and pronamespace = 'public'::regnamespace), 'fn_require_aal2 reads auth.mfa_factors of the caller''s own id for a verified factor (like fn_require_step_up)');
 select ok(has_function_privilege('authenticated', 'public.fn_approve_pin_change(uuid)', 'execute')
       and has_function_privilege('authenticated', 'public.fn_reject_pin_change(uuid)', 'execute')
       and has_function_privilege('authenticated', 'public.fn_list_pending_pin_changes()', 'execute'), 'approve / reject / list: authenticated');

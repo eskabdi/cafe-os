@@ -21,7 +21,7 @@ create temp table _c (k text primary key, v text);
 grant all on _c to public;
 
 -- ═════════ roles ═════════
-select tests.authenticate_as((select admin from _f));
+select tests.aal2((select admin from _f));
 select is(tests.run($q$select public.fn_create_role('{"name": "Runner", "color": "red"}')$q$), 'P0001|invalid_input|color', 'colour must be #rrggbb');
 select is(tests.run($q$select public.fn_create_role('{"name": "Runner", "icon": "<svg>"}')$q$), 'P0001|invalid_input|icon', 'icon is a safe slug');
 select is(tests.run($q$select public.fn_create_role('{"name": "Runner", "system_key": "tenant_admin"}')$q$), 'P0001|invalid_input|patch', 'closed key list: system_key / is_system can never be passed');
@@ -87,7 +87,7 @@ select is(tests.run('select public.fn_get_restaurant_profile()') || tests.run($q
 select tests.clear_auth();
 
 -- ═════════ users ═════════
-select tests.authenticate_as((select admin from _f));
+select tests.aal2((select admin from _f));
 create temp table _users on commit drop as select public.fn_list_users() u;
 grant all on _users to public;
 select is((select jsonb_array_length(u) from _users), 8, 'every staff account of the tenant');
@@ -109,18 +109,18 @@ select is((select count(*)::int from public.audit_logs where event in ('user.dea
 -- reactivation rules: an inactive role, the plan's staff cap
 update public.roles set is_active = false where id = (select kitchen_role from _f);   -- owner path (the RPC would refuse: abebe is active)
 update public.profiles set is_active = false where id = (select kitchen from _f);
-select tests.authenticate_as((select admin from _f));
+select tests.aal2((select admin from _f));
 select is(tests.run(format($q$select public.fn_set_user_active(%L, true)$q$, (select kitchen from _f))), 'P0001|invalid_role|role is inactive', 'reactivation needs an active role');
 select tests.clear_auth();
 update public.roles set is_active = true where id = (select kitchen_role from _f);
 update public.plans set max_staff = (select count(*) from public.profiles where restaurant_id = (select a from _f) and is_active) where name = 'Growth';
-select tests.authenticate_as((select admin from _f));
+select tests.aal2((select admin from _f));
 select is(tests.run(format($q$select public.fn_set_user_active(%L, true)$q$, (select kitchen from _f))), 'P0001|staff_limit_reached|', 'reactivation respects the plan''s staff cap');
 select tests.clear_auth();
 update public.plans set max_staff = 25 where name = 'Growth';
 
 -- PIN reset preparation (step 1 of the staff-pin-reset Edge Function)
-select tests.authenticate_as((select admin from _f));
+select tests.aal2((select admin from _f));
 select is((select public.fn_prepare_pin_reset((select cashier from _f)) ->> 'pin_length'), '6', 'Cashier: 6-digit PIN');
 select is((select public.fn_prepare_pin_reset((select meron from _f)) ->> 'pin_length'), '4', 'other roles: 4 digits');
 select is(tests.run(format($q$select public.fn_prepare_pin_reset(%L)$q$, (select admin2 from _f))), 'P0001|pin_not_allowed|', 'a tenant_admin never gets a PIN');
@@ -131,6 +131,7 @@ select tests.clear_auth();
 select is((select count(*)::int from public.audit_logs where event = 'auth.pin_reset_requested' and actor_id = (select admin from _f)), 2, 'each prepared reset is audited with the real actor');
 
 -- ═════════ restaurant profile / business settings / branding ═════════
+delete from auth.mfa_factors where user_id = (select admin from _f);   -- back to a factor-less admin for the aal1 checks below
 select tests.authenticate_as((select admin from _f));
 select is((select public.fn_get_restaurant_profile() ->> 'slug'), 'central-cafe', 'profile of the own tenant');
 select is(tests.run($q$select public.fn_update_restaurant_profile('{"slug": "hijack"}')$q$), 'P0001|invalid_input|patch', 'slug / status / tenant id are never patchable');

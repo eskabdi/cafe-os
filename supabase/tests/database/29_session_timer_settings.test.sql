@@ -63,7 +63,8 @@ select ok(not has_function_privilege('authenticated', 'public.fn_require_aal2()'
       and not has_function_privilege('anon', 'public.fn_require_aal2()', 'execute'), 'fn_require_aal2: internal (no client EXECUTE)');
 select ok((select prosrc ~ 'fn_require_aal2' and prosrc !~ 'fn_require_step_up' from pg_proc where proname = 'fn_store_session_timers' and pronamespace = 'public'::regnamespace), 'fn_store_session_timers requires aal2 (not the factor-dependent step-up)');
 select ok((select prosrc ~ 'auth_method' from pg_proc where proname = 'fn_require_aal2' and pronamespace = 'public'::regnamespace), 'fn_require_aal2 refuses PIN profiles (0027, H1)');
-select ok((select prosrc ~ 'auth\.mfa_factors' and prosrc ~ '''verified''' from pg_proc where proname = 'fn_require_aal2' and pronamespace = 'public'::regnamespace), 'fn_require_aal2 requires a verified factor (0028, L1)');
+select ok((select prosrc ~ 'auth\.mfa_factors' and prosrc ~ '''verified''' from pg_proc where proname = 'fn_mfa_session_ok' and pronamespace = 'public'::regnamespace)
+      and (select prosrc ~ 'fn_mfa_session_ok' from pg_proc where proname = 'fn_require_aal2' and pronamespace = 'public'::regnamespace), 'fn_require_aal2 requires a verified factor (0028, L1)');
 select is((select module from public.permissions where key = 'settings.session_timers'), 'settings', 'permission settings.session_timers exists (module settings)');
 select is((select count(*)::int from public.roles r where r.system_key = 'tenant_admin'
              and not exists (select 1 from public.role_permissions rp join public.permissions pm on pm.id = rp.permission_id

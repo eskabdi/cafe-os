@@ -93,7 +93,7 @@ select tests.clear_auth();
 delete from auth.mfa_factors;
 select set_config('app.platform_mfa_required', 'off', true);
 select tests.claims((select su1 from _f), 'aal1');
-select ok(public.is_platform_super_admin(), 'opted out (local/CI) + no verified factor: aal1 is enough for the read helpers');
+select ok(not public.is_platform_super_admin(), 'the old opt-out GUC no longer relaxes anything (owner decision 7, 0032): aal1 + no factor is refused');
 select is(tests.run('select public.fn_platform_list_tenants()'), 'P0001|mfa_required|', 'but never for a platform RPC: fn_platform_guard has no opt-out');
 select tests.clear_auth();
 select tests.add_verified_factor(su1) from _f;

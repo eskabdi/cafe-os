@@ -126,7 +126,7 @@ select ok((select count(*) from public.role_permissions where role_id = (select 
 select ok(exists (select 1 from public.role_station_access where role_id = (select kitchen_role from _f) and station_id = (select st_kitchen from _f)), 'the renamed role keeps its station access');
 
 -- ═════════ DB-level generalisation proof: names the code has never seen ═════════
-select tests.authenticate_as((select admin from _f));
+select tests.aal2((select admin from _f));
 select is(tests.run(format($q$insert into public.stations (restaurant_id, name, color, icon) values (%L, 'Grill', '#ff5500', 'flame')$q$, (select a from _f))), 'ok:1', 'new station "Grill" is just a row');
 select is(tests.run(format($q$insert into public.categories (restaurant_id, name) values (%L, 'Desserts')$q$, (select a from _f))), 'ok:1', 'new category "Desserts" is just a row');
 select is(tests.run(format($q$insert into public.payment_methods (restaurant_id, name, requires_reference) values (%L, 'Amole', true)$q$, (select a from _f))), 'ok:1', 'new payment method "Amole" is just a row');
@@ -182,7 +182,7 @@ select is((select count(*)::int from public.payments), 0, 'Runner cannot read pa
 select tests.clear_auth();
 
 -- a second invented role with a different shape: sees every order but no station-only data
-select tests.authenticate_as((select admin from _f));
+select tests.aal2((select admin from _f));
 select is(tests.run($q$select public.fn_create_role('{"name": "Floor Captain"}')$q$), 'ok:1', 'another invented role');
 select is(tests.run(format($q$select public.fn_update_role_permissions((select id from public.roles where name = 'Floor Captain' and restaurant_id = %L), array['orders.view','orders.view_all','tables.view'], '{}')$q$, (select a from _f))),
           'ok:1', 'matrix: orders.view + orders.view_all, no stations');
@@ -196,7 +196,7 @@ select is((select count(*)::int from public.ingredients), 0, 'and no stock');
 select tests.clear_auth();
 
 -- the role in use cannot now be deleted, but an unused one can once its matrix is cleared
-select tests.authenticate_as((select admin from _f));
+select tests.aal2((select admin from _f));
 select matches(tests.run(format($q$select public.fn_delete_role((select id from public.roles where name = 'Floor Captain' and restaurant_id = %L))$q$, (select a from _f))),
                '^P0001\|role_in_use\|users:1', 'the role in use cannot be deleted');
 select is(tests.run(format($q$select public.fn_delete_role(%L)$q$, (select runner from _ctx))), 'P0001|role_in_use|history', 'a role an account once held is history: deactivate, never delete');

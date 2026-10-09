@@ -30,7 +30,7 @@ end $$;
 -- ═════════ trialing and active: normal operation ═════════
 update public.restaurants set status = 'trialing' where id = (select b from _f);
 grant execute on all functions in schema tests to public;  -- default privileges no longer grant PUBLIC execute
-select tests.authenticate_as((select b_admin from _f));
+select tests.aal2((select b_admin from _f));
 select is(tests.run(format($q$insert into public.stations (restaurant_id, name) values (%L, 'Trial station')$q$, (select b from _f))), 'ok:1', 'trialing: writes allowed');
 select is(tests.run(format($q$select public.fn_update_role_permissions(%L, array['orders.view'], '{}')$q$, (select b_waiter_role from _f))), 'ok:1', 'trialing: write RPCs allowed');
 select is((select (public.fn_get_session_context() ->> 'tenant_writable')::boolean), true, 'trialing: session context says writable');
@@ -45,7 +45,7 @@ select tests.clear_auth();
 update public.restaurants set status = 'past_due' where id = (select b from _f);
 create temp table _snap on commit drop as select tests.snapshot((select b from _f)) b_snap;
 grant all on _snap to public;
-select tests.authenticate_as((select b_admin from _f));
+select tests.aal2((select b_admin from _f));
 select ok(tests.visible_total() > 50, 'past_due: reads still work');
 select is((select public.current_restaurant_id()), (select b from _f), 'past_due: tenant identity still resolves');
 select is((select (public.fn_get_session_context() ->> 'tenant_writable')::boolean), false, 'past_due: session context says NOT writable (UI can show the banner)');
@@ -72,7 +72,7 @@ select lives_ok(format($q$select public.fn_suspend_tenant(%L, 'non-payment of th
 select is((select count(*)::int from public.restaurants where id = (select b from _f) and status = 'suspended'), 1, 'platform admin still sees the suspended tenant');
 select is((select count(*)::int from public.subscriptions where restaurant_id = (select b from _f) and status = 'suspended'), 1, 'subscription is suspended with it');
 select tests.clear_auth();
-select tests.authenticate_as((select b_admin from _f));
+select tests.aal2((select b_admin from _f));
 select is((select public.current_restaurant_id()), null::uuid, 'suspended: identity resolves to no tenant');
 select is(tests.visible_total(), 0::bigint, 'suspended: the tenant admin can read NOTHING (every tenant table and its own restaurants row)');
 select ok(not public.has_permission('settings.manage') and not public.has_permission('orders.view') and not public.is_tenant_admin(), 'suspended: permission helpers deny everything');
@@ -110,7 +110,7 @@ select tests.clear_auth();
 
 -- ═════════ cancelled: same wall as suspended, and not reactivatable through the RPC ═════════
 update public.restaurants set status = 'cancelled' where id = (select b from _f);
-select tests.authenticate_as((select b_admin from _f));
+select tests.aal2((select b_admin from _f));
 select is(tests.visible_total(), 0::bigint, 'cancelled: no readable rows');
 select is((select public.fn_get_session_context()), null::jsonb, 'cancelled: no session context');
 select is(tests.run(format($q$select public.fn_update_role_permissions(%L, array['orders.view'], '{}')$q$, (select b_waiter_role from _f))), 'P0001|tenant_suspended|', 'cancelled: write RPC refused');

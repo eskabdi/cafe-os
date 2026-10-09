@@ -66,7 +66,7 @@ insert into public.platform_admins (id, full_name, role, is_active) values
   ('00000000-0000-4000-8000-0000000000c4', 'Former Super', 'platform_super_admin', false),
   ('00000000-0000-4000-8000-0000000000c5', 'Former Support', 'platform_support', false);
 
-select tests.authenticate_as((select su1 from _f));
+select tests.aal2((select su1 from _f));
 select ok((select count(*) from public.restaurants) >= 2 and public.is_platform_super_admin(), 'control: the ACTIVE super admin lists every tenant');
 select tests.clear_auth();
 select tests.authenticate_as((select su_off from _f));
@@ -100,6 +100,10 @@ insert into public.kiosk_devices (restaurant_id, name, token_hash, created_by) s
 insert into public.user_notifications (restaurant_id, recipient_id, kind, payload) select b, b_waiter, 'security.concurrent_login_blocked', '{}'::jsonb from _f;
 -- the 1:1 timer settings row exists for every tenant (0025); give it an actor so restaurant_session_settings_updated_by_fk has a victim
 update public.restaurant_session_settings set updated_by = (select b_admin from _f) where restaurant_id = (select b from _f);
+-- 0032: a trusted device (and a session attested by it) so both RESTRICT foreign keys have a victim
+insert into public.trusted_devices (user_id, scope, factor_id, token_hash, expires_at) select b_admin, 'tenant', gen_random_uuid(), repeat('e', 64), now() + interval '30 days' from _f;
+insert into public.session_device_attestations (session_id, user_id, device_id, expires_at)
+  select gen_random_uuid(), d.user_id, d.id, d.expires_at from public.trusted_devices d where d.token_hash = repeat('e', 64);
 insert into public.qr_credentials (restaurant_id, table_id, token_hash, status, revoked_at, revoked_by, version)
   select b, (select id from public.tables where restaurant_id = f.b limit 1), repeat('d', 64), 'revoked', now(), b_admin, 2 from _f f;
 insert into public.customer_sessions (restaurant_id, table_session_id, qr_credential_id, session_token_hash, expires_at)
@@ -322,7 +326,7 @@ select is((select string_agg(p.tablename || '.' || p.policyname, ',') from pg_po
 
 -- ═════════ S7: delegated users.manage cannot escalate through staff creation / lockout reset ═════════
 -- a delegated role holding ONLY users.manage + users.view, assigned to Meron by the admin
-select tests.authenticate_as((select a_admin from _f));
+select tests.aal2((select a_admin from _f));
 select public.fn_create_role('{"name": "HR Lead"}');
 select public.fn_create_role('{"name": "Viewer"}');
 select public.fn_update_role_permissions((select id from public.roles where restaurant_id = (select a from _f) and name = 'HR Lead'), array['users.manage', 'users.view'], '{}');

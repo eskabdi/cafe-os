@@ -1,4 +1,4 @@
-# RLS matrix (migrations 0007 + 0010 + 0022 ... 0029 + 0030 + 0031; 83 policies; RLS enabled AND forced on every public table)
+# RLS matrix (migrations 0007 + 0010 + 0022 ... 0029 + 0030 + 0031 + 0032; 84 policies; RLS enabled AND forced on every public table)
 
 Helpers (SECURITY DEFINER, empty search_path, identity from `profiles` via `auth.uid()`, never from JWT claims):
 `current_restaurant_id()`, `current_user_id()`, `current_role_id()`, `has_permission(key)`, `has_station_access(station_id)` (RPC use), `current_station_ids()` (policies; one InitPlan per statement),
@@ -59,7 +59,7 @@ profile_secrets, tenant_counters, idempotency_keys, tenant_admin_invitations, pl
 Every function in `public` pins `search_path`; EXECUTE for PUBLIC = none, anon = `fn_resolve_tenant_slug`, authenticated = the reviewed list
 (adding a client-callable function fails the test until the list is updated consciously); no view, materialized view or foreign table without
 `security_invoker` (none exist); deny-all tables (`profile_secrets`, `tenant_counters`, `idempotency_keys`) carry no client privilege; no client
-privilege on any `*hash*/*secret*/*token*/*password*` column; no `USING (true)` / FOR ALL policy; the total policy count (83) is pinned to this document.
+privilege on any `*hash*/*secret*/*token*/*password*` column; no `USING (true)` / FOR ALL policy; the total policy count (84) is pinned to this document.
 **Every new migration that adds a function must `revoke all on function ... from public, anon, authenticated` explicitly** (Postgres grants PUBLIC
 execute by default and a role-global default privilege now prevents it for FUTURE functions, still revoke explicitly).
 
@@ -133,3 +133,4 @@ execute by default and a role-global default privilege now prevents it for FUTUR
   | INSERT | same prefix + extension `png|jpg|jpeg|webp`, no `..`, `settings.manage`, writable tenant |
   | UPDATE | USING: prefix, `settings.manage`, writable, and the object is not the current `branding.logo_path`; WITH CHECK: as INSERT |
   | DELETE | prefix, `settings.manage`, writable, and the object is not the current logo (real Storage refuses a direct SQL DELETE; this governs the Storage API) |
+- 0032 (trusted devices, owner decision 2026-10-09): **84 policies**. `trusted_devices` (global, no `restaurant_id`; RLS forced; one SELECT policy `trusted_devices_select_own` = `user_id = auth.uid()`; NO client table privilege: the `fn_*trusted_device*` RPCs are the only path; `token_hash` holds the sha256 of the device token, never the token) and `session_device_attestations` (deny-all, internal). Both FKs `ON DELETE RESTRICT`.

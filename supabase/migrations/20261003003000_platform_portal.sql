@@ -822,6 +822,7 @@ declare
   v_over_list text;
 begin
   perform public.fn_platform_guard();
+  perform public.fn_require_recent_totp();   -- 0032: very sensitive, a code of the last 12 h
   v_reason := public.fn_platform_reason(p_reason);
   if p_restaurant_id is null or p_plan_id is null then perform public.fn_err('invalid_input'); end if;
 
@@ -915,6 +916,7 @@ declare
   v_revoked integer;
 begin
   perform public.fn_platform_guard();
+  perform public.fn_require_recent_totp();   -- 0032: very sensitive, a code of the last 12 h
   v_reason := public.fn_platform_reason(p_reason);
 
   select r.status, r.slug into v_status, v_slug from public.restaurants r where r.id = p_restaurant_id for update;
@@ -955,6 +957,7 @@ declare
   v_purged boolean;
 begin
   perform public.fn_platform_guard();
+  perform public.fn_require_recent_totp();   -- 0032: very sensitive, a code of the last 12 h
   v_reason := public.fn_platform_reason(p_reason);
   select r.status, r.slug, r.cancelled_at, r.purged_at is not null into v_status, v_slug, v_cancelled, v_purged
   from public.restaurants r where r.id = p_restaurant_id for update;
