@@ -997,6 +997,7 @@ as $$
 declare
   v_keep text[] := array['restaurants', 'subscriptions', 'platform_invoices', 'admin_audit_log'];
   v_tables text[];
+  v_rids uuid[];
   v_rid uuid;
   v_users uuid[];
   v_out jsonb := '[]'::jsonb;
@@ -1015,10 +1016,13 @@ begin
   where n.nspname = 'public' and c.relkind = 'r' and c.relname <> all (v_keep)
     and exists (select 1 from pg_catalog.pg_attribute a where a.attrelid = c.oid and a.attname = 'restaurant_id' and a.attnum > 0 and not a.attisdropped);
 
-  for v_rid in
-    select r.id from public.restaurants r
-    where r.status = 'cancelled' and r.purged_at is null and r.cancelled_at <= now() - interval '1 year'
-    order by r.cancelled_at limit p_limit
+  -- materialised first: an open cursor on restaurants would block the ALTER TABLE below ("being used by active queries")
+  select coalesce(array_agg(x.id order by x.cancelled_at), '{}') into v_rids
+  from (select r.id, r.cancelled_at from public.restaurants r
+        where r.status = 'cancelled' and r.purged_at is null and r.cancelled_at <= now() - interval '1 year'
+        order by r.cancelled_at limit p_limit
+        for update) x;
+  foreach v_rid in array v_rids
   loop
     select coalesce(array_agg(p.id), '{}') into v_users from public.profiles p where p.restaurant_id = v_rid;
     foreach v_t in array v_tables || array['restaurants'] loop

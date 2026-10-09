@@ -98,3 +98,7 @@ verify_jwt = true
 
 [functions.staff-pin-reset]
 verify_jwt = true
+
+# public: called before sign-in with the anon key (a JWT), like pin-login
+[functions.tenant-logo]
+verify_jwt = true

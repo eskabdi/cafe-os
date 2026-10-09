@@ -6,8 +6,9 @@
 //      unknown ids are both not_found), never yourself, never a tenant_admin / platform admin (pin_not_allowed), active accounts only,
 //      non-escalation (the caller must cover the target's role). Audited (auth.pin_reset_requested, real actor);
 //   3. the PIN length must match the target's role (Cashier 6, others 4; the role name comes from the database);
-//   4. fn_set_user_pin(profile, HMAC-SHA256(pin, PIN_PEPPER), length) with the SERVICE ROLE: bcrypt, lockout cleared, any forced-change
-//      flag / pending approval cleared (an admin-set PIN is the admin's decision). Audited (auth.pin_set).
+//   4. fn_admin_reset_user_pin(profile, HMAC-SHA256(pin, PIN_PEPPER), length) with the SERVICE ROLE (owner decision 5): bcrypt, lockout
+//      cleared, the person is SIGNED OUT (every auth session of that user deleted) and must choose a new PIN at the next sign-in
+//      (must_change_pin, reason admin_reset); trusted devices revoked (0032 trigger). Audited (auth.pin_set, auth.pin_reset_by_admin).
 // The raw PIN never reaches SQL or a log. Returns only { profile_id, pin_reset }.
 //
 // NOT EXECUTED here: Deno / Docker were unavailable when this was written. See README.md.
@@ -56,7 +57,11 @@ async function reset(token: string, input: PinResetInput): Promise<ShapedRespons
   if (input.pin.length !== prepared.pinLength) return shapeFailure('invalid_pin_length')
 
   const digest = await computePinDigest(input.pin, env.pinPepper)
-  const set = await admin.rpc('fn_set_user_pin', { p_profile_id: input.profile_id, p_pin_digest: digest, p_pin_length: prepared.pinLength })
+  const set = await admin.rpc('fn_admin_reset_user_pin', {
+    p_profile_id: input.profile_id,
+    p_pin_digest: digest,
+    p_pin_length: prepared.pinLength,
+  })
   if (set.error) return shapeFailure('server_error')
   return shapeSuccess(input.profile_id)
 }

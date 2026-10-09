@@ -154,7 +154,9 @@ select is(tests.run(format($q$insert into storage.objects (bucket_id, name) valu
 select is(tests.run(format($q$insert into storage.objects (bucket_id, name) values ('tenant-branding', 'restaurants/%s/branding/logo.png')$q$, (select b from _f))),
           '42501|new row violates row-level security policy for table "objects"|', 'another tenant''s prefix is refused');
 select is((select public.fn_update_restaurant_branding('#ABCDEF', '#445566', format('restaurants/%s/branding/logo.png', (select a from _f))) -> 'branding' ->> 'primary_color'), '#abcdef', 'branding set (colours lower-cased)');
-select is(tests.run(format($q$delete from storage.objects where bucket_id = 'tenant-branding' and name = 'restaurants/%s/branding/logo.png'$q$, (select a from _f))), 'ok:0', 'the current logo cannot be deleted while in use');
+-- real Supabase Storage refuses every direct DELETE (42501, Storage API only); the shim lets the policy decide (0 rows)
+select matches(tests.run(format($q$delete from storage.objects where bucket_id = 'tenant-branding' and name = 'restaurants/%s/branding/logo.png'$q$, (select a from _f))),
+               '^(ok:0|42501\|Direct deletion from storage tables is not allowed\. Use the Storage API instead\.\|)$', 'the current logo cannot be deleted while in use');
 select is((select public.fn_update_restaurant_branding('#abcdef', '#445566', null) -> 'branding' ->> 'logo_path'), null, 'logo removed');
 select is((select count(*)::int from public.audit_logs where event = 'settings.branding_updated'), 2, 'branding changes audited');
 select ok((select public.fn_get_subscription_usage() ?& array['usage', 'limits', 'over_quota', 'subscription']), 'own subscription + usage for settings.manage');
