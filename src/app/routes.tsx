@@ -6,6 +6,7 @@ import {
   PlatformLoginPage,
   RequireAuth,
   RequirePlatformAdmin,
+  RequireTenantIdentity,
   TenantAdminLoginPage,
   TenantLoginPage,
 } from '@/features/auth'
@@ -65,7 +66,12 @@ function Root() {
 function TenantGuard() {
   const { slug = '' } = useParams<{ slug: string }>()
   // A registered terminal returns to its tile screen after sign-out; every other device goes to the normal staff login.
-  return <RequireAuth loginPath={getKioskToken(slug) ? terminalPath(slug) : `/r/${slug}/login`} />
+  // §34A: a platform identity never renders a tenant screen (redirected to /platform)
+  return (
+    <RequireAuth loginPath={getKioskToken(slug) ? terminalPath(slug) : `/r/${slug}/login`}>
+      <RequireTenantIdentity />
+    </RequireAuth>
+  )
 }
 
 function PlatformGuard() {
