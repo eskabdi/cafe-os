@@ -5,11 +5,12 @@
 //   fn_prepare_tenant_admin_invitation      platform: fn_platform_guard (active super admin, aal2, verified factor)
 //                                           tenant:   tenant guard + is_tenant_admin + fn_require_aal2; tenant from identity
 // The service role (confined to this function) only does what the caller cannot:
-//   invite:  auth.admin.inviteUserByEmail(email, redirectTo) -> fn_attach_tenant_admin_invitation(invitation, user)
-//            any failure after the reservation -> fn_abort_tenant_admin_invitation (+ delete the never-confirmed user we created)
-//   resend:  fn_prepare_tenant_admin_invitation_resend (caller; rate limited 60 s / 5 sends) -> inviteUserByEmail again
-//            (GoTrue re-sends to an unconfirmed user) and the returned user must be the attached one
-//   revoke:  fn_revoke_tenant_admin_invitation (caller) -> delete the Auth user it hands back (never-confirmed only)
+//   deliver: fn_plan_tenant_admin_invitation_delivery -> by mode: none (decoy) | invite | replace_unconfirmed | reinvite |
+//            magic_link -> fn_attach_tenant_admin_invitation -> fn_record_tenant_admin_invitation_sent (only after success)
+//   invite:  fn_prepare_tenant_admin_invitation (caller) -> deliver; a failed first delivery -> fn_abort_tenant_admin_invitation
+//   resend:  fn_prepare_tenant_admin_invitation_resend (caller; attempts 60 s apart, 5 successful sends) -> deliver
+//   revoke:  fn_revoke_tenant_admin_invitation (caller) -> fn_tenant_admin_invitation_cleanup_user (service) -> delete that
+//            never-confirmed Auth user
 // The invitee binds itself later with fn_accept_tenant_admin_invitation() (no Edge Function needed: its own session).
 // Every step is audited in SQL (audit_logs; admin_audit_log when the platform acts). Nothing sensitive is logged here.
 //
@@ -22,10 +23,13 @@ import { clientIp, createRateLimiter } from '../pin-login/logic.ts'
 import { extractBearer } from '../staff-create/logic.ts'
 import {
   MAX_BODY_BYTES,
+  interpretCleanup,
+  interpretPlan,
   interpretPrepare,
   interpretResend,
   interpretRevoke,
   isDeletableInvitee,
+  isFreshlyCreated,
   isSafeRedirect,
   mapRpcError,
   parseInviteBody,
@@ -57,6 +61,54 @@ async function handle(token: string, input: InviteAction): Promise<ShapedRespons
   if (!userLimiter.take(`u:${callerId}`).allowed) return shapeFailure('rate_limited')
   const fail = (kind: FailureKind): ShapedResponse => shapeFailure(kind)
 
+  // one delivery, shared by the first send and every resend. The DATABASE plans it (fn_plan_tenant_admin_invitation_delivery)
+  // and records it only after it succeeded (fn_record_tenant_admin_invitation_sent): a failed attempt consumes no send budget.
+  const deliver = async (invitationId: string, email: string): Promise<boolean> => {
+    const planned = await admin.rpc('fn_plan_tenant_admin_invitation_delivery', { p_invitation_id: invitationId })
+    if (planned.error) return false
+    const plan = interpretPlan(planned.data, invitationId)
+    if (!plan || plan.email !== email) return false
+    if (plan.mode === 'none') return true // decoy: recorded by the plan itself, nothing leaves the system
+
+    let userId: string | null = plan.authUserId
+    let created: string | null = null
+    if (plan.mode === 'replace_unconfirmed' && plan.authUserId) {
+      // an orphan, never-confirmed account is never re-used (pre-hijack): delete it, then invite afresh
+      const u = await admin.auth.admin.getUserById(plan.authUserId)
+      if (u.error || !isDeletableInvitee(u.data?.user, email)) return false
+      const del = await admin.auth.admin.deleteUser(plan.authUserId)
+      if (del.error) return false
+      userId = null
+    }
+    if (plan.mode === 'invite' || plan.mode === 'replace_unconfirmed') {
+      const sent = await admin.auth.admin.inviteUserByEmail(email, { redirectTo: env.inviteRedirectUrl })
+      if (sent.error || !sent.data?.user) return false
+      // never adopt an account that existed before this attempt (and never delete it either)
+      if (!isFreshlyCreated(sent.data.user, email, plan.notBefore)) return false
+      userId = sent.data.user.id
+      created = userId
+    } else if (plan.mode === 'reinvite') {
+      const sent = await admin.auth.admin.inviteUserByEmail(email, { redirectTo: env.inviteRedirectUrl })
+      if (sent.error || sent.data?.user?.id !== plan.authUserId) return false
+    }
+    if (!userId) return false
+    const attached = await admin.rpc('fn_attach_tenant_admin_invitation', { p_invitation_id: invitationId, p_auth_user_id: userId })
+    if (attached.error) {
+      if (created) {
+        const u = await admin.auth.admin.getUserById(created)
+        if (!u.error && isDeletableInvitee(u.data?.user, email)) await admin.auth.admin.deleteUser(created)
+      }
+      return false
+    }
+    if (plan.mode === 'magic_link') {
+      // confirmed account without a profile (review H2): a sign-in link, never a new account
+      const link = await admin.auth.signInWithOtp({ email, options: { shouldCreateUser: false, emailRedirectTo: env.inviteRedirectUrl } })
+      if (link.error) return false
+    }
+    const recorded = await admin.rpc('fn_record_tenant_admin_invitation_sent', { p_invitation_id: invitationId })
+    return !recorded.error
+  }
+
   if (input.action === 'invite') {
     const prep = await caller.rpc('fn_prepare_tenant_admin_invitation', {
       p_restaurant_id: input.restaurant_id,
@@ -69,28 +121,19 @@ async function handle(token: string, input: InviteAction): Promise<ShapedRespons
     if (prep.error) return fail(mapRpcError(prep.error.message))
     const reserved = interpretPrepare(prep.data, input.email)
     if (!reserved) return fail('server_error')
-
-    const abort = async (createdUserId: string | null): Promise<void> => {
+    let ok = false
+    try {
+      ok = await deliver(reserved.invitationId, reserved.email)
+    } catch {
+      ok = false
+    }
+    if (!ok) {
+      // compensation: the first send never happened -> release the reservation (no-op once a send was recorded)
       try {
-        if (createdUserId) {
-          const u = await admin.auth.admin.getUserById(createdUserId)
-          if (!u.error && isDeletableInvitee(u.data?.user, input.email)) await admin.auth.admin.deleteUser(createdUserId)
-        }
         await admin.rpc('fn_abort_tenant_admin_invitation', { p_invitation_id: reserved.invitationId })
       } catch {
         console.error('tenant-admin-invite: abort_failed')
       }
-    }
-
-    const sent = await admin.auth.admin.inviteUserByEmail(input.email, { redirectTo: env.inviteRedirectUrl })
-    const userId = sent.data?.user?.id
-    if (sent.error || !userId) {
-      await abort(null)
-      return fail('server_error')
-    }
-    const attached = await admin.rpc('fn_attach_tenant_admin_invitation', { p_invitation_id: reserved.invitationId, p_auth_user_id: userId })
-    if (attached.error) {
-      await abort(userId)
       return fail('server_error')
     }
     return shapeSuccess('invite', reserved.invitationId, reserved.expiresAt)
@@ -101,23 +144,29 @@ async function handle(token: string, input: InviteAction): Promise<ShapedRespons
     if (prep.error) return fail(mapRpcError(prep.error.message))
     const target = interpretResend(prep.data, input.invitation_id)
     if (!target) return fail('server_error')
-    const sent = await admin.auth.admin.inviteUserByEmail(target.email, { redirectTo: env.inviteRedirectUrl })
-    if (sent.error || sent.data?.user?.id !== target.authUserId) return fail('server_error')
-    return shapeSuccess('resend', input.invitation_id)
+    let ok = false
+    try {
+      ok = await deliver(input.invitation_id, target.email)
+    } catch {
+      ok = false
+    }
+    // a failed resend leaves the invitation as it was (nothing recorded, nothing to compensate)
+    return ok ? shapeSuccess('resend', input.invitation_id) : fail('server_error')
   }
 
   const rev = await caller.rpc('fn_revoke_tenant_admin_invitation', { p_invitation_id: input.invitation_id })
   if (rev.error) return fail(mapRpcError(rev.error.message))
-  const out = interpretRevoke(rev.data, input.invitation_id)
-  if (!out) return fail('server_error')
-  if (out.cleanupUserId) {
-    try {
+  if (!interpretRevoke(rev.data, input.invitation_id)) return fail('server_error')
+  try {
+    const c = await admin.rpc('fn_tenant_admin_invitation_cleanup_user', { p_invitation_id: input.invitation_id })
+    const out = c.error ? null : interpretCleanup(c.data, input.invitation_id)
+    if (out?.cleanupUserId) {
       const u = await admin.auth.admin.getUserById(out.cleanupUserId)
       if (!u.error && isDeletableInvitee(u.data?.user, null)) await admin.auth.admin.deleteUser(out.cleanupUserId)
-    } catch {
-      // the invitation is already revoked in the database (the account cannot bind); a leftover unconfirmed user is harmless
-      console.error('tenant-admin-invite: cleanup_failed')
     }
+  } catch {
+    // the invitation is already revoked in the database (the account cannot bind); a leftover unconfirmed user is harmless
+    console.error('tenant-admin-invite: cleanup_failed')
   }
   return shapeSuccess('revoke', input.invitation_id)
 }

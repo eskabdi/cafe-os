@@ -93,23 +93,70 @@ export function interpretPrepare(data: unknown, expectedEmail: string): { invita
   return { invitationId: d.invitation_id, email: d.email, expiresAt: d.expires_at }
 }
 
-/** {invitation_id, email, auth_user_id} from fn_prepare_tenant_admin_invitation_resend. */
-export function interpretResend(data: unknown, invitationId: string): { email: string; authUserId: string } | null {
+/** {invitation_id, email} from fn_prepare_tenant_admin_invitation_resend. */
+export function interpretResend(data: unknown, invitationId: string): { email: string } | null {
   if (typeof data !== 'object' || data === null) return null
   const d = data as Record<string, unknown>
   if (d.invitation_id !== invitationId || typeof d.email !== 'string' || !EMAIL_RE.test(d.email)) return null
-  if (typeof d.auth_user_id !== 'string' || !UUID_RE.test(d.auth_user_id)) return null
-  return { email: d.email, authUserId: d.auth_user_id }
+  return { email: d.email }
 }
 
-/** {invitation_id, status, changed, cleanup_user_id} from fn_revoke_tenant_admin_invitation. */
-export function interpretRevoke(data: unknown, invitationId: string): { cleanupUserId: string | null } | null {
+/** {invitation_id, status, changed} from fn_revoke_tenant_admin_invitation (the caller never learns about the Auth side). */
+export function interpretRevoke(data: unknown, invitationId: string): { changed: boolean } | null {
   if (typeof data !== 'object' || data === null) return null
   const d = data as Record<string, unknown>
-  if (d.invitation_id !== invitationId || d.status !== 'revoked') return null
+  if (d.invitation_id !== invitationId || (d.status !== 'revoked' && d.status !== 'expired') || typeof d.changed !== 'boolean') return null
+  return { changed: d.changed }
+}
+
+/** {invitation_id, cleanup_user_id} from fn_tenant_admin_invitation_cleanup_user (service role). */
+export function interpretCleanup(data: unknown, invitationId: string): { cleanupUserId: string | null } | null {
+  if (typeof data !== 'object' || data === null) return null
+  const d = data as Record<string, unknown>
+  if (d.invitation_id !== invitationId) return null
   if (d.cleanup_user_id === null || d.cleanup_user_id === undefined) return { cleanupUserId: null }
   if (typeof d.cleanup_user_id !== 'string' || !UUID_RE.test(d.cleanup_user_id)) return null
   return { cleanupUserId: d.cleanup_user_id }
+}
+
+export type DeliveryMode = 'none' | 'invite' | 'replace_unconfirmed' | 'reinvite' | 'magic_link'
+export interface DeliveryPlan {
+  mode: DeliveryMode
+  email: string
+  authUserId: string | null
+  notBefore: string
+}
+const MODES: readonly DeliveryMode[] = ['none', 'invite', 'replace_unconfirmed', 'reinvite', 'magic_link']
+
+/** {invitation_id, email, mode, auth_user_id, not_before} from fn_plan_tenant_admin_invitation_delivery (service role). */
+export function interpretPlan(data: unknown, invitationId: string): DeliveryPlan | null {
+  if (typeof data !== 'object' || data === null) return null
+  const d = data as Record<string, unknown>
+  if (d.invitation_id !== invitationId || typeof d.email !== 'string' || !EMAIL_RE.test(d.email)) return null
+  if (typeof d.mode !== 'string' || !(MODES as readonly string[]).includes(d.mode)) return null
+  if (typeof d.not_before !== 'string' || Number.isNaN(Date.parse(d.not_before))) return null
+  const mode = d.mode as DeliveryMode
+  const needsUser = mode === 'replace_unconfirmed' || mode === 'reinvite' || mode === 'magic_link'
+  const uid = d.auth_user_id
+  if (needsUser) {
+    if (typeof uid !== 'string' || !UUID_RE.test(uid)) return null
+  } else if (uid !== null && uid !== undefined) {
+    return null
+  }
+  return { mode, email: d.email, authUserId: needsUser ? (uid as string) : null, notBefore: d.not_before }
+}
+
+/** inviteUserByEmail must have CREATED the user now (created_at >= not_before): an older account is never adopted. */
+export function isFreshlyCreated(user: unknown, expectedEmail: string, notBefore: string): boolean {
+  if (typeof user !== 'object' || user === null) return false
+  const u = user as Record<string, unknown>
+  if (typeof u.id !== 'string' || !UUID_RE.test(u.id)) return false
+  if (typeof u.email !== 'string' || u.email.toLowerCase() !== expectedEmail) return false
+  if (typeof u.created_at !== 'string') return false
+  const created = Date.parse(u.created_at)
+  const nb = Date.parse(notBefore)
+  // one second of clock tolerance between GoTrue and Postgres
+  return !Number.isNaN(created) && !Number.isNaN(nb) && created >= nb - 1000
 }
 
 /**
@@ -173,6 +220,8 @@ export function mapRpcError(message: unknown): FailureKind {
     case 'staff_limit_reached':
       return 'staff_limit_reached'
     case 'invalid_state':
+    case 'invitation_expired':
+    case 'invitation_revoked':
       return 'invalid_state'
     case 'invite_rate_limited':
       return 'rate_limited'

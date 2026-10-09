@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { readLimitedBody } from '../../supabase/functions/_shared/body'
 import {
   MAX_BODY_BYTES,
+  interpretCleanup,
+  interpretPlan,
   interpretPrepare,
   interpretResend,
   interpretRevoke,
   isDeletableInvitee,
+  isFreshlyCreated,
   isSafeRedirect,
   mapRpcError,
   parseInviteBody,
@@ -87,23 +90,42 @@ describe('RPC result interpretation', () => {
     expect(interpretPrepare({ ...d, invitation_id: 'x' }, 'a@b.co')).toBeNull()
     expect(interpretPrepare(null, 'a@b.co')).toBeNull()
   })
-  it('resend: must name the same invitation and an attached user', () => {
-    expect(interpretResend({ invitation_id: INV, email: 'a@b.co', auth_user_id: USER }, INV)).toEqual({
-      email: 'a@b.co',
-      authUserId: USER,
-    })
-    expect(interpretResend({ invitation_id: RID, email: 'a@b.co', auth_user_id: USER }, INV)).toBeNull()
-    expect(interpretResend({ invitation_id: INV, email: 'a@b.co', auth_user_id: null }, INV)).toBeNull()
+  it('resend: must name the same invitation', () => {
+    expect(interpretResend({ invitation_id: INV, email: 'a@b.co' }, INV)).toEqual({ email: 'a@b.co' })
+    expect(interpretResend({ invitation_id: RID, email: 'a@b.co' }, INV)).toBeNull()
+    expect(interpretResend({ invitation_id: INV, email: 'nope' }, INV)).toBeNull()
   })
-  it('revoke: optional cleanup user', () => {
-    expect(interpretRevoke({ invitation_id: INV, status: 'revoked', cleanup_user_id: null }, INV)).toEqual({
-      cleanupUserId: null,
+  it('revoke: status only, never an Auth user id', () => {
+    expect(interpretRevoke({ invitation_id: INV, status: 'revoked', changed: true }, INV)).toEqual({ changed: true })
+    expect(interpretRevoke({ invitation_id: INV, status: 'expired', changed: false }, INV)).toEqual({ changed: false })
+    expect(interpretRevoke({ invitation_id: INV, status: 'pending', changed: true }, INV)).toBeNull()
+    expect(interpretRevoke({ invitation_id: RID, status: 'revoked', changed: true }, INV)).toBeNull()
+  })
+  it('cleanup: optional never-confirmed user', () => {
+    expect(interpretCleanup({ invitation_id: INV, cleanup_user_id: null }, INV)).toEqual({ cleanupUserId: null })
+    expect(interpretCleanup({ invitation_id: INV, cleanup_user_id: USER }, INV)).toEqual({ cleanupUserId: USER })
+    expect(interpretCleanup({ invitation_id: INV, cleanup_user_id: 'x' }, INV)).toBeNull()
+  })
+  it('delivery plan: known modes; a user exactly when the mode needs one', () => {
+    const nb = '2026-10-09T10:00:00Z'
+    expect(interpretPlan({ invitation_id: INV, email: 'a@b.co', mode: 'invite', auth_user_id: null, not_before: nb }, INV)).toEqual({
+      mode: 'invite',
+      email: 'a@b.co',
+      authUserId: null,
+      notBefore: nb,
     })
-    expect(interpretRevoke({ invitation_id: INV, status: 'revoked', cleanup_user_id: USER }, INV)).toEqual({
-      cleanupUserId: USER,
-    })
-    expect(interpretRevoke({ invitation_id: INV, status: 'pending', cleanup_user_id: null }, INV)).toBeNull()
-    expect(interpretRevoke({ invitation_id: INV, status: 'revoked', cleanup_user_id: 'x' }, INV)).toBeNull()
+    expect(interpretPlan({ invitation_id: INV, email: 'a@b.co', mode: 'magic_link', auth_user_id: USER, not_before: nb }, INV)?.authUserId).toBe(USER)
+    expect(interpretPlan({ invitation_id: INV, email: 'a@b.co', mode: 'reinvite', auth_user_id: null, not_before: nb }, INV)).toBeNull()
+    expect(interpretPlan({ invitation_id: INV, email: 'a@b.co', mode: 'invite', auth_user_id: USER, not_before: nb }, INV)).toBeNull()
+    expect(interpretPlan({ invitation_id: INV, email: 'a@b.co', mode: 'other', auth_user_id: null, not_before: nb }, INV)).toBeNull()
+    expect(interpretPlan({ invitation_id: RID, email: 'a@b.co', mode: 'none', auth_user_id: null, not_before: nb }, INV)).toBeNull()
+  })
+  it('isFreshlyCreated: never adopts an account older than the attempt', () => {
+    const nb = '2026-10-09T10:00:00Z'
+    expect(isFreshlyCreated({ id: USER, email: 'A@b.co', created_at: '2026-10-09T10:00:01Z' }, 'a@b.co', nb)).toBe(true)
+    expect(isFreshlyCreated({ id: USER, email: 'a@b.co', created_at: '2026-10-01T00:00:00Z' }, 'a@b.co', nb)).toBe(false)
+    expect(isFreshlyCreated({ id: USER, email: 'x@b.co', created_at: '2026-10-09T10:00:01Z' }, 'a@b.co', nb)).toBe(false)
+    expect(isFreshlyCreated(null, 'a@b.co', nb)).toBe(false)
   })
 })
 
