@@ -27,6 +27,9 @@ const StationKDS = lazy(() =>
   import('@/features/stations/StationKDS').then((m) => ({ default: m.StationKDS })),
 )
 const PlatformRoutes = lazy(() => import('@/features/platform/PlatformRoutes'))
+const AcceptInvitationPage = lazy(() =>
+  import('@/features/invitations/AcceptInvitationPage').then((m) => ({ default: m.AcceptInvitationPage })),
+)
 const MenuPage = lazy(() => import('@/features/menu').then((m) => ({ default: m.MenuPage })))
 const InventoryPage = lazy(() => import('@/features/inventory').then((m) => ({ default: m.InventoryPage })))
 const RestaurantSettingsPage = lazy(() =>
@@ -80,6 +83,8 @@ export const routes: RouteObject[] = [
     element: <Root />,
     children: [
       { index: true, element: <HomePage /> },
+      // Tenant Admin invitation link (one-time token hash in the query, removed on arrival)
+      { path: 'invite', element: <AcceptInvitationPage /> },
       // Shared floor terminal on a tenant subdomain (<slug>.cafeos.et/terminal). Slug comes from the host.
       { path: 'terminal', element: <TerminalPage /> },
       {

@@ -3,22 +3,33 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { portalOf } from '@/lib/domain/portal'
 import { isPlatformSuperAdmin, resolveTenantSlug } from '@/lib/supabase/rpc'
+import { fetchTenantLogoUrl } from '@/lib/supabase/tenant-logo'
 import { AdminLoginForm } from './AdminLoginForm'
 import { StaffLogin } from './StaffLogin'
 import { useAuth } from './useAuth'
 
+/** The tenant's current logo (signed 10-minute URL from the public tenant-logo function); nothing when there is none. */
+function TenantLogo({ slug }: { slug: string }) {
+  const logo = useQuery({ queryKey: ['tenant-logo', slug], queryFn: () => fetchTenantLogoUrl(slug), staleTime: 5 * 60_000, retry: false })
+  if (!logo.data) return null
+  return <img src={logo.data} alt="" className="mx-auto h-16 w-16 object-contain" referrerPolicy="no-referrer" />
+}
+
 function AuthShell({
   title,
   subtitle,
+  logoSlug,
   children,
 }: {
   title: string
   subtitle?: string
+  logoSlug?: string
   children: React.ReactNode
 }) {
   return (
     <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-6 p-6">
       <header className="space-y-1 text-center">
+        {logoSlug && <TenantLogo slug={logoSlug} />}
         <p className="text-2xl font-bold text-ink">
           Cafe<span className="text-primary">OS</span>
         </p>
@@ -74,7 +85,7 @@ export function TenantLoginPage() {
     )
   }
   return (
-    <AuthShell title={tenant.data.name} subtitle="Staff sign-in">
+    <AuthShell title={tenant.data.name} subtitle="Staff sign-in" logoSlug={slug}>
       <StaffLogin slug={slug} onSignedIn={() => navigate(`/r/${slug}`, { replace: true })} />
       <p className="mt-4 text-center text-sm">
         <Link className="text-primary underline-offset-4 hover:underline" to={`/r/${slug}/admin-login`}>
@@ -90,7 +101,7 @@ export function TenantAdminLoginPage() {
   const navigate = useNavigate()
   useRedirectIfAlreadySignedIn(`/r/${slug}`)
   return (
-    <AuthShell title="Admin sign-in" subtitle="Owners and managers use email and password">
+    <AuthShell title="Admin sign-in" subtitle="Owners and managers use email and password" logoSlug={slug}>
       <AdminLoginForm onSignedIn={() => navigate(`/r/${slug}`, { replace: true })} />
       <p className="mt-4 text-center text-sm">
         <Link className="text-primary underline-offset-4 hover:underline" to={`/r/${slug}/login`}>
