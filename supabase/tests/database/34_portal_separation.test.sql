@@ -132,7 +132,7 @@ select ok(not public.has_permission('orders.view') and public.current_restaurant
 -- the platform tenant detail: metadata + aggregates only
 create temp table _detail on commit drop as select public.fn_platform_get_tenant((select b from _f)) d;
 select is((select string_agg(k, ',' order by k) from _detail, jsonb_object_keys(d) k),
-          'address,created_at,custom_domain,id,invitations,limits,name,onboarded_at,over_quota,phone,recent_invoices,slug,status,subscription,suspended_at,suspension_reason,timezone,tin,updated_at,usage',
+          'address,cancelled_at,created_at,custom_domain,id,invitations,limits,name,onboarded_at,over_quota,phone,recent_invoices,slug,status,subscription,suspended_at,suspension_reason,timezone,tin,updated_at,usage',
           'fn_platform_get_tenant returns exactly the metadata / subscription / usage / invitation / invoice keys');
 select ok(not ((select d::text from _detail) ~* '(ORD-7777|Secret|RCT-0001|VCH-0001|waiter|opening_float|vat_rate)'),
           'and no operational content: no order / receipt / voucher number, item, customer, ingredient or staff name, no money settings');

@@ -3,7 +3,7 @@
 -- deletes with soft deactivation, renames that keep ids, and a DB-level generalisation proof with names this
 -- codebase has never seen (Grill, Runner, Amole, ...).
 begin;
-select plan(83);
+select plan(86);
 
 -- ═════════ schema contains no knowledge of domain names ═════════
 select is((select count(*)::int from pg_type t join pg_namespace n on n.oid = t.typnamespace
@@ -199,10 +199,12 @@ select tests.clear_auth();
 select tests.authenticate_as((select admin from _f));
 select matches(tests.run(format($q$select public.fn_delete_role((select id from public.roles where name = 'Floor Captain' and restaurant_id = %L))$q$, (select a from _f))),
                '^P0001\|role_in_use\|users:1', 'the role in use cannot be deleted');
-select is(tests.run(format($q$select public.fn_delete_role(%L)$q$, (select runner from _ctx))), 'ok:1', 'an unused role (matrix and station rows included) can be deleted');
-select is((select count(*)::int from public.role_permissions where role_id = (select runner from _ctx))
-          + (select count(*)::int from public.role_station_access where role_id = (select runner from _ctx)), 0, 'its matrix and station rows went with it');
-select is(tests.run(format($q$delete from public.stations where id = %L$q$, (select grill from _ctx))), '23503|update or delete on table "stations" violates foreign key constraint "menu_items_station_fk" on table "menu_items"|Key is still referenced from table "menu_items".', 'the new station is protected as soon as it has dependents');
+select is(tests.run(format($q$select public.fn_delete_role(%L)$q$, (select runner from _ctx))), 'P0001|role_in_use|history', 'a role an account once held is history: deactivate, never delete');
+select is(tests.run(format($q$select public.fn_create_role('{"name": "Spare"}')$q$)), 'ok:1', 'a never-held role');
+select is(tests.run(format($q$select public.fn_update_role_permissions((select id from public.roles where name = 'Spare' and restaurant_id = %L), array['orders.view'], array[%L]::uuid[])$q$, (select a from _f), (select grill from _ctx))), 'ok:1', 'with matrix and station rows');
+select is(tests.run(format($q$select public.fn_delete_role((select id from public.roles where name = 'Spare' and restaurant_id = %L))$q$, (select a from _f))), 'ok:1', 'an unused role (matrix and station rows included) can be deleted');
+select is((select count(*)::int from public.roles where name = 'Spare'), 0, 'its matrix and station rows went with it (FKs would block otherwise)');
+select matches(tests.run(format($q$delete from public.stations where id = %L$q$, (select grill from _ctx))), '^23503\|update or delete on table "stations" violates foreign key constraint', 'the new station is protected as soon as it has dependents');
 select tests.clear_auth();
 
 -- ═════════ names are scoped per tenant: B can use the very same names ═════════

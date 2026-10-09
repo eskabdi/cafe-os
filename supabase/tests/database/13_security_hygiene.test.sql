@@ -60,7 +60,7 @@ select is((select string_agg(name, ',' order by name) from _fn
              and name not in ('current_restaurant_id', 'current_role_id', 'current_station_ids', 'current_tenant_writable', 'current_user_id', 'has_permission', 'has_station_access',
                               'is_order_owner', 'is_platform_admin', 'is_platform_super_admin', 'is_tenant_admin', 'order_has_station_access',
                               'fn_err', 'fn_resolve_tenant_slug')
-             and prosrc !~ '(fn_tenant_status_guard|fn_platform_guard|is_platform_super_admin|is_service_role|auth\.uid)'),
+             and prosrc !~ '(fn_tenant_status_guard|fn_platform_guard|is_platform_super_admin|is_service_role|fn_invitation_for_caller|auth\.uid)'),
           null, 'every client-callable RPC authorises in its body');
 select is((select string_agg(name, ',' order by name) from _fn
            where has_function_privilege('authenticated', oid, 'execute') and proargnames is not null

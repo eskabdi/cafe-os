@@ -3,7 +3,7 @@
 -- and the invitee binds itself with fn_accept_tenant_admin_invitation. This file plays the SQL side of every step:
 -- lifecycle, validation, rate limit, replay, expiry, revoke, cross-tenant, cross-portal, audit.
 begin;
-select plan(55);
+select plan(59);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -57,18 +57,23 @@ select is(tests.run(format($q$select public.fn_attach_tenant_admin_invitation(%L
 select is((select public.fn_attach_tenant_admin_invitation((select v::uuid from _c where k = 'inv'), (select invitee from _f)) ->> 'attached'), 'true', 'attach the invited Auth user');
 select is((select public.fn_attach_tenant_admin_invitation((select v::uuid from _c where k = 'inv'), (select invitee from _f)) ->> 'attached'), 'true', 'replay of the same attach is idempotent');
 select is(tests.run(format($q$select public.fn_attach_tenant_admin_invitation(%L, %L)$q$, (select v from _c where k = 'inv'), (select invitee2 from _f))), 'P0001|invalid_state|already_attached', 'never re-pointed');
+select is((select public.fn_record_tenant_admin_invitation_sent((select v::uuid from _c where k = 'inv')) ->> 'send_count'), '1', 'the successful first send is recorded (send budget)');
 select tests.clear_auth();
 
 -- ═════════ resend (rate limited) ═════════
 select tests.aal2((select su from _f));
 select is(tests.run(format($q$select public.fn_prepare_tenant_admin_invitation_resend(%L)$q$, (select v from _c where k = 'inv'))), 'P0001|invite_rate_limited|', 'a resend right after the send is rate limited (60 s)');
 select tests.clear_auth();
-update public.tenant_admin_invitations set last_sent_at = now() - interval '2 minutes' where id = (select v::uuid from _c where k = 'inv');
+update public.tenant_admin_invitations set last_attempt_at = now() - interval '2 minutes' where id = (select v::uuid from _c where k = 'inv');
 select tests.aal2((select su from _f));
 select is((select public.fn_prepare_tenant_admin_invitation_resend((select v::uuid from _c where k = 'inv')) ->> 'email'), 'new.owner@fresh.example.com', 'resend after the gap');
 select tests.clear_auth();
+select tests.authenticate_as_service_role();
+select is((select public.fn_plan_tenant_admin_invitation_delivery((select v::uuid from _c where k = 'inv')) ->> 'mode'), 'reinvite', 'delivery plan: the attached, unconfirmed user is re-invited');
+select lives_ok($q$select public.fn_record_tenant_admin_invitation_sent((select v::uuid from _c where k = 'inv'))$q$, 'the successful resend is recorded');
+select tests.clear_auth();
 select is((select send_count from public.tenant_admin_invitations where id = (select v::uuid from _c where k = 'inv')), 2, 'send counter');
-update public.tenant_admin_invitations set last_sent_at = now() - interval '2 minutes', send_count = 5 where id = (select v::uuid from _c where k = 'inv');
+update public.tenant_admin_invitations set last_attempt_at = now() - interval '2 minutes', send_count = 5 where id = (select v::uuid from _c where k = 'inv');
 select tests.aal2((select su from _f));
 select is(tests.run(format($q$select public.fn_prepare_tenant_admin_invitation_resend(%L)$q$, (select v from _c where k = 'inv'))), 'P0001|invite_rate_limited|', 'at most 5 sends');
 select tests.clear_auth();
@@ -122,9 +127,13 @@ select tests.authenticate_as_service_role();
 select public.fn_attach_tenant_admin_invitation((select v::uuid from _c where k = 'co'), '00000000-0000-4000-8000-0000000000d3');
 select tests.clear_auth();
 select tests.aal2((select a_admin from _f));
-select is((select public.fn_revoke_tenant_admin_invitation((select v::uuid from _c where k = 'co')) ->> 'cleanup_user_id'), '00000000-0000-4000-8000-0000000000d3',
-          'revoke; the never-confirmed Auth user is handed back for cleanup');
+select is((select public.fn_revoke_tenant_admin_invitation((select v::uuid from _c where k = 'co')) - 'invitation_id'), '{"status": "revoked", "changed": true}'::jsonb,
+          'revoke: the caller learns nothing about the Auth side');
 select is((select public.fn_revoke_tenant_admin_invitation((select v::uuid from _c where k = 'co')) ->> 'changed'), 'false', 'replay: no-op');
+select tests.clear_auth();
+select tests.authenticate_as_service_role();
+select is((select public.fn_tenant_admin_invitation_cleanup_user((select v::uuid from _c where k = 'co')) ->> 'cleanup_user_id'), '00000000-0000-4000-8000-0000000000d3',
+          'the service side is handed the never-confirmed Auth user for cleanup');
 select tests.clear_auth();
 update auth.users set email_confirmed_at = now() where id = '00000000-0000-4000-8000-0000000000d3';
 select tests.authenticate_as('00000000-0000-4000-8000-0000000000d3');
