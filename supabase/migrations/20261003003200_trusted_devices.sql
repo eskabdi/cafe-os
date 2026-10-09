@@ -385,7 +385,14 @@ begin
   if v_uid is null then perform public.fn_err('not_authenticated'); end if;
   select * into d from public.trusted_devices t where t.id = p_device_id for update;
   if not found then perform public.fn_err('not_found'); end if;
-  if d.user_id <> v_uid then perform public.fn_device_admin_scope(d.user_id); end if;
+  if d.user_id <> v_uid then
+    -- a foreign device answers exactly like an unknown one (no existence oracle on device ids)
+    begin
+      perform public.fn_device_admin_scope(d.user_id);
+    exception when sqlstate 'P0001' then
+      perform public.fn_err('not_found');
+    end;
+  end if;
   if d.revoked_at is not null then return jsonb_build_object('device_id', d.id, 'changed', false); end if;
   update public.trusted_devices set revoked_at = now(), revoked_by = v_uid,
          revoke_reason = case when d.user_id = v_uid then 'user' else 'admin' end

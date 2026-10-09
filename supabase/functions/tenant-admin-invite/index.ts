@@ -44,6 +44,8 @@ const env = readInviteEnv((u) => isSafeRedirect(u))
 const allowedOrigins = parseAllowedOrigins(env?.allowedOrigins)
 const ipLimiter = createRateLimiter({ capacity: 20, refillPerSec: 0.2, maxKeys: 5000 })
 const userLimiter = createRateLimiter({ capacity: 10, refillPerSec: 1 / 30, maxKeys: 5000 })
+/** Above a typical GoTrue invite round trip (e-mail hand-off included). */
+const DELIVERY_MIN_MS = 2500
 
 function respond(shaped: ShapedResponse, origin: string | null): Response {
   return new Response(JSON.stringify(shaped.body), { status: shaped.status, headers: { ...shaped.headers, ...corsHeaders(origin) } })
@@ -109,6 +111,14 @@ async function handle(token: string, input: InviteAction): Promise<ShapedRespons
     return !recorded.error
   }
 
+  // Constant minimum latency for invite / resend once the caller passed the database checks: a decoy (mode 'none') must not
+  // answer measurably faster than a real GoTrue delivery (security review L1, existence oracle by timing).
+  const padded = async (started: number, r: ShapedResponse): Promise<ShapedResponse> => {
+    const wait = DELIVERY_MIN_MS - (Date.now() - started)
+    if (wait > 0) await new Promise((res) => setTimeout(res, wait))
+    return r
+  }
+
   if (input.action === 'invite') {
     const prep = await caller.rpc('fn_prepare_tenant_admin_invitation', {
       p_restaurant_id: input.restaurant_id,
@@ -121,6 +131,7 @@ async function handle(token: string, input: InviteAction): Promise<ShapedRespons
     if (prep.error) return fail(mapRpcError(prep.error.message))
     const reserved = interpretPrepare(prep.data, input.email)
     if (!reserved) return fail('server_error')
+    const started = Date.now()
     let ok = false
     try {
       ok = await deliver(reserved.invitationId, reserved.email)
@@ -134,9 +145,9 @@ async function handle(token: string, input: InviteAction): Promise<ShapedRespons
       } catch {
         console.error('tenant-admin-invite: abort_failed')
       }
-      return fail('server_error')
+      return padded(started, fail('server_error'))
     }
-    return shapeSuccess('invite', reserved.invitationId, reserved.expiresAt)
+    return padded(started, shapeSuccess('invite', reserved.invitationId, reserved.expiresAt))
   }
 
   if (input.action === 'resend') {
@@ -144,6 +155,7 @@ async function handle(token: string, input: InviteAction): Promise<ShapedRespons
     if (prep.error) return fail(mapRpcError(prep.error.message))
     const target = interpretResend(prep.data, input.invitation_id)
     if (!target) return fail('server_error')
+    const started = Date.now()
     let ok = false
     try {
       ok = await deliver(input.invitation_id, target.email)
@@ -151,7 +163,7 @@ async function handle(token: string, input: InviteAction): Promise<ShapedRespons
       ok = false
     }
     // a failed resend leaves the invitation as it was (nothing recorded, nothing to compensate)
-    return ok ? shapeSuccess('resend', input.invitation_id) : fail('server_error')
+    return padded(started, ok ? shapeSuccess('resend', input.invitation_id) : fail('server_error'))
   }
 
   const rev = await caller.rpc('fn_revoke_tenant_admin_invitation', { p_invitation_id: input.invitation_id })

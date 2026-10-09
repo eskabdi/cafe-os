@@ -148,7 +148,7 @@ select is(tests.run(format($q$select public.fn_revoke_trusted_device(%L)$q$, (se
 select is(tests.run(format($q$select public.fn_revoke_all_trusted_devices(%L)$q$, (select a_admin from _f))), 'P0001|not_found|', 'nor revoke all of them');
 select tests.clear_auth();
 select tests.authenticate_as((select a_waiter from _f));
-select is(tests.run(format($q$select public.fn_revoke_trusted_device(%L)$q$, (select v from _c where k = 'adev'))), 'P0001|permission_denied|', 'staff cannot revoke an admin''s device');
+select is(tests.run(format($q$select public.fn_revoke_trusted_device(%L)$q$, (select v from _c where k = 'adev'))), 'P0001|not_found|', 'staff cannot revoke an admin''s device (answered like an unknown id)');
 select is(tests.run($q$select public.fn_trust_device('x')$q$), 'P0001|permission_denied|', 'PIN staff cannot trust a device');
 select tests.clear_auth();
 

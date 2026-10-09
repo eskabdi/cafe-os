@@ -2209,6 +2209,7 @@ declare
 begin
   v_rid := public.fn_tenant_status_guard(false);
   if not public.is_tenant_admin() then perform public.fn_err('permission_denied'); end if;
+  perform public.fn_require_aal2();   -- invitee names / e-mails sit behind MFA like every invitation write
   return (select coalesce(jsonb_agg(public.fn_invitation_json(i.id) order by i.created_at desc), '[]'::jsonb)
           from (select x.id, x.created_at from public.tenant_admin_invitations x where x.restaurant_id = v_rid
                 order by x.created_at desc limit 100) i);
