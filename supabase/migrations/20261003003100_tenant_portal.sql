@@ -253,7 +253,7 @@ begin
 end;
 $$;
 
--- hard delete ONLY of a role no profile has ever held (its matrix and station rows are configuration and go with it)
+-- hard delete ONLY of a role no profile holds or ever held (audit trail); its matrix and station rows are configuration and go with it
 create or replace function public.fn_delete_role(p_role_id uuid)
 returns jsonb
 language plpgsql
@@ -271,6 +271,16 @@ begin
   perform public.fn_role_for_edit(v_rid, p_role_id);
   select count(*) into v_users from public.profiles p where p.role_id = p_role_id and p.restaurant_id = v_rid;
   if v_users > 0 then perform public.fn_err('role_in_use', 'users:' || v_users); end if;
+  -- review 7: a role that ANY account ever held (a user / profile event in the tenant's trail mentions it: user.created,
+  -- user.role_changed, the profiles row audit, ...) is history: refuse (deactivate it instead). Only the role's own
+  -- configuration events (role.*, roles / role_permissions / role_station_access rows) do not count.
+  if exists (select 1 from public.audit_logs a
+             where a.restaurant_id = v_rid
+               and a.event not like 'role.%'
+               and coalesce(a.table_name, '') not in ('roles', 'role_permissions', 'role_station_access')
+               and (strpos(coalesce(a.new_data::text, ''), p_role_id::text) > 0 or strpos(coalesce(a.old_data::text, ''), p_role_id::text) > 0)) then
+    perform public.fn_err('role_in_use', 'history');
+  end if;
   select ro.name into v_name from public.roles ro where ro.id = p_role_id;
   delete from public.role_permissions where role_id = p_role_id and restaurant_id = v_rid;
   delete from public.role_station_access where role_id = p_role_id and restaurant_id = v_rid;
@@ -295,6 +305,7 @@ begin
   if not public.has_permission('roles.manage') then perform public.fn_err('permission_denied'); end if;
   if p_role_id is null or p_station_ids is null then perform public.fn_err('invalid_input'); end if;
   if array_length(p_station_ids, 1) > 200 then perform public.fn_err('invalid_input', 'station_ids'); end if;
+  perform public.fn_role_for_edit(v_rid, p_role_id);   -- coverage rule first: not_found / system_role_protected / own role / escalation
   select coalesce(array_agg(pm.key order by pm.key), '{}') into v_keys
   from public.role_permissions rp join public.permissions pm on pm.id = rp.permission_id
   where rp.role_id = p_role_id and rp.restaurant_id = v_rid;
@@ -310,12 +321,15 @@ as $$
   select jsonb_build_object(
     'id', p.id, 'first_name', p.first_name, 'middle_name', p.middle_name, 'last_name', p.last_name,
     'short_name', p.short_name, 'full_name', p.full_name, 'username', p.username, 'is_active', p.is_active,
-    'auth_method', p.auth_method, 'identity_rotation_pending', p.identity_rotation_pending,
+    'auth_method', p.auth_method,
+    'identity_rotation_pending', case when p_with_secrets then p.identity_rotation_pending end,
     'role', jsonb_build_object('id', ro.id, 'name', ro.name, 'color', ro.color, 'icon', ro.icon,
                                'system_key', ro.system_key, 'is_active', ro.is_active),
     -- only password accounts (tenant admins) have a real, displayable e-mail; staff identities are synthetic
-    'email', case when p.auth_method = 'password' then (select u.email from auth.users u where u.id = p.id) end,
-    'mfa_enrolled', case when p.auth_method = 'password'
+    -- review 12: e-mail / MFA state / identity rotation only for users.manage callers (p_with_secrets); users.view sees names,
+    -- role and status. Keys stay present (null) so the payload shape is stable.
+    'email', case when p_with_secrets and p.auth_method = 'password' then (select u.email from auth.users u where u.id = p.id) end,
+    'mfa_enrolled', case when p_with_secrets and p.auth_method = 'password'
                          then exists (select 1 from auth.mfa_factors f where f.user_id = p.id and f.status = 'verified') end,
     'pin', case when p_with_secrets and p.auth_method = 'pin' then
              (select jsonb_build_object('set', true, 'length', ps.pin_length, 'locked', coalesce(ps.locked_until > now(), false),
@@ -413,7 +427,6 @@ declare
   v_rid uuid;
   v_old boolean;
   v_role_active boolean;
-  v_max integer;
 begin
   v_rid := public.fn_tenant_status_guard(true);
   if not public.has_permission('users.manage') then perform public.fn_err('permission_denied'); end if;
@@ -430,10 +443,7 @@ begin
   end if;
   if p_active then
     if not v_role_active then perform public.fn_err('invalid_role', 'role is inactive'); end if;
-    select pl.max_staff into v_max from public.subscriptions s join public.plans pl on pl.id = s.plan_id where s.restaurant_id = v_rid;
-    if v_max is not null and (select count(*) from public.profiles p where p.restaurant_id = v_rid and p.is_active) >= v_max then
-      perform public.fn_err('staff_limit_reached');
-    end if;
+    perform public.fn_staff_quota_check(v_rid);   -- active profiles + live pending invitations, per-tenant lock
   end if;
   -- triggers: trg_guard_profile_update (permission_escalation), trg_guard_last_admin (last_tenant_admin, serialised)
   update public.profiles set is_active = p_active where id = p_profile_id and restaurant_id = v_rid;
@@ -472,6 +482,182 @@ begin
   return jsonb_build_object('profile_id', p_profile_id, 'role_name', v_name, 'pin_length', public.fn_pin_length_for_role(v_role));
 end;
 $$;
+
+-- ── staff-create precheck (review H1 + H3): one quota rule, invitation usernames reserved ──
+-- VOLATILE now (was stable): the quota helper takes a per-tenant advisory lock and the lazy expiry writes; a stable function would
+-- count with the snapshot taken BEFORE the lock. fn_create_staff_profile (the insert) runs it in the same transaction as the insert,
+-- so the lock covers check + insert.
+create or replace function public.fn_staff_precheck(p_rid uuid, p_username text, p_role_id uuid)
+returns text
+language plpgsql volatile security definer set search_path = ''
+as $$
+declare
+  v_slug text;
+begin
+  if p_username is null or p_username !~ '^[a-z0-9][a-z0-9._-]{1,31}$' then
+    perform public.fn_err('invalid_input', 'username');
+  end if;
+  if p_role_id is null
+     or not exists (select 1 from public.roles ro
+                    where ro.id = p_role_id and ro.restaurant_id = p_rid and ro.is_active and ro.system_key is null) then
+    perform public.fn_err('invalid_role');
+  end if;
+  if not public.fn_caller_covers_role(p_role_id) then perform public.fn_err('permission_escalation'); end if;
+  perform public.fn_expire_tenant_admin_invitations(p_rid, null);
+  if exists (select 1 from public.profiles p where p.restaurant_id = p_rid and p.username = p_username)
+     or exists (select 1 from public.tenant_admin_invitations i
+                where i.restaurant_id = p_rid and i.username = p_username and i.status = 'pending') then
+    perform public.fn_err('username_taken');
+  end if;
+  perform public.fn_staff_quota_check(p_rid);
+  select r.slug into v_slug from public.restaurants r where r.id = p_rid;
+  return v_slug;
+end;
+$$;
+revoke all on function public.fn_staff_precheck(uuid, text, uuid) from public, anon, authenticated;
+
+create or replace function public.fn_prepare_staff_creation(p_username text, p_role_id uuid)
+returns jsonb
+language plpgsql volatile security definer set search_path = ''
+as $$
+declare
+  v_rid uuid := public.fn_tenant_status_guard(true);
+  v_user text := lower(btrim(coalesce(p_username, '')));
+  v_slug text;
+begin
+  if not public.has_permission('users.manage') then perform public.fn_err('permission_denied'); end if;
+  v_slug := public.fn_staff_precheck(v_rid, v_user, p_role_id);
+  return jsonb_build_object('slug', v_slug, 'username', v_user,
+    'role_name', (select r.name from public.roles r where r.id = p_role_id and r.restaurant_id = v_rid));
+end;
+$$;
+
+-- ── admin PIN reset (review 11 + owner decision 5) ──────────────────────────
+-- must_change_reason tells WHY a change is required: 'security' (single-session rule, 0023: the change then needs a tenant_admin's
+-- approval, 0024) or 'admin_reset' (an admin set a temporary PIN: the person picks their own PIN, no approval needed, because the
+-- admin already decided). Cleared automatically whenever the flag is cleared.
+alter table public.profile_secrets
+  add column must_change_reason text check (must_change_reason is null or must_change_reason in ('security', 'admin_reset'));
+create or replace function public.fn_profile_secret_reason()
+returns trigger
+language plpgsql set search_path = ''
+as $$
+begin
+  if not new.must_change_pin then new.must_change_reason := null;
+  elsif new.must_change_reason is null then new.must_change_reason := 'security';
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.fn_profile_secret_reason() from public, anon, authenticated;
+create trigger trg_profile_secret_reason before insert or update on public.profile_secrets
+  for each row execute function public.fn_profile_secret_reason();
+update public.profile_secrets set must_change_reason = 'security' where must_change_pin;
+
+-- step 2 of staff-pin-reset (SERVICE ROLE, after fn_prepare_pin_reset AS THE CALLER): set the temporary PIN (fn_set_user_pin:
+-- bcrypt, lockout cleared), then FORCE a change at the next sign-in (must_change_pin, reason admin_reset; until then every permission
+-- helper answers "nothing", 0023) and SIGN THE PERSON OUT: every GoTrue session row of the user is deleted (refresh tokens go
+-- with it; the single-session rule then sees no active session). Access tokens already issued stay signed until they expire
+-- (<= 1 h) but carry no permission while the change is pending. Returns {profile_id, sessions_revoked}; sessions_revoked is null
+-- when this database role may not touch auth.sessions (then the Edge Function reports it; the permission lock still applies).
+create or replace function public.fn_admin_reset_user_pin(p_profile_id uuid, p_pin_digest text, p_pin_length integer)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_rid uuid;
+  v_n integer;
+begin
+  if not public.is_service_role() then perform public.fn_err('permission_denied'); end if;
+  perform public.fn_set_user_pin(p_profile_id, p_pin_digest, p_pin_length);
+  select p.restaurant_id into v_rid from public.profiles p where p.id = p_profile_id;
+  update public.profile_secrets
+     set must_change_pin = true, must_change_reason = 'admin_reset', pin_change_pending = false, pin_change_requested_at = null
+   where profile_id = p_profile_id;
+  begin
+    delete from auth.sessions s where s.user_id = p_profile_id;
+    get diagnostics v_n = row_count;
+  exception when insufficient_privilege then
+    v_n := null;
+  end;
+  perform public.fn_write_audit('auth.pin_reset_by_admin', jsonb_build_object('profile_id', p_profile_id, 'sessions_revoked', v_n), v_rid);
+  return jsonb_build_object('profile_id', p_profile_id, 'sessions_revoked', v_n, 'must_change_pin', true);
+end;
+$$;
+revoke all on function public.fn_admin_reset_user_pin(uuid, text, integer) from public, anon, authenticated;
+grant execute on function public.fn_admin_reset_user_pin(uuid, text, integer) to service_role;
+
+-- fn_complete_forced_pin_change (0024 body) + the admin_reset branch: the person replacing an admin-set temporary PIN is a
+-- voluntary change (no approval round-trip); a 'security' flag keeps the maker-checker flow unchanged.
+create or replace function public.fn_complete_forced_pin_change(p_profile_id uuid, p_pin_digest text, p_pin_length integer default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_rid uuid;
+  v_role uuid;
+  v_name text;
+  v_len integer;
+  v_forced boolean;
+  v_pending boolean;
+  v_reason text;
+  v_payload jsonb;
+begin
+  if not public.is_service_role() then perform public.fn_err('permission_denied'); end if;
+  if p_pin_digest is null or p_pin_digest !~ '^[0-9a-f]{64}$' then perform public.fn_err('invalid_pin'); end if;
+  select p.restaurant_id, p.role_id, p.short_name into v_rid, v_role, v_name from public.profiles p where p.id = p_profile_id;
+  if not found then perform public.fn_err('not_found'); end if;
+  if not public.fn_pin_eligible(p_profile_id) then perform public.fn_err('pin_not_allowed'); end if;
+
+  v_len := public.fn_pin_length_for_role(v_role);
+  if p_pin_length is not null and p_pin_length is distinct from v_len then
+    perform public.fn_err('pin_length_mismatch');
+  end if;
+
+  select ps.must_change_pin, ps.pin_change_pending, ps.must_change_reason into v_forced, v_pending, v_reason
+  from public.profile_secrets ps where ps.profile_id = p_profile_id for update;
+
+  if not found or not (v_forced or v_pending) or (v_forced and v_reason = 'admin_reset') then
+    perform public.fn_set_user_pin(p_profile_id, p_pin_digest, p_pin_length);
+    if v_forced and v_reason = 'admin_reset' then
+      perform public.fn_write_audit('auth.pin_changed_after_reset', jsonb_build_object('profile_id', p_profile_id), v_rid);
+    end if;
+    return jsonb_build_object('pending_approval', false);
+  end if;
+
+  update public.profile_secrets
+     set pin_hash = extensions.crypt(p_pin_digest, extensions.gen_salt('bf', 10)), pin_length = v_len,
+         failed_attempts = 0, locked_until = null, pin_changed_at = now(),
+         must_change_pin = false, pin_change_pending = true,
+         pin_change_requested_at = case when v_pending then pin_change_requested_at else now() end
+   where profile_id = p_profile_id;
+
+  if v_pending then
+    perform public.fn_write_audit('auth.pin_set', jsonb_build_object('profile_id', p_profile_id, 'while_pending', true), v_rid);
+    return jsonb_build_object('pending_approval', true);
+  end if;
+
+  v_payload := jsonb_build_object('profile_id', p_profile_id, 'user_name', v_name, 'at', now());
+  insert into public.user_notifications (restaurant_id, recipient_id, kind, payload)
+  select v_rid, a.id, 'security.pin_change_pending_approval', v_payload
+  from public.profiles a
+  join public.roles ro on ro.id = a.role_id and ro.restaurant_id = a.restaurant_id
+  where a.restaurant_id = v_rid and a.is_active and ro.is_active and ro.system_key = 'tenant_admin'
+    and not exists (
+      select 1 from public.user_notifications n
+      where n.restaurant_id = v_rid and n.recipient_id = a.id and n.kind = 'security.pin_change_pending_approval'
+        and n.payload ->> 'profile_id' = p_profile_id::text and n.created_at > now() - interval '5 minutes');
+
+  perform public.fn_write_audit('auth.pin_change_requested', jsonb_build_object('profile_id', p_profile_id), v_rid);
+  return jsonb_build_object('pending_approval', true);
+end;
+$$;
+revoke all on function public.fn_complete_forced_pin_change(uuid, text, integer) from public, anon, authenticated;
+grant execute on function public.fn_complete_forced_pin_change(uuid, text, integer) to service_role;
 
 -- ════════════════════════════════════════ 4. restaurant profile, business settings, branding ════════════════════════════════════════
 create or replace function public.fn_restaurant_profile_json(p_rid uuid)

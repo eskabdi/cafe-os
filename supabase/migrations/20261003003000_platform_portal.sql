@@ -1579,21 +1579,195 @@ end;
 $$;
 revoke all on function public.fn_invitation_actor(uuid) from public, anon, authenticated;
 
+-- caller-visible shape (both portals). Never exposes suppressed / auth_user_id / revoke internals: a decoy looks like any other.
 create or replace function public.fn_invitation_json(p_id uuid)
 returns jsonb
 language sql stable security definer set search_path = ''
 as $$
   select jsonb_build_object('id', i.id, 'restaurant_id', i.restaurant_id, 'email', i.email, 'first_name', i.first_name,
                             'middle_name', i.middle_name, 'last_name', i.last_name, 'username', i.username, 'status', i.status,
-                            'state', case when i.status = 'pending' and i.expires_at <= now() then 'expired' else i.status end,
+                            'state', public.fn_invitation_state(i.status, i.expires_at, i.send_count, i.created_at),
                             'invited_by_type', i.invited_by_type, 'expires_at', i.expires_at, 'send_count', i.send_count,
                             'last_sent_at', i.last_sent_at, 'accepted_at', i.accepted_at, 'revoked_at', i.revoked_at,
-                            'created_at', i.created_at)
+                            'expired_at', i.expired_at, 'created_at', i.created_at)
   from public.tenant_admin_invitations i where i.id = p_id
 $$;
 revoke all on function public.fn_invitation_json(uuid) from public, anon, authenticated;
 
+-- ── lazy expiry (review H2/L2) ──────────────────────────────────────────────
+-- Turns every pending invitation whose STATE is expired (fn_invitation_state) into status 'expired' (frees the e-mail / username /
+-- auth user) inside the scope (a tenant and/or an e-mail; never unscoped). One system audit event per row. Called before every
+-- uniqueness, quota and lifecycle decision, so a stale row never blocks anything.
+create or replace function public.fn_expire_tenant_admin_invitations(p_rid uuid, p_email text)
+returns integer
+language plpgsql volatile security definer set search_path = ''
+as $$
+declare
+  v_n integer;
+begin
+  if p_rid is null and p_email is null then perform public.fn_err('invalid_input', 'scope'); end if;
+  with x as (
+    update public.tenant_admin_invitations i
+       set status = 'expired', expired_at = now()
+     where i.status = 'pending'
+       and (p_rid is null or i.restaurant_id = p_rid)
+       and (p_email is null or i.email = p_email)
+       and public.fn_invitation_state(i.status, i.expires_at, i.send_count, i.created_at) = 'expired'
+    returning i.id, i.restaurant_id, i.send_count
+  ), a as (
+    insert into public.audit_logs (restaurant_id, actor_id, actor_type, event, action, new_data)
+    select x.restaurant_id, null, 'system', 'tenant_admin.invitation_expired', 'event',
+           jsonb_build_object('invitation_id', x.id, 'reason', case when x.send_count = 0 then 'never_sent' else 'expired' end)
+    from x
+    returning 1
+  )
+  select count(*) into v_n from a;
+  return v_n;
+end;
+$$;
+revoke all on function public.fn_expire_tenant_admin_invitations(uuid, text) from public, anon, authenticated;
+
+-- ── staff quota (review H1): ONE rule for every path that adds a staff slot ──
+-- slots used = active profiles + live pending invitations (decoys included: they reserve a slot like any invitation, so the quota
+-- is no oracle either), optionally excluding one invitation (the one being accepted).
+create or replace function public.fn_staff_slots_used(p_rid uuid, p_exclude_invitation uuid)
+returns bigint
+language sql stable security definer set search_path = ''
+as $$
+  select (select count(*) from public.profiles p where p.restaurant_id = p_rid and p.is_active)
+       + (select count(*) from public.tenant_admin_invitations i
+          where i.restaurant_id = p_rid and i.status = 'pending'
+            and public.fn_invitation_state(i.status, i.expires_at, i.send_count, i.created_at) = 'pending'
+            and i.id is distinct from p_exclude_invitation)
+$$;
+revoke all on function public.fn_staff_slots_used(uuid, uuid) from public, anon, authenticated;
+
+-- Raises staff_limit_reached unless ONE more slot fits the plan's max_staff. Takes a per-tenant transaction advisory lock FIRST, so
+-- concurrent creators of the same tenant serialise; the count runs in a later statement (fresh READ COMMITTED snapshot, after the
+-- lock). Used by: fn_prepare_tenant_admin_invitation, fn_accept_tenant_admin_invitation (p_exclude = the accepted invitation),
+-- fn_staff_precheck (staff-create: prepare + profile insert) and fn_set_user_active (reactivation).
+create or replace function public.fn_staff_quota_check(p_rid uuid, p_exclude_invitation uuid default null)
+returns void
+language plpgsql volatile security definer set search_path = ''
+as $$
+declare
+  v_max integer;
+begin
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('cafeos.staff_quota:' || p_rid::text, 0));
+  select pl.max_staff into v_max from public.subscriptions s join public.plans pl on pl.id = s.plan_id where s.restaurant_id = p_rid;
+  if v_max is not null and public.fn_staff_slots_used(p_rid, p_exclude_invitation) + 1 > v_max then
+    perform public.fn_err('staff_limit_reached');
+  end if;
+end;
+$$;
+revoke all on function public.fn_staff_quota_check(uuid, uuid) from public, anon, authenticated;
+
+-- DB-side invitation creation limits (review L3): 20 per tenant and 30 per inviting account per rolling 24 h (every status counts:
+-- revoking does not refund). The Edge Function's in-memory limiter is a first line only.
+create or replace function public.fn_invitation_rate_check(p_rid uuid, p_actor uuid)
+returns void
+language plpgsql stable security definer set search_path = ''
+as $$
+begin
+  if (select count(*) from public.tenant_admin_invitations i where i.restaurant_id = p_rid and i.created_at > now() - interval '24 hours') >= 20
+     or (select count(*) from public.tenant_admin_invitations i where i.invited_by = p_actor and i.created_at > now() - interval '24 hours') >= 30 then
+    perform public.fn_err('invite_rate_limited');
+  end if;
+end;
+$$;
+revoke all on function public.fn_invitation_rate_check(uuid, uuid) from public, anon, authenticated;
+
+-- Is the inviter still entitled to have invited (review M1/L1)? tenant_admin inviter: an ACTIVE tenant_admin profile of that tenant;
+-- platform inviter: an ACTIVE platform_super_admin.
+create or replace function public.fn_invitation_inviter_active(p_invitation_id uuid)
+returns boolean
+language sql stable security definer set search_path = ''
+as $$
+  select case i.invited_by_type
+           when 'tenant_admin' then exists (
+             select 1 from public.profiles p join public.roles ro on ro.id = p.role_id and ro.restaurant_id = p.restaurant_id
+             where p.id = i.invited_by and p.restaurant_id = i.restaurant_id and p.is_active and ro.is_active
+               and ro.system_key = 'tenant_admin')
+           else exists (select 1 from public.platform_admins a where a.id = i.invited_by and a.is_active and a.role = 'platform_super_admin')
+         end
+  from public.tenant_admin_invitations i where i.id = p_invitation_id
+$$;
+revoke all on function public.fn_invitation_inviter_active(uuid) from public, anon, authenticated;
+
+-- ── inviter revocation (review M1/L1): every path that removes an inviter's authority revokes their pending invitations ──
+create or replace function public.fn_revoke_invitations_of_inviter(p_inviter uuid, p_type text, p_rid uuid)
+returns integer
+language plpgsql volatile security definer set search_path = ''
+as $$
+declare
+  r record;
+  v_n integer := 0;
+begin
+  for r in
+    update public.tenant_admin_invitations i
+       set status = 'revoked', revoked_at = now(), revoked_by = (select auth.uid()), revoke_reason = 'inviter_removed'
+     where i.invited_by = p_inviter and i.invited_by_type = p_type and i.status = 'pending'
+       and (p_rid is null or i.restaurant_id = p_rid)
+    returning i.id, i.restaurant_id
+  loop
+    v_n := v_n + 1;
+    insert into public.audit_logs (restaurant_id, actor_id, actor_type, event, action, new_data)
+    values (r.restaurant_id, null, 'system', 'tenant_admin.invitation_revoked',
+            'event', jsonb_build_object('invitation_id', r.id, 'reason', 'inviter_removed'));
+    if p_type = 'platform_admin' then
+      perform public.fn_write_admin_audit('tenant.admin_invitation_revoked', r.restaurant_id,
+                                          jsonb_build_object('invitation_id', r.id, 'reason', 'inviter_removed'));
+    end if;
+  end loop;
+  return v_n;
+end;
+$$;
+revoke all on function public.fn_revoke_invitations_of_inviter(uuid, text, uuid) from public, anon, authenticated;
+
+-- profiles: an active tenant_admin that is deactivated or moved to another role (any path: RPC, trigger, owner)
+create or replace function public.fn_profile_inviter_revocation()
+returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+begin
+  if old.is_active
+     and exists (select 1 from public.roles ro where ro.id = old.role_id and ro.restaurant_id = old.restaurant_id and ro.system_key = 'tenant_admin')
+     and (not new.is_active
+          or not exists (select 1 from public.roles ro where ro.id = new.role_id and ro.restaurant_id = new.restaurant_id and ro.system_key = 'tenant_admin')) then
+    perform public.fn_revoke_invitations_of_inviter(old.id, 'tenant_admin', old.restaurant_id);
+  end if;
+  return null;
+end;
+$$;
+revoke all on function public.fn_profile_inviter_revocation() from public, anon, authenticated;
+create trigger trg_inviter_revocation after update of is_active, role_id on public.profiles
+  for each row execute function public.fn_profile_inviter_revocation();
+
+-- platform_admins: an active super admin that is deactivated or loses the super admin role
+create or replace function public.fn_super_admin_inviter_revocation()
+returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+begin
+  if old.is_active and old.role = 'platform_super_admin' and (not new.is_active or new.role <> 'platform_super_admin') then
+    perform public.fn_revoke_invitations_of_inviter(old.id, 'platform_admin', null);
+  end if;
+  return null;
+end;
+$$;
+revoke all on function public.fn_super_admin_inviter_revocation() from public, anon, authenticated;
+create trigger trg_inviter_revocation after update of is_active, role on public.platform_admins
+  for each row execute function public.fn_super_admin_inviter_revocation();
+
 -- step 1 of tenant-admin-invite (AS THE CALLER): authorise, validate, reserve. Returns {invitation_id, email, restaurant_id, expires_at}.
+--
+-- Existence oracle (review M2). A PLATFORM caller may learn that an address is taken (email_in_use). A TENANT caller never learns
+-- whether an address exists in auth.users or in another tenant's invitations: when it is taken ELSEWHERE, the same success shape
+-- comes back and a DECOY row is stored (suppressed = true): listed, counted, resent, revoked, expired exactly like a real one, but
+-- never delivered, attached or accepted (fn_plan_tenant_admin_invitation_delivery answers 'none' to the Edge Function, which then
+-- answers success). Conflicts the tenant can already see (its own staff's e-mail, its own pending invitation) stay email_in_use.
+-- An ORPHAN Auth account (no profile, no platform admin, no live invitation; e.g. the user of an expired / revoked invitation) is
+-- not "taken": it is re-invited (review H2, no dead end).
 create or replace function public.fn_prepare_tenant_admin_invitation(
   p_restaurant_id uuid,
   p_email text,
@@ -1610,14 +1784,17 @@ as $$
 declare
   v_type text;
   v_rid uuid;
+  v_uid uuid := (select auth.uid());
   v_status text;
   v_email text := lower(btrim(coalesce(p_email, '')));
   v_first text := btrim(coalesce(p_first_name, ''));
   v_middle text := nullif(btrim(coalesce(p_middle_name, '')), '');
   v_last text := nullif(btrim(coalesce(p_last_name, '')), '');
   v_user text := lower(btrim(coalesce(p_username, '')));
-  v_max integer;
+  v_taken boolean;
+  v_suppressed boolean := false;
   v_id uuid;
+  v_constraint text;
   v_expires timestamptz := now() + interval '7 days';
 begin
   select a.o_type, a.o_rid into v_type, v_rid from public.fn_invitation_actor(p_restaurant_id) a;
@@ -1634,42 +1811,120 @@ begin
   if v_last is not null and char_length(v_last) > 60 then perform public.fn_err('invalid_input', 'last_name'); end if;
   if v_user !~ '^[a-z0-9][a-z0-9._-]{1,31}$' then perform public.fn_err('invalid_input', 'username'); end if;
 
+  -- stale rows never block (this tenant's usernames / slots, this address everywhere)
+  perform public.fn_expire_tenant_admin_invitations(v_rid, null);
+  perform public.fn_expire_tenant_admin_invitations(null, v_email);
+
   if exists (select 1 from public.profiles p where p.restaurant_id = v_rid and p.username = v_user)
      or exists (select 1 from public.tenant_admin_invitations i where i.restaurant_id = v_rid and i.username = v_user and i.status = 'pending') then
     perform public.fn_err('username_taken');
   end if;
-  -- an existing Auth identity (any account) or another pending invitation for this e-mail: never re-bind an existing account
-  if exists (select 1 from auth.users u where lower(u.email) = v_email)
-     or exists (select 1 from public.tenant_admin_invitations i where i.email = v_email and i.status = 'pending') then
+  -- conflicts inside the caller's own tenant are visible to it anyway: a plain answer
+  if exists (select 1 from public.tenant_admin_invitations i where i.restaurant_id = v_rid and i.email = v_email and i.status = 'pending')
+     or exists (select 1 from public.profiles p join auth.users u on u.id = p.id where p.restaurant_id = v_rid and lower(u.email) = v_email) then
     perform public.fn_err('email_in_use');
   end if;
-
-  select pl.max_staff into v_max from public.subscriptions s join public.plans pl on pl.id = s.plan_id where s.restaurant_id = v_rid;
-  if v_max is not null
-     and (select count(*) from public.profiles p where p.restaurant_id = v_rid and p.is_active)
-       + (select count(*) from public.tenant_admin_invitations i where i.restaurant_id = v_rid and i.status = 'pending' and i.expires_at > now())
-       >= v_max then
-    perform public.fn_err('staff_limit_reached');
+  -- taken elsewhere: an account that already belongs to a portal, or another tenant's deliverable pending invitation
+  v_taken := exists (select 1 from auth.users u where lower(u.email) = v_email
+                     and (exists (select 1 from public.profiles p where p.id = u.id)
+                          or exists (select 1 from public.platform_admins a where a.id = u.id)))
+          or exists (select 1 from public.tenant_admin_invitations i where i.email = v_email and i.status = 'pending' and not i.suppressed);
+  if v_taken then
+    if v_type = 'platform_admin' then perform public.fn_err('email_in_use'); end if;
+    v_suppressed := true;
   end if;
 
-  begin
-    insert into public.tenant_admin_invitations (restaurant_id, email, first_name, middle_name, last_name, username,
-                                                 invited_by, invited_by_type, expires_at)
-    values (v_rid, v_email, v_first, v_middle, v_last, v_user, (select auth.uid()), v_type, v_expires)
-    returning id into v_id;
-  exception when unique_violation then
-    perform public.fn_err('email_in_use');
-  end;
+  perform public.fn_staff_quota_check(v_rid);
+  perform public.fn_invitation_rate_check(v_rid, v_uid);
+
+  loop
+    begin
+      insert into public.tenant_admin_invitations (restaurant_id, email, first_name, middle_name, last_name, username,
+                                                   invited_by, invited_by_type, expires_at, suppressed)
+      values (v_rid, v_email, v_first, v_middle, v_last, v_user, v_uid, v_type, v_expires, v_suppressed)
+      returning id into v_id;
+      exit;
+    exception when unique_violation then
+      get stacked diagnostics v_constraint = constraint_name;
+      if v_constraint = 'tenant_admin_invitations_pending_username_idx' then perform public.fn_err('username_taken'); end if;
+      -- a concurrent invitation took the address: platform -> email_in_use; tenant -> decoy (same answer as above)
+      if v_type = 'platform_admin' or v_suppressed then perform public.fn_err('email_in_use'); end if;
+      v_suppressed := true;
+    end;
+  end loop;
 
   perform public.fn_write_audit('tenant_admin.invited', jsonb_build_object('invitation_id', v_id, 'email', v_email, 'by', v_type), v_rid);
   if v_type = 'platform_admin' then
     perform public.fn_write_admin_audit('tenant.admin_invited', v_rid, jsonb_build_object('invitation_id', v_id, 'email', v_email));
+  elsif v_suppressed then
+    -- platform-only trail (tenants cannot read admin_audit_log): why this invitation will never be delivered
+    perform public.fn_write_admin_audit('tenant.admin_invitation_suppressed', v_rid, jsonb_build_object('invitation_id', v_id));
   end if;
   return jsonb_build_object('invitation_id', v_id, 'email', v_email, 'restaurant_id', v_rid, 'expires_at', v_expires);
 end;
 $$;
 
--- step 2 (service role, inside tenant-admin-invite): bind the Auth user that inviteUserByEmail created to the reserved invitation
+-- step 2 (service role, inside tenant-admin-invite, for the first send AND every resend): how to deliver. Returns
+--   { invitation_id, email, mode, auth_user_id, not_before }
+--   mode 'none'                 decoy: nothing is sent; the send is recorded here (same visible state as a real send)
+--        'invite'               no Auth user with this e-mail: inviteUserByEmail; the returned user must be NEW (created_at >=
+--                               not_before, review L6/L7), else abort WITHOUT deleting it; then attach + record
+--        'replace_unconfirmed'  an orphan, never-confirmed Auth user exists (auth_user_id): delete it (only if still unconfirmed and
+--                               the e-mail matches), then as 'invite' (no pre-registered account is ever re-used: no pre-hijack)
+--        'reinvite'             the attached user has not confirmed yet: inviteUserByEmail again (GoTrue re-sends to the same user;
+--                               the returned id must equal auth_user_id); then record
+--        'magic_link'           the attached / orphan user is confirmed but holds no profile (review H2): attach, send a sign-in link
+--                               (signInWithOtp, shouldCreateUser false); then record
+create or replace function public.fn_plan_tenant_admin_invitation_delivery(p_invitation_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v public.tenant_admin_invitations%rowtype;
+  v_status text;
+  v_user uuid;
+  v_confirmed boolean;
+  v_mode text;
+begin
+  if not public.is_service_role() then perform public.fn_err('permission_denied'); end if;
+  select * into v from public.tenant_admin_invitations i where i.id = p_invitation_id for update;
+  if not found or v.status <> 'pending' then perform public.fn_err('not_found'); end if;
+  if public.fn_invitation_state(v.status, v.expires_at, v.send_count, v.created_at) <> 'pending' then
+    perform public.fn_err('invitation_expired');
+  end if;
+  if not public.fn_invitation_inviter_active(v.id) then perform public.fn_err('invitation_revoked'); end if;
+  select r.status into v_status from public.restaurants r where r.id = v.restaurant_id;
+  if v_status in ('suspended', 'cancelled') then perform public.fn_err('tenant_suspended'); end if;
+
+  if v.suppressed then
+    perform public.fn_record_tenant_admin_invitation_sent(v.id);
+    return jsonb_build_object('invitation_id', v.id, 'email', v.email, 'mode', 'none', 'auth_user_id', null, 'not_before', clock_timestamp());
+  end if;
+
+  v_user := v.auth_user_id;
+  if v_user is null then
+    select u.id into v_user from auth.users u where lower(u.email) = v.email order by u.created_at limit 1;
+  end if;
+  if v_user is null then
+    v_mode := 'invite';
+  else
+    if exists (select 1 from public.profiles p where p.id = v_user)
+       or exists (select 1 from public.platform_admins a where a.id = v_user)
+       or exists (select 1 from public.tenant_admin_invitations i where i.auth_user_id = v_user and i.status = 'pending' and i.id <> v.id) then
+      perform public.fn_err('email_in_use');
+    end if;
+    select u.email_confirmed_at is not null into v_confirmed from auth.users u where u.id = v_user;
+    v_mode := case when v_confirmed then 'magic_link'
+                   when v.auth_user_id is not null then 'reinvite'
+                   else 'replace_unconfirmed' end;
+  end if;
+  return jsonb_build_object('invitation_id', v.id, 'email', v.email, 'mode', v_mode, 'auth_user_id', v_user, 'not_before', clock_timestamp());
+end;
+$$;
+
+-- step 3 (service role): bind the Auth user to the reserved invitation (idempotent for the same user, never re-pointed)
 create or replace function public.fn_attach_tenant_admin_invitation(p_invitation_id uuid, p_auth_user_id uuid)
 returns jsonb
 language plpgsql
@@ -1681,7 +1936,10 @@ declare
 begin
   if not public.is_service_role() then perform public.fn_err('permission_denied'); end if;
   select * into v from public.tenant_admin_invitations i where i.id = p_invitation_id for update;
-  if not found or v.status <> 'pending' then perform public.fn_err('not_found'); end if;
+  if not found or v.status <> 'pending' or v.suppressed then perform public.fn_err('not_found'); end if;
+  if public.fn_invitation_state(v.status, v.expires_at, v.send_count, v.created_at) <> 'pending' then
+    perform public.fn_err('invitation_expired');
+  end if;
   if v.auth_user_id is not null then
     if v.auth_user_id = p_auth_user_id then return jsonb_build_object('invitation_id', v.id, 'attached', true); end if;
     perform public.fn_err('invalid_state', 'already_attached');
@@ -1693,16 +1951,46 @@ begin
      or exists (select 1 from public.platform_admins a where a.id = p_auth_user_id) then
     perform public.fn_err('invalid_auth_user');
   end if;
-  update public.tenant_admin_invitations set auth_user_id = p_auth_user_id where id = v.id;
-  perform public.fn_write_audit('tenant_admin.invitation_sent', jsonb_build_object('invitation_id', v.id), v.restaurant_id);
-  if v.invited_by_type = 'platform_admin' then
-    perform public.fn_write_admin_audit('tenant.admin_invitation_sent', v.restaurant_id, jsonb_build_object('invitation_id', v.id));
-  end if;
+  begin
+    update public.tenant_admin_invitations set auth_user_id = p_auth_user_id where id = v.id;
+  exception when unique_violation then
+    perform public.fn_err('invalid_auth_user');
+  end;
+  perform public.fn_write_audit('tenant_admin.invitation_attached', jsonb_build_object('invitation_id', v.id), v.restaurant_id);
   return jsonb_build_object('invitation_id', v.id, 'attached', true);
 end;
 $$;
 
--- compensation (service role): the e-mail could not be sent / the user could not be created -> the reservation is released
+-- step 4 (service role, AFTER a successful send only; review H2 send budget): counts the send, renews the 7-day expiry, audits.
+-- A failed send is never recorded, so it consumes no budget (attempts are throttled by last_attempt_at instead).
+create or replace function public.fn_record_tenant_admin_invitation_sent(p_invitation_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v public.tenant_admin_invitations%rowtype;
+begin
+  if not public.is_service_role() then perform public.fn_err('permission_denied'); end if;
+  select * into v from public.tenant_admin_invitations i where i.id = p_invitation_id for update;
+  if not found or v.status <> 'pending' then perform public.fn_err('not_found'); end if;
+  if not v.suppressed and v.auth_user_id is null then perform public.fn_err('invalid_state', 'not_attached'); end if;
+  update public.tenant_admin_invitations
+     set send_count = least(send_count + 1, 100), last_sent_at = now(), expires_at = now() + interval '7 days'
+   where id = v.id;
+  perform public.fn_write_audit(case when v.send_count = 0 then 'tenant_admin.invitation_sent' else 'tenant_admin.invitation_resent' end,
+                                jsonb_build_object('invitation_id', v.id), v.restaurant_id);
+  if v.invited_by_type = 'platform_admin' then
+    perform public.fn_write_admin_audit(case when v.send_count = 0 then 'tenant.admin_invitation_sent' else 'tenant.admin_invitation_resent' end,
+                                        v.restaurant_id, jsonb_build_object('invitation_id', v.id));
+  end if;
+  return jsonb_build_object('invitation_id', v.id, 'send_count', least(v.send_count + 1, 100));
+end;
+$$;
+
+-- compensation (service role): the FIRST delivery failed -> the reservation is released (revoked, reason send_failed). A failed
+-- RESEND needs no compensation (nothing was consumed) and leaves the invitation as it was.
 create or replace function public.fn_abort_tenant_admin_invitation(p_invitation_id uuid)
 returns jsonb
 language plpgsql
@@ -1715,15 +2003,35 @@ begin
   if not public.is_service_role() then perform public.fn_err('permission_denied'); end if;
   select * into v from public.tenant_admin_invitations i where i.id = p_invitation_id for update;
   if not found then perform public.fn_err('not_found'); end if;
-  if v.status = 'pending' then
-    update public.tenant_admin_invitations set status = 'revoked', revoked_at = now() where id = v.id;
+  if v.status = 'pending' and v.send_count = 0 then
+    update public.tenant_admin_invitations
+       set status = 'revoked', revoked_at = now(), revoke_reason = 'send_failed'
+     where id = v.id;
     perform public.fn_write_audit('tenant_admin.invitation_failed', jsonb_build_object('invitation_id', v.id), v.restaurant_id);
+    return jsonb_build_object('invitation_id', v.id, 'status', 'revoked');
   end if;
-  return jsonb_build_object('invitation_id', v.id, 'status', 'revoked');
+  return jsonb_build_object('invitation_id', v.id, 'status', v.status);
 end;
 $$;
 
--- resend (AS THE CALLER): at most 5 sends, 60 s apart; renews the 7-day expiry. Returns what the Edge Function needs to re-send.
+-- resolve an invitation id for the caller: platform -> any tenant; tenant -> own tenant only (foreign == unknown == not_found)
+create or replace function public.fn_invitation_for_caller(p_invitation_id uuid, out o_type text, out o_rid uuid)
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  v_rid uuid;
+begin
+  select i.restaurant_id into v_rid from public.tenant_admin_invitations i where i.id = p_invitation_id;
+  select a.o_type, a.o_rid into o_type, o_rid
+  from public.fn_invitation_actor(case when exists (select 1 from public.platform_admins pa where pa.id = (select auth.uid()))
+                                       then coalesce(v_rid, gen_random_uuid()) else null end) a;
+  if v_rid is null or v_rid <> o_rid then perform public.fn_err('not_found'); end if;
+end;
+$$;
+revoke all on function public.fn_invitation_for_caller(uuid) from public, anon, authenticated;
+
+-- resend (AS THE CALLER): at most 5 successful sends, attempts 60 s apart. Returns {invitation_id, email}; the Edge Function then
+-- asks fn_plan_tenant_admin_invitation_delivery how to deliver and records the send only when it succeeded.
 create or replace function public.fn_prepare_tenant_admin_invitation_resend(p_invitation_id uuid)
 returns jsonb
 language plpgsql
@@ -1736,34 +2044,29 @@ declare
   v_rid uuid;
   v_status text;
 begin
-  select * into v from public.tenant_admin_invitations i where i.id = p_invitation_id;
-  -- the actor check uses the invitation's tenant; for a tenant caller a foreign id fails like an unknown one
-  select a.o_type, a.o_rid into v_type, v_rid
-  from public.fn_invitation_actor(case when exists (select 1 from public.platform_admins pa where pa.id = (select auth.uid()))
-                                       then coalesce(v.restaurant_id, gen_random_uuid()) else null end) a;
-  if v.id is null or v.restaurant_id <> v_rid then perform public.fn_err('not_found'); end if;
+  select a.o_type, a.o_rid into v_type, v_rid from public.fn_invitation_for_caller(p_invitation_id) a;
+  perform public.fn_expire_tenant_admin_invitations(v_rid, null);
   select * into v from public.tenant_admin_invitations i where i.id = p_invitation_id for update;
-  if v.status <> 'pending' or v.auth_user_id is null then perform public.fn_err('invalid_state', v.status); end if;
+  if v.status <> 'pending' then perform public.fn_err('invalid_state', v.status); end if;
+  -- never delivered (the first send did not happen / is not recorded yet): a resend is not the way, invite again
+  if v.send_count = 0 then perform public.fn_err('invalid_state', 'not_sent'); end if;
   select r.status into v_status from public.restaurants r where r.id = v_rid;
   if v_status in ('suspended', 'cancelled') then perform public.fn_err('tenant_suspended'); end if;
-  if v.send_count >= 5 or v.last_sent_at > now() - interval '60 seconds' then perform public.fn_err('invite_rate_limited'); end if;
-  if exists (select 1 from auth.users u where u.id = v.auth_user_id and u.email_confirmed_at is not null) then
-    perform public.fn_err('invalid_state', 'already_confirmed');
-  end if;
+  if v.send_count >= 5 or v.last_attempt_at > now() - interval '60 seconds' then perform public.fn_err('invite_rate_limited'); end if;
+  if not public.fn_invitation_inviter_active(v.id) then perform public.fn_err('invalid_state', 'inviter_inactive'); end if;
 
-  update public.tenant_admin_invitations
-     set send_count = send_count + 1, last_sent_at = now(), expires_at = now() + interval '7 days'
-   where id = v.id;
-  perform public.fn_write_audit('tenant_admin.invitation_resent', jsonb_build_object('invitation_id', v.id, 'by', v_type), v_rid);
+  update public.tenant_admin_invitations set last_attempt_at = now() where id = v.id;
+  perform public.fn_write_audit('tenant_admin.invitation_resend_requested', jsonb_build_object('invitation_id', v.id, 'by', v_type), v_rid);
   if v_type = 'platform_admin' then
-    perform public.fn_write_admin_audit('tenant.admin_invitation_resent', v_rid, jsonb_build_object('invitation_id', v.id));
+    perform public.fn_write_admin_audit('tenant.admin_invitation_resend_requested', v_rid, jsonb_build_object('invitation_id', v.id));
   end if;
-  return jsonb_build_object('invitation_id', v.id, 'email', v.email, 'auth_user_id', v.auth_user_id);
+  return jsonb_build_object('invitation_id', v.id, 'email', v.email);
 end;
 $$;
 
--- revoke (AS THE CALLER). cleanup_user_id is returned only for an Auth user that never confirmed and holds nothing else, so the
--- Edge Function may delete it; the DB effect alone already makes the invitation unusable.
+-- revoke (AS THE CALLER): frees the address at once (the pending-email index only covers pending rows). Returns
+-- {invitation_id, status, changed}; WHICH Auth user may be cleaned up is a service-side question
+-- (fn_tenant_admin_invitation_cleanup_user), so a decoy and a real invitation answer identically.
 create or replace function public.fn_revoke_tenant_admin_invitation(p_invitation_id uuid)
 returns jsonb
 language plpgsql
@@ -1774,31 +2077,44 @@ declare
   v public.tenant_admin_invitations%rowtype;
   v_type text;
   v_rid uuid;
-  v_cleanup uuid;
 begin
-  select * into v from public.tenant_admin_invitations i where i.id = p_invitation_id;
-  select a.o_type, a.o_rid into v_type, v_rid
-  from public.fn_invitation_actor(case when exists (select 1 from public.platform_admins pa where pa.id = (select auth.uid()))
-                                       then coalesce(v.restaurant_id, gen_random_uuid()) else null end) a;
-  if v.id is null or v.restaurant_id <> v_rid then perform public.fn_err('not_found'); end if;
+  select a.o_type, a.o_rid into v_type, v_rid from public.fn_invitation_for_caller(p_invitation_id) a;
   select * into v from public.tenant_admin_invitations i where i.id = p_invitation_id for update;
-  if v.status = 'revoked' then
-    return jsonb_build_object('invitation_id', v.id, 'status', 'revoked', 'changed', false, 'cleanup_user_id', null);
+  if v.status in ('revoked', 'expired') then
+    return jsonb_build_object('invitation_id', v.id, 'status', v.status, 'changed', false);
   end if;
   if v.status <> 'pending' then perform public.fn_err('invalid_state', v.status); end if;
 
-  update public.tenant_admin_invitations set status = 'revoked', revoked_at = now(), revoked_by = (select auth.uid()) where id = v.id;
-  if v.auth_user_id is not null
-     and exists (select 1 from auth.users u where u.id = v.auth_user_id and u.email_confirmed_at is null)
-     and not exists (select 1 from public.profiles p where p.id = v.auth_user_id)
-     and not exists (select 1 from public.platform_admins a where a.id = v.auth_user_id) then
-    v_cleanup := v.auth_user_id;
-  end if;
+  update public.tenant_admin_invitations
+     set status = 'revoked', revoked_at = now(), revoked_by = (select auth.uid()), revoke_reason = 'revoked'
+   where id = v.id;
   perform public.fn_write_audit('tenant_admin.invitation_revoked', jsonb_build_object('invitation_id', v.id, 'by', v_type), v_rid);
   if v_type = 'platform_admin' then
     perform public.fn_write_admin_audit('tenant.admin_invitation_revoked', v_rid, jsonb_build_object('invitation_id', v.id));
   end if;
-  return jsonb_build_object('invitation_id', v.id, 'status', 'revoked', 'changed', true, 'cleanup_user_id', v_cleanup);
+  return jsonb_build_object('invitation_id', v.id, 'status', 'revoked', 'changed', true);
+end;
+$$;
+
+-- (service role) the Auth user the Edge Function may delete after a revocation: attached, never confirmed, no profile, no platform
+-- admin, no other pending invitation. null otherwise. The DB effect alone already makes the invitation unusable.
+create or replace function public.fn_tenant_admin_invitation_cleanup_user(p_invitation_id uuid)
+returns jsonb
+language plpgsql stable security definer set search_path = ''
+as $$
+declare
+  v public.tenant_admin_invitations%rowtype;
+begin
+  if not public.is_service_role() then perform public.fn_err('permission_denied'); end if;
+  select * into v from public.tenant_admin_invitations i where i.id = p_invitation_id;
+  if not found then perform public.fn_err('not_found'); end if;
+  return jsonb_build_object('invitation_id', v.id, 'cleanup_user_id',
+    case when v.status in ('revoked', 'expired') and v.auth_user_id is not null
+              and exists (select 1 from auth.users u where u.id = v.auth_user_id and u.email_confirmed_at is null)
+              and not exists (select 1 from public.profiles p where p.id = v.auth_user_id)
+              and not exists (select 1 from public.platform_admins a where a.id = v.auth_user_id)
+              and not exists (select 1 from public.tenant_admin_invitations i where i.auth_user_id = v.auth_user_id and i.status = 'pending')
+         then v.auth_user_id end);
 end;
 $$;
 
@@ -1813,14 +2129,16 @@ begin
   if v_uid is null then perform public.fn_err('not_authenticated'); end if;
   return (select jsonb_build_object('invitation_id', i.id, 'restaurant', jsonb_build_object('name', r.name, 'slug', r.slug),
                                     'email', i.email, 'username', i.username, 'expires_at', i.expires_at,
-                                    'expired', i.expires_at <= now())
+                                    'expired', public.fn_invitation_state(i.status, i.expires_at, i.send_count, i.created_at) <> 'pending')
           from public.tenant_admin_invitations i join public.restaurants r on r.id = i.restaurant_id
           where i.auth_user_id = v_uid and i.status = 'pending'
-            and r.status not in ('suspended', 'cancelled'));
+            and r.status not in ('suspended', 'cancelled')
+            and public.fn_invitation_inviter_active(i.id));
 end;
 $$;
 
--- the invitee accepts: THIS is where the Auth user becomes the tenant's tenant_admin profile (password login, never PIN)
+-- the invitee accepts: THIS is where the Auth user becomes the tenant's tenant_admin profile (password login, never PIN).
+-- Re-checked here: expiry, the inviter's authority (invitation_revoked), the staff quota (the invitation's own slot excluded).
 create or replace function public.fn_accept_tenant_admin_invitation()
 returns jsonb
 language plpgsql
@@ -1836,8 +2154,11 @@ declare
 begin
   if v_uid is null then perform public.fn_err('not_authenticated'); end if;
   select * into v from public.tenant_admin_invitations i where i.auth_user_id = v_uid and i.status = 'pending' for update;
-  if not found then perform public.fn_err('not_found'); end if;
-  if v.expires_at <= now() then perform public.fn_err('invitation_expired'); end if;
+  if not found or v.suppressed then perform public.fn_err('not_found'); end if;
+  if public.fn_invitation_state(v.status, v.expires_at, v.send_count, v.created_at) <> 'pending' then
+    perform public.fn_err('invitation_expired');
+  end if;
+  if not public.fn_invitation_inviter_active(v.id) then perform public.fn_err('invitation_revoked'); end if;
   if exists (select 1 from public.profiles p where p.id = v_uid)
      or exists (select 1 from public.platform_admins a where a.id = v_uid) then
     perform public.fn_err('owner_already_assigned');
@@ -1852,6 +2173,7 @@ begin
   if v_status in ('suspended', 'cancelled') then perform public.fn_err('tenant_suspended'); end if;
   select ro.id into v_role from public.roles ro where ro.restaurant_id = v.restaurant_id and ro.system_key = 'tenant_admin';
   if v_role is null then perform public.fn_err('invalid_state', 'no tenant_admin role'); end if;
+  perform public.fn_staff_quota_check(v.restaurant_id, v.id);
 
   begin
     insert into public.profiles (id, restaurant_id, first_name, middle_name, last_name, username, role_id, auth_method)
@@ -1886,6 +2208,29 @@ begin
 end;
 $$;
 
+-- ════════════════════════════════════════ tenant logo before sign-in (owner decision 2026-10-08) ════════════════════════════════════════
+-- SERVICE ROLE ONLY, used by the public tenant-logo Edge Function, which signs a short-lived URL for the returned path. Only the
+-- CURRENT logo of an accessible tenant (not suspended / cancelled) whose object really exists; anything else (unknown slug, no logo,
+-- suspended, cancelled, malformed input) is the same {logo_path: null}: the function adds no enumeration oracle.
+create or replace function public.fn_tenant_logo_for_slug(p_slug text)
+returns jsonb
+language plpgsql stable security definer set search_path = ''
+as $$
+declare
+  v_path text;
+begin
+  if not public.is_service_role() then perform public.fn_err('permission_denied'); end if;
+  select r.branding ->> 'logo_path' into v_path
+  from public.restaurants r
+  where r.slug = lower(btrim(coalesce(p_slug, ''))) and char_length(coalesce(p_slug, '')) <= 64
+    and r.status not in ('suspended', 'cancelled')
+    and jsonb_typeof(r.branding -> 'logo_path') = 'string'
+    and (r.branding ->> 'logo_path') ~ ('^restaurants/' || r.id::text || '/branding/[A-Za-z0-9._-]{1,120}$')
+    and exists (select 1 from storage.objects o where o.bucket_id = 'tenant-branding' and o.name = r.branding ->> 'logo_path');
+  return jsonb_build_object('logo_path', v_path);
+end;
+$$;
+
 -- ════════════════════════════════════════ grants ════════════════════════════════════════
 revoke all on function
   public.fn_platform_list_tenants(text, text, uuid, integer, integer),
@@ -1894,6 +2239,7 @@ revoke all on function
   public.fn_platform_change_plan(uuid, uuid, text),
   public.fn_platform_set_billing_status(uuid, text, text),
   public.fn_platform_cancel_tenant(uuid, text, text),
+  public.fn_platform_restore_tenant(uuid, text, text),
   public.fn_platform_list_plans(),
   public.fn_platform_create_plan(jsonb),
   public.fn_platform_update_plan(uuid, jsonb),
@@ -1910,6 +2256,11 @@ revoke all on function
   public.fn_prepare_tenant_admin_invitation(uuid, text, text, text, text, text),
   public.fn_attach_tenant_admin_invitation(uuid, uuid),
   public.fn_abort_tenant_admin_invitation(uuid),
+  public.fn_plan_tenant_admin_invitation_delivery(uuid),
+  public.fn_record_tenant_admin_invitation_sent(uuid),
+  public.fn_tenant_admin_invitation_cleanup_user(uuid),
+  public.fn_tenant_logo_for_slug(text),
+  public.fn_ops_purge_expired_cancelled_tenants(integer),
   public.fn_prepare_tenant_admin_invitation_resend(uuid),
   public.fn_revoke_tenant_admin_invitation(uuid),
   public.fn_get_my_invitation(),
@@ -1924,6 +2275,7 @@ grant execute on function
   public.fn_platform_change_plan(uuid, uuid, text),
   public.fn_platform_set_billing_status(uuid, text, text),
   public.fn_platform_cancel_tenant(uuid, text, text),
+  public.fn_platform_restore_tenant(uuid, text, text),
   public.fn_platform_list_plans(),
   public.fn_platform_create_plan(jsonb),
   public.fn_platform_update_plan(uuid, jsonb),
@@ -1946,5 +2298,10 @@ to authenticated;
 grant execute on function
   public.fn_ops_register_platform_admin(uuid, text),
   public.fn_attach_tenant_admin_invitation(uuid, uuid),
-  public.fn_abort_tenant_admin_invitation(uuid)
+  public.fn_abort_tenant_admin_invitation(uuid),
+  public.fn_plan_tenant_admin_invitation_delivery(uuid),
+  public.fn_record_tenant_admin_invitation_sent(uuid),
+  public.fn_tenant_admin_invitation_cleanup_user(uuid),
+  public.fn_tenant_logo_for_slug(text),
+  public.fn_ops_purge_expired_cancelled_tenants(integer)
 to service_role;
