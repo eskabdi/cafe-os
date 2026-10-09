@@ -118,7 +118,10 @@ describe('permission-driven navigation', () => {
       'Inventory',
       'Installments',
       'Day close',
-      'Settings',
+      'Restaurant',
+      'Users',
+      'Roles & rights',
+      'Subscription',
       'Terminals',
     ]) {
       expect(nav.queryByRole('link', { name: hidden })).toBeNull()
@@ -136,6 +139,8 @@ describe('permission-driven navigation', () => {
       'day_close.execute',
       'settings.manage',
       'kiosks.manage',
+      'users.view',
+      'roles.manage',
     ]
     renderAt('/r/demo-cafe', auth(ctx(all)))
     const nav = within(mainNav())
@@ -147,7 +152,10 @@ describe('permission-driven navigation', () => {
       'Menu',
       'Inventory',
       'Day close',
-      'Settings',
+      'Restaurant',
+      'Users',
+      'Roles & rights',
+      'Subscription',
       'Terminals',
     ]) {
       expect(nav.getByRole('link', { name: label })).toBeInTheDocument()

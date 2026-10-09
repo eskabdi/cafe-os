@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { useAuth } from '@/features/auth'
+import { TrustedDevicesCard, useAuth } from '@/features/auth'
 import { usesSupabaseAuthSignIn } from '@/lib/domain/authenticator'
 import { supabase } from '@/lib/supabase/client'
 import { AuthenticatorEnroll } from './AuthenticatorEnroll'
@@ -135,6 +135,8 @@ export function SecurityPage() {
           )}
         </section>
       )}
+
+      {factors.isSuccess && list.length > 0 && <TrustedDevicesCard />}
 
       <RemoveAuthenticatorDialog
         factor={removing}

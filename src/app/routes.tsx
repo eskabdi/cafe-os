@@ -29,6 +29,14 @@ const StationKDS = lazy(() =>
 const PlatformRoutes = lazy(() => import('@/features/platform/PlatformRoutes'))
 const MenuPage = lazy(() => import('@/features/menu').then((m) => ({ default: m.MenuPage })))
 const InventoryPage = lazy(() => import('@/features/inventory').then((m) => ({ default: m.InventoryPage })))
+const RestaurantSettingsPage = lazy(() =>
+  import('@/features/tenant-admin/RestaurantSettingsPage').then((m) => ({ default: m.RestaurantSettingsPage })),
+)
+const UsersPage = lazy(() => import('@/features/tenant-admin/UsersPage').then((m) => ({ default: m.UsersPage })))
+const RolesPage = lazy(() => import('@/features/tenant-admin/RolesPage').then((m) => ({ default: m.RolesPage })))
+const SubscriptionPage = lazy(() =>
+  import('@/features/tenant-admin/SubscriptionPage').then((m) => ({ default: m.SubscriptionPage })),
+)
 
 function Loading() {
   return (
@@ -119,6 +127,39 @@ export const routes: RouteObject[] = [
                         ),
                       },
                       { path: 'settings/security', element: <SecurityPage /> },
+                      // Phase 3B Tenant Portal administration (§34A): same permission codes as the nav entries and the RPCs.
+                      {
+                        path: 'settings/restaurant',
+                        element: (
+                          <RequireNavPermission permission="settings.manage">
+                            <RestaurantSettingsPage />
+                          </RequireNavPermission>
+                        ),
+                      },
+                      {
+                        path: 'settings/users',
+                        element: (
+                          <RequireNavPermission permission="users.view">
+                            <UsersPage />
+                          </RequireNavPermission>
+                        ),
+                      },
+                      {
+                        path: 'settings/roles',
+                        element: (
+                          <RequireNavPermission permission="roles.manage">
+                            <RolesPage />
+                          </RequireNavPermission>
+                        ),
+                      },
+                      {
+                        path: 'settings/subscription',
+                        element: (
+                          <RequireNavPermission permission="settings.manage">
+                            <SubscriptionPage />
+                          </RequireNavPermission>
+                        ),
+                      },
                       // Phase 3 modules: same permission codes as their nav entries (menu.view / inventory.view).
                       {
                         path: 'menu',
