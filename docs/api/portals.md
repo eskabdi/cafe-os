@@ -1,20 +1,25 @@
 # Portal API (Phase 3B): Platform Admin Portal and Tenant Portal
 
 OpenAPI-style reference of the database RPCs (PostgREST `POST /rest/v1/rpc/<name>`) and Edge Functions (`POST /functions/v1/<name>`) added or
-reused for the two portals (execution prompt §34A). Migrations: `20261003003000_platform_portal.sql`, `20261003003100_tenant_portal.sql`.
+reused for the two portals (execution prompt §34A). Migrations: `20261003003000_platform_portal.sql`, `20261003003100_tenant_portal.sql`,
+`20261003003200_trusted_devices.sql`.
 
 ## Conventions
 
 - **Classification**
-  - **Public**: callable without a session (anon key). None of the portal endpoints is public; the only public RPC stays `fn_resolve_tenant_slug`.
+  - **Public**: callable without a session (anon key): `fn_resolve_tenant_slug` (RPC) and the `tenant-logo` Edge Function (sign-in page logo).
   - **Private**: needs a signed-in user JWT (`authenticated`); authorisation is decided by the database from the JWT subject (and `aal` claim).
   - **Internal**: not callable by any client role (no EXECUTE for `anon` / `authenticated`); `service_role` only (Edge Functions, ops) or definer-internal.
 - **Transport**: `Authorization: Bearer <access token>`, `apikey: <anon key>`, JSON body = named parameters (`p_...`). Responses are JSON (`jsonb`).
 - **Errors** (RPC): HTTP 400 from PostgREST with `{ "code": "P0001", "message": "<machine_code>", "details": "<safe detail or null>" }`. The client maps
   `message`; `details` is a field name / safe context, never SQL or another tenant's data. Privilege errors (no EXECUTE) are `42501`.
   Unknown and foreign ids are both `not_found` (no existence oracle).
+- **MFA-satisfied session** (`fn_mfa_session_ok`, 0032): `aal2` with a verified factor, OR a session attested by a **trusted device** (below). No opt-out
+  (the old `app.platform_mfa_required` GUC relaxes nothing).
 - **Platform guard** (`fn_platform_guard`, every `fn_platform_*`): `not_authenticated` | `permission_denied` (anyone but an ACTIVE `platform_super_admin`,
-  including every tenant user) | `mfa_required` (JWT not `aal2`, or no verified TOTP factor on the account). No opt-out.
+  including every tenant user) | `mfa_required` (no MFA-satisfied session).
+- **Very sensitive actions** (`fn_require_recent_totp`): plan change, cancel / restore tenant, role permission matrix and station access additionally need a
+  REAL TOTP verification at most 12 h old (JWT `amr` totp timestamp), even on a trusted device: `step_up_required` otherwise.
 - **Tenant guard** (every tenant RPC): tenant from identity (`fn_tenant_status_guard`): `not_authenticated` | `permission_denied` (no active profile:
   every platform admin) | `tenant_suspended` | `tenant_read_only` (past_due write). Then the permission (`permission_denied`), then step-up:
   `fn_require_step_up` (`mfa_required` for an enrolled caller on aal1) or `fn_require_aal2` (`mfa_required` unless aal2 + live factor + non-PIN account).
@@ -106,7 +111,13 @@ them next to this payload. **Backups**: the Supabase platform takes the actual b
 | `fn_list_tenant_admin_invitations()` | Private | tenant_admin, own tenant |
 | `fn_get_my_invitation()` | Private | the invitee (signed in from the e-mail link, no profile yet): `{ invitation_id, restaurant {name, slug}, email, username, expires_at, expired }` or null |
 | `fn_accept_tenant_admin_invitation()` | Private | the invitee: `{ profile_id, restaurant_id, slug }` — creates its `tenant_admin` profile (password login) |
-| `fn_attach_tenant_admin_invitation(p_invitation_id, p_auth_user_id)`, `fn_abort_tenant_admin_invitation(p_invitation_id)` | Internal (service_role) | tenant-admin-invite only |
+| `fn_plan_tenant_admin_invitation_delivery(p_invitation_id)` → `{invitation_id, email, mode, auth_user_id, not_before}` | Internal (service_role) | how to deliver: `none` (decoy), `invite`, `replace_unconfirmed`, `reinvite`, `magic_link` |
+| `fn_attach_tenant_admin_invitation(p_invitation_id, p_auth_user_id)`, `fn_record_tenant_admin_invitation_sent(p_invitation_id)`, `fn_abort_tenant_admin_invitation(p_invitation_id)`, `fn_tenant_admin_invitation_cleanup_user(p_invitation_id)` | Internal (service_role) | tenant-admin-invite only: bind, count a SUCCESSFUL send (budget 5), release a never-sent reservation, the never-confirmed Auth user to delete after a revoke |
+
+Delivery: prepare (caller) → plan (service) → by mode → attach → record. A failed attempt records nothing. Tenant callers never learn whether an
+address exists elsewhere: a conflicting address yields a **decoy** invitation (same visible lifecycle, never delivered; platform trail
+`tenant.admin_invitation_suppressed`). The e-mail links land on `/invite?token_hash=…&type=invite|magiclink` (`supabase/templates/*`), where the
+invitee is signed in with `verifyOtp`, chooses a password and calls `fn_accept_tenant_admin_invitation`.
 
 ```http
 POST /functions/v1/tenant-admin-invite
@@ -173,6 +184,35 @@ Errors: `invalid_input` (`patch` / the field), `invalid_timezone`, `permission_d
 
 ---
 
+## Trusted devices (both portals, migration 0032; owner decision 2026-10-09)
+
+The authenticator code is asked on the FIRST sign-in from a new device / browser, then not again there for 30 days. Only a sha256 of the device token is
+stored. On a password sign-in the SPA calls `fn_check_trusted_device(token)`; on success the database records an attestation for that session (JWT
+`session_id`) and every gate accepts it. A device trusted with a factor that is later removed is dead at once; disabling the user, a PIN change / reset
+or deactivating a platform admin revokes all their devices. At most 10 live devices per user.
+
+| endpoint | class | caller / result |
+|---|---|---|
+| `fn_trust_device(p_label)` | Private | a platform admin or a password profile with a TOTP verification ≤ 10 min old: `{device_id, token, expires_at}` (token returned ONCE) |
+| `fn_check_trusted_device(p_token)` | Private | the signed-in owner: `{trusted, expires_at?}`; `{trusted:false}` for anything invalid (no detail) |
+| `fn_list_my_trusted_devices()` | Private | own live devices `[{id, scope, label, created_at, last_seen_at, expires_at, current}]` |
+| `fn_list_user_trusted_devices(p_user_id)` | Private | tenant_admin (aal2-equivalent) for users of its tenant; Super Admin for platform admins; else `not_found` |
+| `fn_revoke_trusted_device(p_device_id)` | Private | owner, or the admins above: `{device_id, changed}` |
+| `fn_revoke_all_trusted_devices(p_user_id default null)` | Private | null = self ("sign out of all trusted devices"): `{user_id, revoked}` |
+
+```http
+POST /rest/v1/rpc/fn_check_trusted_device   { "p_token": "9f2c…(64 hex)" }
+200 { "trusted": true, "expires_at": "2026-11-08T09:00:00Z" }
+POST /rest/v1/rpc/fn_platform_change_plan   { "p_restaurant_id": "…", "p_plan_id": "…", "p_reason": "upgrade" }
+400 { "code": "P0001", "message": "step_up_required", "details": null }
+```
+
+## Public: tenant logo before sign-in (owner decision 2026-10-08)
+
+`GET /functions/v1/tenant-logo?slug=<slug>` (anon key) → `200 { "url": "<signed URL, 10 min>" | null, "expires_in": 600 | null }`. Unknown slug, no logo,
+suspended, cancelled, malformed and internal errors all answer `{url: null}`; `429 { "error": "try_later" }` when rate limited per IP. Backed by
+`fn_tenant_logo_for_slug(p_slug)` (Internal, service_role).
+
 ## Separation guarantees (tested)
 
 - A Super Admin reads **zero rows** of every tenant operational table and every tenant RPC answers `permission_denied` (`34_portal_separation`, catalog-driven:
@@ -182,16 +222,14 @@ Errors: `invalid_input` (`patch` / the field), `invalid_timezone`, `permission_d
 - One account = one portal: a platform admin never gets a profile, a tenant user never becomes a platform admin, ops registration and invitations refuse
   existing accounts, and the two guards serialise on a per-user lock (race test).
 
-## Open questions for the owner
+## Owner decisions (2026-10-08 / 2026-10-09)
 
-1. Plan quotas `max_stations`, `max_kiosks`, `max_storage_bytes`, `max_orders_per_month` are **monitored** (usage vs quota, `over_quota`), not yet enforced at
-   creation time (staff and menu items are). Enforce (hard stop) or warn only?
-2. A plan downgrade below current usage is allowed and reported. Refuse instead?
-3. Cancellation is terminal (no restore RPC; data retained). Is a "restore cancelled tenant" path wanted, and what is the data-retention period?
-4. Logos live in a private bucket (signed URLs). The pre-login tenant page (`fn_resolve_tenant_slug` returns `logo_path`) cannot show it without a session:
-   public logo bucket, or a signed-URL Edge Function for the login page?
-5. `staff-pin-reset` does not revoke the staff member's existing sessions (no admin session-revoke by user id in supabase-js). Should a reset also force sign-out
-   (needs a GoTrue admin call or the single-session machinery)?
-6. Platform admins keep direct RLS reads of `restaurants` / `subscriptions` / `plans` / `platform_invoices` / `admin_audit_log` (needed by `platform_support`);
-   should all platform reads go through RPCs only, and should the `platform_support` role (read-only staff) appear in the portal at all?
-7. Local development: the demo Super Admin now needs a real TOTP enrolment for the Platform Admin Portal (no GUC bypass for platform RPCs). Acceptable?
+1. Quotas `max_stations`, `max_kiosks`, `max_storage_bytes`, `max_orders_per_month`: **monitor only** (usage vs quota, `over_quota`); staff and menu items are enforced.
+2. Plan downgrade below current usage: **refused** (`plan_limit_reached`, detail = the metric names).
+3. Cancelled tenants: `fn_platform_restore_tenant` within **1 year**; after that `invalid_state/retention_expired`, and the ops job
+   `fn_ops_purge_expired_cancelled_tenants` (service_role) deletes the tenant's rows, keeps billing records and an anonymised restaurant row.
+4. Logo before sign-in: the `tenant-logo` function hands out a 10-minute link.
+5. Admin PIN reset signs the person out (sessions deleted) and forces a new PIN (`fn_admin_reset_user_pin`).
+6. The Super Admin keeps direct RLS reads of restaurants, subscriptions, plans, invoices and the platform audit log; reading one tenant's detail is audited (`tenant.viewed`).
+7. No demo without real MFA: the GUC bypass is gone; the local seed enrols a TEST TOTP secret for the demo Super Admin.
+8. TOTP on every sign-in is not acceptable: **trusted device for 30 days**; very sensitive actions still ask a code at most every 12 h.

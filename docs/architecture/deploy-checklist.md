@@ -7,7 +7,7 @@ Do these BEFORE a hosted project takes real users. Items marked (manual) cannot 
    password through GoTrue. Verify: sign in with a PIN staff account's synthetic email + any password => rejected.
 2. **Email confirmation ON (manual)** and `secure_password_change`, minimum password length 12 with symbols, TOTP MFA enabled
    (same values as `config.toml`; the local file does not configure hosted projects).
-3. **Platform admins need aal2.** Do NOT set `app.platform_mfa_required = 'off'` on a hosted database. Enrol TOTP for every platform admin
+3. **Platform admins need MFA.** There is no opt-out (0032); enrol TOTP for every platform admin
    first. Optional: `alter database postgres set app.tenant_admin_mfa_required = 'on'`.
 4. **Never run the demo seed.** `supabase db reset --linked` and any `psql -f supabase/seed.sql` against a hosted project are refused by the seed guard
    (it needs the CLI's default JWT secret or `app.allow_demo_seed=on`; never set that on a hosted database). Use `supabase db push` (migrations only).

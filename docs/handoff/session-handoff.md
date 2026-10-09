@@ -55,11 +55,16 @@ Read this first in the next session, then `CLAUDE.md` and `docs/spec/execution-p
 ## Phase 3B — Two portals (inserted 2026-10-08, before Phase 4; Phase 4 paused)
 
 Owner decision, non-negotiable: Platform Admin Portal (Super Admin) and Tenant Portal (Tenant Admin), fully separated. See execution prompt §34A and Phase 3B. Roles/permission matrix/user management/branding moved from Phase 10 into 3B. Phase 4 DB work had started in a worktree but stopped on a rate limit with nothing committed; it resumes after 3B.
-- **3B DB + Edge Function layer done (2026-10-08, branch `ccr-013f0187-mxaao1`, review gate NOT yet run):** migrations `20261003003000_platform_portal.sql`,
-  `20261003003100_tenant_portal.sql`; Edge Functions `tenant-admin-invite`, `staff-pin-reset`; pgTAP `32`-`35` (+ updated 02-28 for the RPC-only write path);
-  race test for the dual-identity race; docs `docs/api/portals.md` (+ erd, rls-matrix, rpc-conventions, security-controls, dfd, auth-flows).
-  Next: frontend portals (routes `/platform/*` vs `/r/<slug>/*`, guards, generated nav per portal), regenerate `types.ts`, Playwright cross-portal denial tests,
-  then the review gate. Open owner questions: end of `docs/api/portals.md`.
+- **3B built (2026-10-09, branch `ccr-013f0187-mxaao1`):** migrations `0030` platform portal, `0031` tenant portal, `0032` trusted devices; Edge Functions
+  `tenant-admin-invite` (DB-planned delivery: decoys, re-invite, magic link, record after success), `staff-pin-reset` (signs out + forces a new PIN),
+  `tenant-logo` (Public, 10-minute signed logo URL); pgTAP `32`-`37`; types regenerated (postgres-meta v0.91.0, cached image, `dockerd` + kept db-test cluster
+  on TCP). Frontend: `/platform/*` (Overview, Tenants + detail with restore, Create tenant, Plans, Invoices, System health, Backups, Audit log, Super Admins,
+  Security), Tenant Portal settings (Restaurant, Users, Roles & rights, Subscription, Security + trusted devices), `/invite` acceptance page, tenant logo on
+  sign-in, trusted-device sign-in (code once per new device, 30 days), `e2e/portals.spec.ts`.
+  Owner decisions 1-8 are recorded at the end of `docs/api/portals.md`.
+  Hosted setup still to do by the owner: the two e-mail templates (`supabase/templates/*`) in Auth > Email Templates; schedule `fn_ops_purge_expired_cancelled_tenants`.
+  Open: no lost-phone recovery flow for a Tenant Admin's authenticator yet (another Tenant Admin or the Super Admin cannot reset a factor; proposal: an audited
+  platform-side factor reset); Phase 4 resumes from local branch `wip/phase4-db` (renumber its migration after 0032).
 
 ## Remaining roadmap (§58)
 

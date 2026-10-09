@@ -93,12 +93,10 @@ sequenceDiagram
 ```
 
 ## Platform admins
-`is_platform_admin()` / `is_platform_super_admin()` (the RLS read helpers) additionally require `aal2` with a verified factor behind it (0030) unless
-`app.platform_mfa_required = 'off'` and the user has no verified factor. Production default = required. Local/CI opt out per session; the pgTAP helpers do it per transaction.
-
-**Every platform RPC (Phase 3B, 0030) uses `fn_platform_guard()` instead, which has NO opt-out**: active `platform_super_admin` row, JWT `aal = 'aal2'`, and a
-verified `auth.mfa_factors` row the account still owns. Consequence for local development: the demo Super Admin (`admin@cafeos.example.com`) must enrol a TOTP
-factor (Supabase Auth MFA) and complete the challenge before the Platform Admin Portal works; the GUC only relaxes the direct table reads. Errors:
+`is_platform_admin()` / `is_platform_super_admin()` (the RLS read helpers) and every platform RPC (`fn_platform_guard()`) require an active platform
+admin row AND an MFA-satisfied session (`fn_mfa_session_ok`, 0032): `aal2` with a verified factor the account still owns, or a session attested by a
+trusted device (below). There is no opt-out (owner decision 7). The local seed enrols a verified TOTP factor with the public TEST secret
+`JBSWY3DPEHPK3PXP` for the demo Super Admin (`admin@cafeos.example.com`; local only, the seed refuses hosted projects). Errors:
 `permission_denied` (not an active super admin; every tenant user), `mfa_required` (aal1, or no live factor).
 
 ### Adding a Super Admin (ops procedure; no client path exists)
@@ -290,3 +288,23 @@ All of this is UX; the database (`fn_pin_restricted` behind `has_permission` / s
 - **StepUpDialog** with no authenticator: a Supabase Auth account sees "Set one up in Security settings" with a link to this page; PIN sessions still see "ask your administrator".
 - Tests: `src/lib/domain/authenticator.test.ts`, `src/features/settings/SecurityPage.test.tsx` (mocked `supabase.auth.mfa`), `src/features/settings/AuthenticatorEnroll.test.tsx`, `src/features/auth/StepUpDialog.test.tsx`, `tests/e2e/security.spec.ts` (page.route mocks).
 - `src/lib/supabase/types.ts` is still the placeholder (no Docker for `supabase gen types`); its `Functions` was hand-extended with the three 0025 RPCs.
+
+## Trusted devices (migration 0032, owner decision 2026-10-09)
+
+"TOTP on each sign-in is not acceptable." For the Super Admin and every password account (Tenant Admin):
+
+1. Password sign-in (Supabase Auth) gives an **aal1** session. If an authenticator is enrolled, the SPA reads this browser's device token for that
+   user (`localStorage`, `src/lib/utils/device-token.ts`) and calls `fn_check_trusted_device`. Trusted → the database writes an attestation for the
+   session's `session_id`; `fn_mfa_session_ok()` (used by `fn_platform_guard`, the RLS platform helpers, `fn_require_aal2`, `fn_require_step_up`)
+   now accepts the session. No code is asked.
+2. Not trusted (new device, expired, revoked, other user) → the TOTP code is asked (`challengeAndVerify`, aal2). "Trust this device for 30 days" is
+   ticked by default → `fn_trust_device` (needs a code ≤ 10 min old) returns a random 32-byte token ONCE; only its sha256 is stored.
+3. **Very sensitive actions** (plan change, cancel / restore tenant, role matrix / station access) need a real TOTP verification at most 12 h old (JWT
+   `amr`), even on a trusted device → `step_up_required` → the step-up dialog asks the code and the SAME request is retried.
+4. Revocation: per device or all (own Security page; a Tenant Admin for its users; a Super Admin for platform admins). Automatic on user disable, PIN
+   change / reset, platform admin disable. A device is tied to the factor it was trusted with: removing that factor ends the trust at once.
+
+Residual risks: the device token sits in `localStorage` (XSS on the app origin could read it, but it is useless without the user's password session
+and is bound to one user); an attestation lives as long as the session (refresh keeps `session_id`) or the device's 30 days, whichever ends first;
+revoking deletes the attestations immediately.
+
