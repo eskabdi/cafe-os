@@ -8,6 +8,7 @@ import {
   PlusCircle,
   ScrollText,
   ShieldCheck,
+  KeyRound,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -36,6 +37,7 @@ export const PLATFORM_NAV: readonly PlatformNavItem[] = [
   { id: 'backups', label: 'Backups', path: '/platform/backups', icon: DatabaseBackup },
   { id: 'audit', label: 'Audit log', path: '/platform/audit', icon: ScrollText },
   { id: 'admins', label: 'Super Admins', path: '/platform/admins', icon: ShieldCheck },
+  { id: 'security', label: 'Security', path: '/platform/security', icon: KeyRound },
 ]
 
 export const platformTenantPath = (id: string) => `/platform/tenants/${id}`

@@ -31,24 +31,12 @@ export function isPlatformSuperAdmin(ctx: PortalIdentity | null | undefined): bo
 }
 
 /**
- * The `aal` claim of an access token (UX only: decides whether to show the MFA gate before the first platform call; the
- * database re-checks aal2 + a live factor on every platform RPC). Anything unreadable is treated as aal1.
+ * Platform portal opens only for an active Super Admin whose session the SERVER reports as MFA-satisfied: aal2 with a live
+ * factor, or a session attested by a device trusted in the last 30 days (0032; such a session is aal1, so the token's aal
+ * claim alone cannot decide). UX only: every platform RPC re-checks it.
  */
-export function tokenAal(accessToken: string | null | undefined): 'aal1' | 'aal2' {
-  const part = accessToken?.split('.')[1]
-  if (!part) return 'aal1'
-  try {
-    const b64 = part.replace(/-/g, '+').replace(/_/g, '/')
-    const payload: unknown = JSON.parse(atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4)))
-    return typeof payload === 'object' && payload !== null && (payload as { aal?: unknown }).aal === 'aal2' ? 'aal2' : 'aal1'
-  } catch {
-    return 'aal1'
-  }
-}
-
-/** Platform portal opens only for an active Super Admin whose session is aal2 with a live factor (server-reported). */
-export function platformMfaSatisfied(ctx: PortalIdentity | null | undefined, accessToken: string | null | undefined): boolean {
-  return isPlatformSuperAdmin(ctx) && ctx?.platform_mfa === true && tokenAal(accessToken) === 'aal2'
+export function platformMfaSatisfied(ctx: PortalIdentity | null | undefined): boolean {
+  return isPlatformSuperAdmin(ctx) && ctx?.platform_mfa === true
 }
 
 /** The tenant_admin system role is identified by its system key / flag, never by its (editable) display name. */

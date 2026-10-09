@@ -2,6 +2,7 @@ import { FunctionsFetchError, FunctionsHttpError, FunctionsRelayError } from '@s
 import { z } from 'zod'
 import { supabase } from './client'
 import { RpcError } from './rpc'
+import { isAttestedSession } from './trusted-devices'
 import { uuid } from './schemas'
 
 // Typed wrappers for the Phase 3B Edge Functions used by the portals: tenant-admin-invite, staff-create, staff-pin-reset.
@@ -62,6 +63,9 @@ export async function invokeEdge(name: string, body: Record<string, unknown>, ti
  * working, a caller with an enrolled authenticator on aal1 is asked to verify BEFORE the call. The server still decides.
  */
 export async function requireStepUpIfEnrolled(): Promise<void> {
+  // a session attested by a trusted device (0032) satisfies the server's step-up without a code
+  const { data: s } = await supabase.auth.getSession()
+  if (isAttestedSession(s.session?.access_token)) return
   const { data, error } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
   if (error || !data) return
   if (data.nextLevel === 'aal2' && data.currentLevel !== 'aal2') throw new RpcError('mfa_required')
@@ -141,5 +145,39 @@ export async function createStaff(i: CreateStaffInput): Promise<{ profile_id: st
 export async function resetStaffPin(profileId: string, pin: string): Promise<void> {
   z.object({ profile_id: uuid, pin_reset: z.literal(true) }).parse(
     await invokeEdge('staff-pin-reset', { profile_id: profileId, pin }),
+  )
+}
+
+// ── reachability (Platform Admin Portal, System health) ───────────────────────────────────────────────────────────────
+/** The Edge Functions the portals depend on. */
+export const EDGE_FUNCTIONS = [
+  'pin-login',
+  'pin-change',
+  'staff-create',
+  'staff-roster',
+  'staff-pin-reset',
+  'tenant-admin-invite',
+  'tenant-logo',
+] as const
+
+/**
+ * A CORS preflight (OPTIONS, no credentials, no body) to each function: any HTTP answer below 500 means the function is
+ * deployed and running; a network error, a timeout or a 5xx means it is not. Nothing is invoked.
+ */
+export async function pingEdgeFunctions(timeoutMs = 5000): Promise<Array<{ name: string; reachable: boolean }>> {
+  const base = String(import.meta.env.VITE_SUPABASE_URL ?? '').replace(/\/+$/, '')
+  return Promise.all(
+    EDGE_FUNCTIONS.map(async (name) => {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), timeoutMs)
+      try {
+        const res = await fetch(`${base}/functions/v1/${name}`, { method: 'OPTIONS', signal: controller.signal, credentials: 'omit' })
+        return { name, reachable: res.status < 500 }
+      } catch {
+        return { name, reachable: false }
+      } finally {
+        clearTimeout(timer)
+      }
+    }),
   )
 }

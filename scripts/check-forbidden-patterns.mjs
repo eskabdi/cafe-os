@@ -13,6 +13,7 @@ export const LOCAL_STORAGE_ALLOWLIST = [
   'src/lib/utils/ui-prefs.ts',
   'src/lib/supabase/client.ts',
   'src/lib/utils/kiosk-token.ts',
+  'src/lib/utils/device-token.ts',
 ]
 
 /** The only role literals the client/DB may hardcode (CLAUDE.md: two hardcoded system roles). */

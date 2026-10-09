@@ -136,6 +136,8 @@ export function portalErrorMessage(err: unknown): string {
       return 'You do not have permission to do this.'
     case 'mfa_required':
       return 'This action needs verification with your authenticator app.'
+    case 'step_up_required':
+      return 'This is a very sensitive action: enter a fresh code from your authenticator app (at most once every 12 hours).'
     case 'step_up_cancelled':
       return 'Verification was cancelled, so nothing was changed.'
     case 'tenant_suspended':

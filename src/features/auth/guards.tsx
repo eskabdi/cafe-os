@@ -88,7 +88,7 @@ export function RequirePermission({ permission, children, fallback }: RequirePer
  * (verify or set up an authenticator). UX only: every platform RPC re-checks all of it (fn_platform_guard).
  */
 export function RequirePlatformAdmin({ children, mfaGate }: { children?: ReactNode; mfaGate?: ReactNode }) {
-  const { context, session, signOut } = useAuth()
+  const { context, signOut } = useAuth()
   if (portalOf(context) === 'tenant' && context?.restaurant?.slug) {
     return <Navigate to={`/r/${context.restaurant.slug}`} replace />
   }
@@ -102,7 +102,7 @@ export function RequirePlatformAdmin({ children, mfaGate }: { children?: ReactNo
       </Notice>
     )
   }
-  if (mfaGate && !platformMfaSatisfied(context, session?.access_token)) return <>{mfaGate}</>
+  if (mfaGate && !platformMfaSatisfied(context)) return <>{mfaGate}</>
   return <>{children ?? <Outlet />}</>
 }
 

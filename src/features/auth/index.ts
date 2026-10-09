@@ -8,3 +8,4 @@ export { TenantLoginPage, TenantAdminLoginPage, PlatformLoginPage } from './page
 export { InactivityGuard } from './InactivityGuard'
 export { StepUpDialog } from './StepUpDialog'
 export { useStepUp, type StepUpRunner } from './useStepUp'
+export { TrustedDevicesCard } from './TrustedDevicesCard'

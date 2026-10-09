@@ -60,7 +60,8 @@ export function errorCode(err: unknown): { code?: string; detail?: string } {
 }
 
 export function isStepUpRequired(err: unknown): boolean {
-  return errorCode(err).code === 'mfa_required'
+  const code = errorCode(err).code
+  return code === 'mfa_required' || code === 'step_up_required'
 }
 
 /** The form field an invalid_input refers to (detail), if it is a known field. */
