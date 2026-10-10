@@ -11,7 +11,7 @@ export function orderErrorMessage(err: unknown): string {
     case 'item_unavailable':
       return 'An item is no longer available. Refresh the menu and remove it from the order.'
     case 'idempotency_conflict':
-      return 'This order changed after it was sent. Start a new order.'
+      return 'An earlier send of this order may already have gone through. Check today’s orders before sending again.'
     case 'invalid_state':
       return detail === 'table_unavailable'
         ? 'That table is not available. Choose another table.'
@@ -25,11 +25,13 @@ export function orderErrorMessage(err: unknown): string {
     case 'invalid_input':
       return detail === 'qty'
         ? 'Quantities are whole numbers from 1 to 99.'
-        : detail === 'note' || detail === 'customer_note'
-          ? 'A note is too long (at most 200 characters).'
-          : detail === 'items'
-            ? 'Add between 1 and 50 lines to the order.'
-            : 'Some values are not allowed. Check the order and try again.'
+        : detail === 'note'
+          ? 'A line note is too long (at most 200 characters).'
+          : detail === 'customer_note'
+            ? 'The order note is too long (at most 300 characters).'
+            : detail === 'items'
+              ? 'Add between 1 and 50 lines to the order.'
+              : 'Some values are not allowed. Check the order and try again.'
     case 'permission_denied':
       return 'You do not have permission to do this.'
     case 'tenant_suspended':

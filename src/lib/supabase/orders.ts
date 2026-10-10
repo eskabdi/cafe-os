@@ -44,6 +44,7 @@ export const orderSchema = z.object({
 export type Order = z.infer<typeof orderSchema>
 
 export const ordersKeys = {
+  openDay: (rid: string) => ['pos', rid, 'open-day'] as const,
   tables: (rid: string) => ['pos', rid, 'tables'] as const,
   mine: (rid: string) => ['pos', rid, 'my-orders'] as const,
 }
@@ -56,9 +57,14 @@ export interface SubmitOrderInput {
   customerNote: string | null
 }
 
+/** A replay for a caller who may no longer read the order gets only its id and number. */
+const replayReceiptSchema = z.object({ id: uuid, order_no: z.string(), replayed: z.literal(true) })
+export type SubmitResult = Order | z.infer<typeof replayReceiptSchema>
+export const isFullOrder = (r: SubmitResult): r is Order => 'items' in r
+
 /** Submits the cart. A retry with the same idempotency key returns the SAME order (replayed: true), never a second one. */
-export async function submitOrder(i: SubmitOrderInput): Promise<Order> {
-  return orderSchema.parse(
+export async function submitOrder(i: SubmitOrderInput): Promise<SubmitResult> {
+  return orderSchema.or(replayReceiptSchema).parse(
     await callRpc('fn_submit_order', {
       p_items: i.items,
       p_idempotency_key: i.idempotencyKey,
@@ -69,8 +75,25 @@ export async function submitOrder(i: SubmitOrderInput): Promise<Order> {
   )
 }
 
-export async function cancelOrder(orderId: string, reason: string | null): Promise<Order> {
-  return orderSchema.parse(await callRpc('fn_cancel_order', { p_order_id: orderId, p_reason: reason }))
+const cancelResultSchema = z.object({
+  order_id: uuid,
+  order_no: z.string(),
+  status: z.literal('cancelled'),
+  reversed_movements: z.number().int().nonnegative(),
+  already_cancelled: z.boolean(),
+})
+export type CancelResult = z.infer<typeof cancelResultSchema>
+
+export async function cancelOrder(orderId: string, reason: string | null): Promise<CancelResult> {
+  return cancelResultSchema.parse(await callRpc('fn_cancel_order', { p_order_id: orderId, p_reason: reason }))
+}
+
+const openDaySchema = z.object({ id: uuid, day_no: z.number(), opened_at: z.string() }).nullable()
+export type OpenDay = z.infer<typeof openDaySchema>
+
+/** The open business day (id, number, opened at) or null; the server re-checks on every order. */
+export async function fetchOpenDay(): Promise<OpenDay> {
+  return openDaySchema.parse(await callRpc('fn_get_open_day'))
 }
 
 export async function serveOrder(orderId: string): Promise<Order> {

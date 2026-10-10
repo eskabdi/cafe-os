@@ -147,7 +147,13 @@ begin
     where k.restaurant_id = p_rid and k.key = p_idempotency_key and k.command = 'order.submit';
     if v_prev.request_hash is distinct from v_hash then perform public.fn_err('idempotency_conflict'); end if;
     if v_prev.result is null or (v_prev.result ->> 'order_id') is null then perform public.fn_err('invalid_state', 'idempotency_pending'); end if;
-    return public.fn_order_json((v_prev.result ->> 'order_id')::uuid) || jsonb_build_object('replayed', true);
+    -- a replay re-reads the order only when the caller may still see it (same rule as orders_select); otherwise the minimal receipt
+    if exists (select 1 from public.orders o where o.id = (v_prev.result ->> 'order_id')::uuid
+               and public.fn_order_visible(o.created_by, o.station_ids)) then
+      return public.fn_order_json((v_prev.result ->> 'order_id')::uuid) || jsonb_build_object('replayed', true);
+    end if;
+    return (select jsonb_build_object('id', o.id, 'order_no', o.order_no, 'replayed', true)
+            from public.orders o where o.id = (v_prev.result ->> 'order_id')::uuid);
   end if;
 
   -- ── business day (FOR SHARE: a concurrent close waits for this order, or this order sees the close) ──
@@ -338,7 +344,10 @@ begin
   if not public.has_permission('orders.view') then perform public.fn_err('permission_denied'); end if;
   if p_order_id is null then perform public.fn_err('invalid_input', 'order_id'); end if;
   if p_status is null or p_status not in ('preparing', 'ready') then perform public.fn_err('invalid_input', 'status'); end if;
-  if p_station_id is null or not public.has_station_access(p_station_id) then perform public.fn_err('permission_denied', 'station'); end if;
+  if p_station_id is null or not public.has_station_access(p_station_id)
+     or not exists (select 1 from public.stations st where st.id = p_station_id and st.restaurant_id = v_rid and st.is_active) then
+    perform public.fn_err('permission_denied', 'station');
+  end if;
   select * into v_o from public.orders o where o.id = p_order_id and o.restaurant_id = v_rid for update;
   if not found or not exists (select 1 from public.order_items oi where oi.order_id = v_o.id and oi.restaurant_id = v_rid
                               and oi.station_id = p_station_id) then

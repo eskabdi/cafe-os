@@ -10,12 +10,32 @@ import { EmptyState, ErrorState, PageSkeleton } from '@/features/shell/states'
 import { addItem, itemCount, previewSubtotal, removeLine, setNote, setQty, toPayload, type Cart } from '@/lib/domain/cart'
 import { formatEtb } from '@/lib/domain/decimal'
 import { fetchMenuItems, menuItemsKey, subscribeToMenu } from '@/lib/supabase/menu'
-import { ORDER_TYPES, fetchDayOrders, fetchTables, ordersKeys, submitOrder, subscribeToOrders, type Order, type OrderType } from '@/lib/supabase/orders'
+import { errorCode } from '@/lib/supabase/menu-inventory-errors'
+import {
+  ORDER_TYPES,
+  fetchDayOrders,
+  fetchOpenDay,
+  fetchTables,
+  isFullOrder,
+  ordersKeys,
+  submitOrder,
+  subscribeToOrders,
+  type OrderType,
+  type SubmitResult,
+} from '@/lib/supabase/orders'
 import { categoriesKey, fetchCategories } from '@/lib/supabase/reference-data'
 import { orderErrorMessage } from './order-errors'
 
 const ORDER_TYPE_LABEL: Record<OrderType, string> = { 'dine-in': 'Dine-in', takeaway: 'Takeaway', delivery: 'Delivery' }
 const newKey = () => crypto.randomUUID()
+/**
+ * Answers that prove the order was NOT created (the database refused it). Anything else (network, timeout, gateway, unknown) is
+ * ambiguous: the server MAY have committed it, so the same key must be resent before anything changes.
+ */
+const DEFINITIVE = new Set([
+  'day_closed', 'insufficient_stock', 'item_unavailable', 'idempotency_conflict', 'invalid_state', 'invalid_input',
+  'permission_denied', 'tenant_suspended', 'tenant_read_only', 'not_found', 'not_authenticated',
+])
 
 /**
  * Waiter POS (Phase 4). Categories and menu come from the tenant's rows (no name is known to the code); the cart is an intent
@@ -25,8 +45,17 @@ const newKey = () => crypto.randomUUID()
 export function PosPage() {
   const { context } = useAuth()
   const rid = context?.restaurant?.id ?? ''
-  const openDay = context?.open_day ?? null
   const qc = useQueryClient()
+  // the open day is re-read from the server (focus, retry, day_closed answers): a day opened after sign-in unlocks sending
+  const openDayQuery = useQuery({
+    queryKey: ordersKeys.openDay(rid),
+    queryFn: fetchOpenDay,
+    enabled: Boolean(rid),
+    initialData: context?.open_day ?? null,
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+  })
+  const openDay = openDayQuery.data ?? null
   const menu = useQuery({ queryKey: menuItemsKey(rid), queryFn: fetchMenuItems, enabled: Boolean(rid) })
   const categories = useQuery({ queryKey: categoriesKey(rid), queryFn: fetchCategories, enabled: Boolean(rid) })
   const tables = useQuery({ queryKey: ordersKeys.tables(rid), queryFn: fetchTables, enabled: Boolean(rid) })
@@ -42,7 +71,9 @@ export function PosPage() {
   const [tableId, setTableId] = useState('')
   const [note, setOrderNote] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const [last, setLast] = useState<Order | null>(null)
+  const [last, setLast] = useState<SubmitResult | null>(null)
+  // true after a send whose outcome is unknown: the cart and its fields are frozen until the SAME key gets a definitive answer
+  const [unsure, setUnsure] = useState(false)
   // one key per cart; kept across retries until the order is confirmed
   const idemKey = useRef<string>(newKey())
 
@@ -72,13 +103,22 @@ export function PosPage() {
       setLast(order)
       setCart([])
       setOrderNote('')
+      setTableId('')
       setError(null)
+      setUnsure(false)
       idemKey.current = newKey()
       toast.success(`Order ${order.order_no} sent`)
       void qc.invalidateQueries({ queryKey: ordersKeys.mine(rid) })
       void qc.invalidateQueries({ queryKey: ordersKeys.tables(rid) })
     },
-    onError: (e) => setError(orderErrorMessage(e)),
+    onError: (e) => {
+      const { code, detail } = errorCode(e)
+      setError(orderErrorMessage(e))
+      // idempotency_pending: the first send is still running elsewhere, so its outcome is unknown too
+      setUnsure(!code || !DEFINITIVE.has(code) || detail === 'idempotency_pending')
+      if (code === 'day_closed') void openDayQuery.refetch()
+      if (code === 'idempotency_conflict') void qc.invalidateQueries({ queryKey: ordersKeys.mine(rid) })
+    },
   })
 
   const activeCategories = useMemo(() => (categories.data ?? []).filter((c) => c.is_active), [categories.data])
@@ -94,18 +134,31 @@ export function PosPage() {
     )
   }, [menu.data, activeCategoryIds, category, search])
 
-  // the cart changed: a new intent needs a new key (a retry of the SAME cart keeps the old one)
-  const change = (next: Cart) => {
-    setCart(next)
+  // any change of the intent (cart, type, table, note) needs a new key; frozen while a send's outcome is unknown
+  const touch = () => {
     idemKey.current = newKey()
     setError(null)
+  }
+  const change = (next: Cart) => {
+    if (unsure) return
+    setCart(next)
+    touch()
+  }
+  const discardUnsure = () => {
+    setUnsure(false)
+    setError(null)
+    setCart([])
+    setOrderNote('')
+    idemKey.current = newKey()
+    void qc.invalidateQueries({ queryKey: ordersKeys.mine(rid) })
   }
 
   if (menu.isPending || categories.isPending) return <PageSkeleton label="Loading the menu" />
   if (menu.isError || categories.isError)
     return <ErrorState title="The menu could not be loaded" onRetry={() => void Promise.all([menu.refetch(), categories.refetch()])} />
 
-  const needsTable = orderType === 'dine-in' && (tables.data?.length ?? 0) > 0
+  // while the tables load a dine-in order waits for them; if they cannot load, the server accepts an order without a table
+  const needsTable = orderType === 'dine-in' && !tables.isError && (tables.isPending || (tables.data?.length ?? 0) > 0)
   const canSubmit = Boolean(openDay) && cart.length > 0 && !submit.isPending && (!needsTable || Boolean(tableId))
 
   return (
@@ -116,7 +169,10 @@ export function PosPage() {
         </h1>
         {!openDay && (
           <p role="alert" className="rounded-md border border-status-warning bg-status-warning/10 p-3 text-sm text-ink">
-            No business day is open. Orders can be prepared but not sent until a manager opens the day.
+            No business day is open. Orders can be prepared but not sent until a manager opens the day.{' '}
+            <button type="button" className="font-medium underline" onClick={() => void openDayQuery.refetch()}>
+              Check again
+            </button>
           </p>
         )}
         <div className="relative">
@@ -165,7 +221,15 @@ export function PosPage() {
           Order ({itemCount(cart)})
         </h2>
         <div className="grid grid-cols-2 gap-2">
-          <NativeSelect aria-label="Order type" value={orderType} onChange={(e) => setOrderType(e.target.value as OrderType)}>
+          <NativeSelect
+            aria-label="Order type"
+            value={orderType}
+            disabled={unsure}
+            onChange={(e) => {
+              setOrderType(e.target.value as OrderType)
+              touch()
+            }}
+          >
             {ORDER_TYPES.map((t) => (
               <option key={t} value={t}>
                 {ORDER_TYPE_LABEL[t]}
@@ -173,7 +237,15 @@ export function PosPage() {
             ))}
           </NativeSelect>
           {orderType === 'dine-in' && (
-            <NativeSelect aria-label="Table" value={tableId} onChange={(e) => setTableId(e.target.value)}>
+            <NativeSelect
+              aria-label="Table"
+              value={tableId}
+              disabled={unsure}
+              onChange={(e) => {
+                setTableId(e.target.value)
+                touch()
+              }}
+            >
               <option value="">Table…</option>
               {(tables.data ?? []).map((t) => (
                 <option key={t.id} value={t.id}>
@@ -216,7 +288,17 @@ export function PosPage() {
             ))}
           </ul>
         )}
-        <Input aria-label="Order note" placeholder="Order note (optional)" value={note} maxLength={200} onChange={(e) => setOrderNote(e.target.value)} />
+        <Input
+          aria-label="Order note"
+          placeholder="Order note (optional)"
+          value={note}
+          maxLength={300}
+          disabled={unsure}
+          onChange={(e) => {
+            setOrderNote(e.target.value)
+            touch()
+          }}
+        />
         <div className="flex justify-between text-sm">
           <span className="text-muted-foreground">Subtotal (preview, VAT added by the server)</span>
           <span className="font-semibold tabular-nums text-ink" data-testid="pos-subtotal">
@@ -229,15 +311,25 @@ export function PosPage() {
           </p>
         )}
         <Button className="w-full" disabled={!canSubmit} onClick={() => submit.mutate()}>
-          {submit.isPending ? 'Sending…' : 'Send order'}
+          {submit.isPending ? 'Sending…' : unsure ? 'Send again' : 'Send order'}
         </Button>
+        {unsure && (
+          <p className="text-xs text-muted-foreground">
+            The last send may have reached the kitchen. “Send again” never creates a second order.{' '}
+            <button type="button" className="underline" onClick={discardUnsure}>
+              Discard and check today’s orders
+            </button>
+          </p>
+        )}
         {needsTable && !tableId && cart.length > 0 && <p className="text-xs text-muted-foreground">Choose a table for a dine-in order.</p>}
         {last && (
           <div className="rounded-md bg-status-success/10 p-3 text-sm text-ink" data-testid="pos-last-order">
             <p className="font-semibold">Order {last.order_no} sent</p>
-            <p className="tabular-nums">
-              Subtotal {formatEtb(last.subtotal)} · VAT {formatEtb(last.vat_amount)} · Total {formatEtb(last.total)}
-            </p>
+            {isFullOrder(last) && (
+              <p className="tabular-nums">
+                Subtotal {formatEtb(last.subtotal)} · VAT {formatEtb(last.vat_amount)} · Total {formatEtb(last.total)}
+              </p>
+            )}
           </div>
         )}
         {openDay && dayOrders.isSuccess && dayOrders.data.length > 0 && (

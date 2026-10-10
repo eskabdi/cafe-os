@@ -209,7 +209,10 @@ BEFORE=$(q "select count(*) from public.orders where restaurant_id = $RID")
 for i in $(seq 1 10); do
   ( as_user $O "select public.fn_submit_order('[{\"menu_item_id\": \"$P_ID\", \"qty\": 1}, {\"menu_item_id\": \"$Q_ID\", \"qty\": 1}]', 'race-pq-00000$i');" | "${PSQL[@]}" >/tmp/race.$$.pq.$i 2>&1 ) &
   ( as_user $O "select public.fn_submit_order('[{\"menu_item_id\": \"$Q_ID\", \"qty\": 1}, {\"menu_item_id\": \"$P_ID\", \"qty\": 1}]', 'race-qp-00000$i');" | "${PSQL[@]}" >/tmp/race.$$.qp.$i 2>&1 ) &
-  ( as_user $O "select public.fn_receive_stock((select id from public.ingredients where restaurant_id = $RID and name = 'Race A'), 1, 'race-recv-a-000$i'); select public.fn_receive_stock((select id from public.ingredients where restaurant_id = $RID and name = 'Race B'), 1, 'race-recv-b-000$i');" | "${PSQL[@]}" >/tmp/race.$$.rcv.$i 2>&1 ) &
+  # one receipt = one request = one transaction (as the app sends them); two receipts in ONE transaction would lock A then B by
+  # name, i.e. in arbitrary id order, which no client does and which can deadlock against any id-ordered locker
+  ( { as_user $O "select public.fn_receive_stock((select id from public.ingredients where restaurant_id = $RID and name = 'Race A'), 1, 'race-recv-a-000$i');"
+      as_user $O "select public.fn_receive_stock((select id from public.ingredients where restaurant_id = $RID and name = 'Race B'), 1, 'race-recv-b-000$i');"; } | "${PSQL[@]}" >/tmp/race.$$.rcv.$i 2>&1 ) &
 done
 wait
 check "20 submits with opposite line order + 20 receipts: no deadlock" 0 "$(cat /tmp/race.$$.pq.* /tmp/race.$$.qp.* /tmp/race.$$.rcv.* | grep -ci deadlock)"
@@ -240,6 +243,6 @@ for scenario in start_first cancel_first; do
 done
 check "ledger consistent at the end" 0 "$(q "$LEDGER_GAP")"
 
-rm -f /tmp/race.$$.*
+[ -n "${RACE_KEEP:-}" ] || rm -f /tmp/race.$$.*
 if [ "$FAILS" -ne 0 ]; then echo "race tests: $FAILS failure(s)"; exit 1; fi
 echo "race tests: all passed"

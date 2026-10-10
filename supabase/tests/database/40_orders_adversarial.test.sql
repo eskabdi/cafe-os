@@ -5,7 +5,7 @@
 -- opened, KDS, serve) with no stock moving. Concurrency (same key, last unit of stock, opposite lock order, cancel vs start) is in
 -- scripts/db/race-tests.sh (real concurrent sessions).
 begin;
-select plan(57);
+select plan(58);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -201,5 +201,8 @@ select is(tests.run(format($q$select public.fn_submit_order('[{"menu_item_id": "
 select is(tests.run(format($q$select public.fn_submit_order('[{"menu_item_id": "%s", "qty": 1}]', %L)$q$, (select id from public.menu_items where name = 'Macchiato'), repeat('k', 129))), 'P0001|invalid_input|idempotency_key', 'submit: key > 128');
 select tests.clear_auth();
 
+-- orders and their lines are never deleted (Realtime DELETE events bypass RLS): no client privilege, no definer body deletes them
+select is((select string_agg(p.proname, ',' order by p.proname) from pg_proc p where p.pronamespace = 'public'::regnamespace
+           and p.prosrc ~* 'delete\s+from\s+public\.(orders|order_items)\M'), null, 'no function deletes orders or order lines');
 select * from finish();
 rollback;

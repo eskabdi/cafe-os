@@ -58,6 +58,7 @@ async function setup(page: Page, opts: { openDay?: boolean; failFirst?: boolean 
     const name = parts.pop() ?? ''
     if (parts.includes('rpc')) {
       if (name === 'fn_get_session_context') return r.fulfill(json(200, context))
+      if (name === 'fn_get_open_day') return r.fulfill(json(200, context.open_day))
       if (name === 'fn_submit_order') {
         submitted.push(req.postDataJSON() as Record<string, unknown>)
         calls++
@@ -109,7 +110,9 @@ test('a retry after a failed send reuses the same idempotency key', async ({ pag
   await page.getByLabel('Order type').selectOption('takeaway')
   await page.getByRole('button', { name: 'Send order' }).click()
   await expect(page.getByRole('alert')).toBeVisible()
-  await page.getByRole('button', { name: 'Send order' }).click()
+  // the outcome is unknown: the cart is frozen and the SAME key is resent
+  await expect(page.getByLabel('Order type')).toBeDisabled()
+  await page.getByRole('button', { name: 'Send again' }).click()
   await expect(page.getByTestId('pos-last-order')).toContainText('ORD-0042')
   expect(submitted).toHaveLength(2)
   expect(submitted[0]?.p_idempotency_key).toBe(submitted[1]?.p_idempotency_key)

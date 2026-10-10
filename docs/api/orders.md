@@ -8,7 +8,7 @@ All endpoints are **Private** (signed-in tenant user) PostgREST RPCs: `POST /res
 | endpoint | permission | effect |
 |---|---|---|
 | `fn_submit_order(p_items, p_idempotency_key, p_order_type='dine-in', p_table_id=null, p_customer_note=null)` | `orders.create` | validates the cart, prices from `menu_items` (FOR SHARE), VAT from `restaurants.vat_rate`, totals, `ORD-nnnn`, station routing, recipe stock consumption, table state, audit; replay of the same key returns the same order (`replayed: true`) |
-| `fn_cancel_order(p_order_id, p_reason=null)` | `orders.cancel` + visibility | only while every line is pending, nothing is paid and the day is open; compensating stock reversal |
+| `fn_cancel_order(p_order_id, p_reason=null)` | `orders.cancel` + visibility | only while every line is pending, nothing is paid and the day is open; compensating stock reversal; returns `{order_id, order_no, status, reversed_movements, already_cancelled}`. The table is released in the table-session phase (Phase 6/QR), not here |
 | `fn_set_station_items_status(p_order_id, p_station_id, p_status)` | station access | `preparing` / `ready` for that station's lines; order status rolls up |
 | `fn_serve_order(p_order_id)` | creator / `orders.view_all` | a READY order becomes `served` |
 
@@ -17,7 +17,7 @@ All endpoints are **Private** (signed-in tenant user) PostgREST RPCs: `POST /res
 ```http
 POST /rest/v1/rpc/fn_submit_order
 { "p_items": [{ "menu_item_id": "4f1c…", "qty": 2, "note": null }], "p_idempotency_key": "6c0e…(uuid)", "p_order_type": "dine-in", "p_table_id": "9a7d…" }
-200 { "id": "…", "order_no": "ORD-0042", "status": "pending", "subtotal": 71.00, "vat_rate": 15.00, "vat_amount": 10.65, "total": 81.65, "items": [ … ], "replayed": false }
+200 { "id": "…", "order_no": "ORD-0042", "status": "submitted", "subtotal": 71.00, "vat_rate": 15.00, "vat_amount": 10.65, "total": 81.65, "items": [ … ], "replayed": false }
 400 { "code": "P0001", "message": "insufficient_stock", "details": null }
 400 { "code": "P0001", "message": "day_closed", "details": "no open business day" }
 ```
