@@ -7,11 +7,16 @@
 --  * fn_reverse_payment(payment, reason, idempotency_key)   payments.reverse + step-up
 --      A confirmed order payment is never edited or deleted: a compensating 'reversal' row (same amount / method / order, its own
 --      receipt number) is appended and the order goes back to 'unpaid'. One reversal per payment (unique index, 0005).
---  * fn_get_receipt(payment)   payments.view or payments.create: the receipt document (restaurant identity, lines, VAT, totals,
+--  * fn_get_receipt(payment)   payments.view (any) or payments.create (own receipts only): the receipt document (restaurant identity, lines, VAT, totals,
 --      payment) as JSON for the printable receipt; fn_receipt_json is the internal builder.
 --
 --  Every command: tenant from identity, permission, open business day (FOR SHARE; payments land in the OPEN day), idempotency with a
---  payload fingerprint, lock order  key -> day -> order (FOR UPDATE) -> payment method (FOR SHARE) -> counter, audit row.
+--  payload fingerprint (incl. the actor), lock order  key -> day -> order (FOR UPDATE) -> payment method (FOR SHARE) -> counter, audit row.
+--  The order must belong to the OPEN day: an order (or a payment) of a closed day is refused with day_closed / 'order business day is
+--  closed' (a closed day is frozen; its corrections belong to the day-close phase).
+--  * LOCK ORDER RULE (every order command, Phase 9 fn_close_day included): the tenant's open day FOR SHARE first, then the order FOR
+--    UPDATE. fn_cancel_order / fn_set_station_items_status / fn_serve_order are redefined below to follow it (0033 locked the order
+--    first), and fn_cancel_order now looks at the NET payment (a reversed payment no longer blocks the cancellation).
 --  Clients keep SELECT only on payments (RLS payments_select: payments.view); these RPCs are the only writers.
 
 -- ── internal: the receipt document ──────────────────────────────────────────
@@ -70,12 +75,14 @@ begin
     perform public.fn_err('invalid_input', 'tendered');
   end if;
 
-  v_hash := encode(extensions.digest(convert_to(format('%s|%s|%s|%s', p_order_id, p_payment_method_id, coalesce(v_ref, ''),
-                                                      coalesce(p_tendered::text, '')), 'UTF8'), 'sha256'), 'hex');
+  v_hash := encode(extensions.digest(convert_to(format('%s|%s|%s|%s|%s', (select auth.uid()), p_order_id, p_payment_method_id,
+                                                      coalesce(v_ref, ''), coalesce(p_tendered::text, '')), 'UTF8'), 'sha256'), 'hex');
   v_replay := public.fn_idempotency_begin(p_idempotency_key, 'payment.confirm', v_hash);
   if v_replay is not null then
     if v_replay -> 'result' is null or jsonb_typeof(v_replay -> 'result') = 'null' then perform public.fn_err('invalid_state', 'idempotency_pending'); end if;
-    return (v_replay -> 'result') || jsonb_build_object('replayed', true);
+    -- the receipt is rebuilt (current 'reversed' flag); tendered / change come from the stored first answer
+    return public.fn_receipt_json((v_replay -> 'result' ->> 'payment_id')::uuid)
+           || jsonb_build_object('tendered', v_replay -> 'result' -> 'tendered', 'change', v_replay -> 'result' -> 'change', 'replayed', true);
   end if;
 
   select d.id into v_day from public.day_sessions d where d.restaurant_id = v_rid and d.status = 'open' for share;
@@ -83,6 +90,7 @@ begin
 
   select * into v_o from public.orders o where o.id = p_order_id and o.restaurant_id = v_rid for update;
   if not found then perform public.fn_err('not_found'); end if;
+  if v_o.day_session_id is distinct from v_day then perform public.fn_err('day_closed', 'order business day is closed'); end if;
   if v_o.status = 'cancelled' then perform public.fn_err('order_not_payable', 'cancelled'); end if;
   if v_o.payment_status <> 'unpaid' then perform public.fn_err('order_not_payable', v_o.payment_status); end if;
   if v_o.total <= 0 then perform public.fn_err('order_not_payable', 'zero_total'); end if;
@@ -136,31 +144,37 @@ begin
   if p_payment_id is null then perform public.fn_err('invalid_input', 'payment_id'); end if;
   if char_length(v_reason) not between 3 and 300 or v_reason ~ '[[:cntrl:]]' then perform public.fn_err('invalid_input', 'reason'); end if;
 
-  v_hash := encode(extensions.digest(convert_to(format('%s|%s', p_payment_id, v_reason), 'UTF8'), 'sha256'), 'hex');
+  v_hash := encode(extensions.digest(convert_to(format('%s|%s|%s', (select auth.uid()), p_payment_id, v_reason), 'UTF8'), 'sha256'), 'hex');
   v_replay := public.fn_idempotency_begin(p_idempotency_key, 'payment.reverse', v_hash);
   if v_replay is not null then
     if v_replay -> 'result' is null or jsonb_typeof(v_replay -> 'result') = 'null' then perform public.fn_err('invalid_state', 'idempotency_pending'); end if;
-    return (v_replay -> 'result') || jsonb_build_object('replayed', true);
+    return public.fn_receipt_json((v_replay -> 'result' ->> 'payment_id')::uuid) || jsonb_build_object('replayed', true);
   end if;
 
   select d.id into v_day from public.day_sessions d where d.restaurant_id = v_rid and d.status = 'open' for share;
   if v_day is null then perform public.fn_err('day_closed', 'no open business day'); end if;
 
-  -- order first (the lock order of every order command), then the payment
+  -- day (above), then the order, then the payment: the lock order of every order command
   select p.* into v_p from public.payments p where p.id = p_payment_id and p.restaurant_id = v_rid;
   if not found then perform public.fn_err('not_found'); end if;
   if v_p.kind <> 'order_payment' then perform public.fn_err('invalid_state', 'not_an_order_payment'); end if;
   select * into v_o from public.orders o where o.id = v_p.order_id and o.restaurant_id = v_rid for update;
+  if not found then perform public.fn_err('not_found'); end if;
+  -- a payment of a closed business day is frozen with its day (its order cannot change any more)
+  if v_p.day_session_id is distinct from v_day or v_o.day_session_id is distinct from v_day then
+    perform public.fn_err('day_closed', 'payment business day is closed');
+  end if;
   select p.* into v_p from public.payments p where p.id = p_payment_id and p.restaurant_id = v_rid for update;
   if exists (select 1 from public.payments r where r.reversed_payment_id = v_p.id) then
     perform public.fn_err('invalid_state', 'already_reversed');
   end if;
+  if v_o.payment_status <> 'paid' then perform public.fn_err('invalid_state', 'order_not_paid'); end if;
 
   v_no := public.fn_next_number(v_rid, 'receipt', 'RCT-');
   insert into public.payments (restaurant_id, day_session_id, order_id, kind, amount, payment_method_id, method_name_snapshot,
                                method_affects_drawer_snapshot, reference, receipt_no, reversed_payment_id, created_by)
   values (v_rid, v_day, v_p.order_id, 'reversal', v_p.amount, v_p.payment_method_id, v_p.method_name_snapshot,
-          v_p.method_affects_drawer_snapshot, left(v_reason, 120), v_no, v_p.id, (select auth.uid()))
+          v_p.method_affects_drawer_snapshot, left(v_reason, 120) /* full reason in the audit row */, v_no, v_p.id, (select auth.uid()))
   returning id into v_rev;
   update public.orders set payment_status = 'unpaid' where id = v_o.id and restaurant_id = v_rid;
 
@@ -183,7 +197,9 @@ begin
   if not (public.has_permission('payments.view') or public.has_permission('payments.create')) then
     perform public.fn_err('permission_denied');
   end if;
-  if p_payment_id is null or not exists (select 1 from public.payments p where p.id = p_payment_id and p.restaurant_id = v_rid) then
+  -- payments.view: any receipt of the tenant (same as RLS payments_select); payments.create alone: only the receipts the caller issued
+  if p_payment_id is null or not exists (select 1 from public.payments p where p.id = p_payment_id and p.restaurant_id = v_rid
+                                         and (public.has_permission('payments.view') or p.created_by = (select auth.uid()))) then
     perform public.fn_err('not_found');
   end if;
   return public.fn_receipt_json(p_payment_id);
@@ -194,3 +210,130 @@ revoke all on function public.fn_confirm_payment(uuid, uuid, text, text, numeric
   public.fn_get_receipt(uuid) from public, anon;
 grant execute on function public.fn_confirm_payment(uuid, uuid, text, text, numeric), public.fn_reverse_payment(uuid, text, text),
   public.fn_get_receipt(uuid) to authenticated;
+
+-- ── 0033 order commands, redefined: open day FOR SHARE first, then the order (one lock order for every order command) ─────────
+-- Same behaviour as 0033 except: the order must belong to the tenant's open day (otherwise day_closed, as before), and fn_cancel_order
+-- looks at the NET payment: an order payment that has been reversed no longer blocks the cancellation of an unpaid order.
+create or replace function public.fn_cancel_order(p_order_id uuid, p_reason text default null)
+returns jsonb
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  v_rid uuid := public.fn_tenant_status_guard(true);
+  v_o public.orders%rowtype;
+  v_reason text := nullif(btrim(coalesce(p_reason, '')), '');
+  v_day uuid;
+  v_n integer := 0;
+begin
+  if not public.has_permission('orders.cancel') then perform public.fn_err('permission_denied'); end if;
+  if p_order_id is null then perform public.fn_err('invalid_input', 'order_id'); end if;
+  if v_reason is not null and char_length(v_reason) > 300 then perform public.fn_err('invalid_input', 'reason'); end if;
+  select d.id into v_day from public.day_sessions d where d.restaurant_id = v_rid and d.status = 'open' for share;
+  select * into v_o from public.orders o where o.id = p_order_id and o.restaurant_id = v_rid for update;
+  if not found or not public.fn_order_visible(v_o.created_by, v_o.station_ids) then perform public.fn_err('not_found'); end if;
+  if v_o.status = 'cancelled' then
+    return jsonb_build_object('order_id', v_o.id, 'order_no', v_o.order_no, 'status', v_o.status, 'reversed_movements', 0,
+                              'already_cancelled', true);
+  end if;
+  if v_day is null or v_o.day_session_id is distinct from v_day then perform public.fn_err('day_closed', 'order business day is closed'); end if;
+  if v_o.payment_status <> 'unpaid'
+     or exists (select 1 from public.payments p where p.order_id = v_o.id and p.restaurant_id = v_rid and p.kind <> 'reversal'
+                and not exists (select 1 from public.payments r where r.reversed_payment_id = p.id and r.restaurant_id = v_rid)) then
+    perform public.fn_err('order_not_cancellable', 'payment_recorded');
+  end if;
+  if v_o.status <> 'submitted'
+     or exists (select 1 from public.order_items oi where oi.order_id = v_o.id and oi.restaurant_id = v_rid
+                and oi.item_status not in ('pending', 'cancelled')) then
+    perform public.fn_err('order_not_cancellable', 'in_preparation');
+  end if;
+  if v_o.stock_consumed then
+    v_n := public.fn_reverse_order_consumption(v_o.id);
+  end if;
+  update public.order_items set item_status = 'cancelled'
+  where order_id = v_o.id and restaurant_id = v_rid and item_status = 'pending';
+  update public.orders
+     set status = 'cancelled', cancelled_at = now(), cancelled_by = (select auth.uid()), cancel_reason = v_reason, stock_consumed = false
+   where id = v_o.id and restaurant_id = v_rid;
+  perform public.fn_write_audit('order.cancelled', jsonb_build_object('order_id', v_o.id, 'order_no', v_o.order_no, 'reason', v_reason,
+                                'total', v_o.total, 'reversed_movements', v_n));
+  return jsonb_build_object('order_id', v_o.id, 'order_no', v_o.order_no, 'status', 'cancelled', 'reversed_movements', v_n,
+                            'already_cancelled', false);
+end;
+$$;
+
+create or replace function public.fn_set_station_items_status(p_order_id uuid, p_station_id uuid, p_status text)
+returns jsonb
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  v_rid uuid := public.fn_tenant_status_guard(true);
+  v_o public.orders%rowtype;
+  v_day uuid;
+  v_n integer;
+  v_order_status text;
+begin
+  if not public.has_permission('orders.view') then perform public.fn_err('permission_denied'); end if;
+  if p_order_id is null then perform public.fn_err('invalid_input', 'order_id'); end if;
+  if p_status is null or p_status not in ('preparing', 'ready') then perform public.fn_err('invalid_input', 'status'); end if;
+  if p_station_id is null or not public.has_station_access(p_station_id)
+     or not exists (select 1 from public.stations st where st.id = p_station_id and st.restaurant_id = v_rid) then
+    perform public.fn_err('permission_denied', 'station');
+  end if;
+  select d.id into v_day from public.day_sessions d where d.restaurant_id = v_rid and d.status = 'open' for share;
+  select * into v_o from public.orders o where o.id = p_order_id and o.restaurant_id = v_rid for update;
+  if not found or not exists (select 1 from public.order_items oi where oi.order_id = v_o.id and oi.restaurant_id = v_rid
+                              and oi.station_id = p_station_id) then
+    perform public.fn_err('not_found');
+  end if;
+  if v_day is null or v_o.day_session_id is distinct from v_day then perform public.fn_err('day_closed', 'order business day is closed'); end if;
+  if v_o.status in ('cancelled', 'served') then perform public.fn_err('invalid_state_transition', 'order_' || v_o.status); end if;
+  if p_status = 'preparing' then
+    update public.order_items set item_status = 'preparing', started_at = now()
+    where order_id = v_o.id and restaurant_id = v_rid and station_id = p_station_id and item_status = 'pending';
+  else
+    update public.order_items set item_status = 'ready', ready_at = now(), started_at = coalesce(started_at, now())
+    where order_id = v_o.id and restaurant_id = v_rid and station_id = p_station_id and item_status in ('pending', 'preparing');
+  end if;
+  get diagnostics v_n = row_count;
+  if v_n = 0 then perform public.fn_err('invalid_state_transition', 'no_lines_to_' || p_status); end if;
+  v_order_status := v_o.status;
+  if not exists (select 1 from public.order_items oi where oi.order_id = v_o.id and oi.restaurant_id = v_rid
+                 and oi.item_status in ('pending', 'preparing')) then
+    v_order_status := 'ready';
+    update public.orders set status = 'ready', ready_at = now() where id = v_o.id and restaurant_id = v_rid;
+  elsif v_o.status = 'submitted' then
+    v_order_status := 'preparing';
+    update public.orders set status = 'preparing' where id = v_o.id and restaurant_id = v_rid;
+  end if;
+  perform public.fn_write_audit('order.station_status', jsonb_build_object('order_id', v_o.id, 'order_no', v_o.order_no,
+                                'station_id', p_station_id, 'status', p_status, 'lines', v_n, 'order_status', v_order_status));
+  return public.fn_order_json(v_o.id, p_station_id);
+end;
+$$;
+
+create or replace function public.fn_serve_order(p_order_id uuid)
+returns jsonb
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  v_rid uuid := public.fn_tenant_status_guard(true);
+  v_o public.orders%rowtype;
+  v_day uuid;
+begin
+  if not public.has_permission('orders.create') then perform public.fn_err('permission_denied'); end if;
+  if p_order_id is null then perform public.fn_err('invalid_input', 'order_id'); end if;
+  select d.id into v_day from public.day_sessions d where d.restaurant_id = v_rid and d.status = 'open' for share;
+  select * into v_o from public.orders o where o.id = p_order_id and o.restaurant_id = v_rid for update;
+  if not found or not (public.has_permission('orders.view')
+                       and (public.has_permission('orders.view_all') or v_o.created_by = (select auth.uid()))) then
+    perform public.fn_err('not_found');
+  end if;
+  if v_day is null or v_o.day_session_id is distinct from v_day then perform public.fn_err('day_closed', 'order business day is closed'); end if;
+  if v_o.status <> 'ready' then perform public.fn_err('invalid_state_transition', 'order_' || v_o.status); end if;
+  update public.order_items set item_status = 'served', served_at = now()
+  where order_id = v_o.id and restaurant_id = v_rid and item_status = 'ready';
+  update public.orders set status = 'served', served_at = now() where id = v_o.id and restaurant_id = v_rid;
+  perform public.fn_write_audit('order.served', jsonb_build_object('order_id', v_o.id, 'order_no', v_o.order_no));
+  return public.fn_order_json(v_o.id);
+end;
+$$;

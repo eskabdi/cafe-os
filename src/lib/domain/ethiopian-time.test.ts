@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   ethiopianClock,
   formatEthiopianDateTime,
+  formatEthiopianTime,
   formatInternationalDateTime,
   toEthiopianDate,
 } from './ethiopian-time'
@@ -24,6 +25,8 @@ describe('Ethiopian clock', () => {
     expect(ethiopianClock(0, 0)).toBe('6:00 ለሊት')
     expect(ethiopianClock(6, 30)).toBe('12:30 ጠዋት')
     expect(ethiopianClock(15, 5)).toBe('9:05 ከሰዓት')
+    expect(ethiopianClock(18, 0)).toBe('12:00 ማታ')
+    expect(formatEthiopianTime('2026-09-23T04:00:00Z')).toBe('1:00 ጠዋት')
   })
   it('formats an instant in the restaurant time zone with Arabic numerals', () => {
     // 16:05 UTC = 19:05 in Addis Ababa (UTC+3)

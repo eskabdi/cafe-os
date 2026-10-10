@@ -2,7 +2,7 @@
 -- rules, tendered / change, idempotency, open day, order state), fn_reverse_payment (compensating row, step-up, once only),
 -- fn_get_receipt, RLS reads, cross-tenant / IDOR, audit. Gate: the complete order-to-payment flow.
 begin;
-select plan(46);
+select plan(58);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -133,6 +133,71 @@ select is(tests.ev((select a from _f), 'payment.reversed'), 1, 'one reversal aud
 select is((select string_agg(kind || ':' || amount::text, ',' order by created_at, receipt_no) from public.payments where order_id = tests.nv('o1')),
           (select format('order_payment:%s,reversal:%s,order_payment:%s', total, total, total) from public.orders where id = tests.nv('o1')),
           'gate: the full order-to-payment history of o1 is consistent');
+
+-- ═════════ review follow-ups (0034 r2) ═════════
+select tests.authenticate_as((select a_waiter from _f));
+insert into _n select 'o4', public.fn_submit_order(tests.cart(array['Macchiato:1']), 'pay-order-0004') ->> 'id';
+insert into _n select 'o5', public.fn_submit_order(tests.cart(array['Macchiato:1']), 'pay-order-0005') ->> 'id';
+insert into _n select 'o6', public.fn_submit_order(tests.cart(array['Macchiato:1']), 'pay-order-0006') ->> 'id';
+select tests.clear_auth();
+select tests.authenticate_as((select a_cashier from _f));
+select is(tests.run(format($q$select public.fn_confirm_payment(%L, %L, %L, 'pay-key-long-0001')$q$, tests.nv('o4'), tests.nv('tele'), repeat('x', 121))),
+          'P0001|invalid_input|reference', 'a reference longer than 120 characters is refused');
+select is(tests.run(format($q$select public.fn_confirm_payment(%L, %L, %L, 'pay-key-ctrl-0001')$q$, tests.nv('o4'), tests.nv('tele'), 'TX' || chr(10) || 'X')),
+          'P0001|invalid_input|reference', 'a reference with a control character is refused');
+select tests.clear_auth();
+update public.payment_methods set is_active = false where id = tests.nv('tele');
+select tests.authenticate_as((select a_cashier from _f));
+select is(tests.run(format($q$select public.fn_confirm_payment(%L, %L, 'TX-9', 'pay-key-inact-001')$q$, tests.nv('o4'), tests.nv('tele'))),
+          'P0001|invalid_input|payment_method_id', 'an inactive payment method is refused');
+select tests.clear_auth();
+update public.payment_methods set is_active = true where id = tests.nv('tele');
+select tests.authenticate_as((select a_cashier from _f));
+insert into _n select 'r4', public.fn_confirm_payment(tests.nv('o4'), tests.nv('cash'), null, 'pay-key-o4-00001')::text;
+insert into _n select 'r5', public.fn_confirm_payment(tests.nv('o5'), tests.nv('cash'), null, 'pay-key-o5-00001')::text;
+select tests.clear_auth();
+-- step-up: an aal1 session of the admin is refused
+select tests.authenticate_as((select a_admin from _f));
+select ok(tests.run(format($q$select public.fn_reverse_payment(%L, 'needs a code', 'rev-key-aal1-001')$q$, tests.jv('r4') ->> 'payment_id'))
+          ~ '^P0001\|(mfa_required|step_up_required)\|', 'reversal without a recent authenticator code is refused');
+select tests.clear_auth();
+select tests.aal2((select a_admin from _f));
+select lives_ok(format($q$select public.fn_reverse_payment(%L, 'wrong table', 'rev-key-o4-0001')$q$, tests.jv('r4') ->> 'payment_id'), 'reverse o4');
+select tests.clear_auth();
+-- a reversed (net unpaid) order whose lines are untouched can be cancelled
+select tests.authenticate_as((select a_waiter from _f));
+select is((public.fn_cancel_order(tests.nv('o4'), 'customer left') ->> 'status'), 'cancelled', 'a reversed order can be cancelled (net payment is zero)');
+select tests.clear_auth();
+-- replay of a confirmation after its reversal shows the CURRENT state of the receipt
+select tests.aal2((select a_admin from _f));
+select lives_ok(format($q$select public.fn_reverse_payment(%L, 'mistake again', 'rev-key-o5-0001')$q$, tests.jv('r5') ->> 'payment_id'), 'reverse o5');
+select tests.clear_auth();
+select tests.authenticate_as((select a_cashier from _f));
+select is((public.fn_confirm_payment(tests.nv('o5'), tests.nv('cash'), null, 'pay-key-o5-00001') ->> 'reversed'), 'true',
+          'a replayed confirmation is rebuilt: it shows the payment as reversed');
+select is(tests.run(format($q$select public.fn_confirm_payment(%L, %L, null, 'pay-key-o4-00001')$q$, tests.nv('o6'), tests.nv('cash'))), 'P0001|idempotency_conflict|',
+          'the same key from the same actor with another payload conflicts');
+insert into _n select 'r6', public.fn_confirm_payment(tests.nv('o5'), tests.nv('cash'), null, 'pay-key-o5-00002')::text;
+select tests.clear_auth();
+
+-- ═════════ closed business day ═════════
+update public.day_sessions set status = 'closed', closed_at = now(), closed_by = (select a_admin from _f), order_count = 0, gross_collected = 0, cash_collected = 0,
+       cash_expenses = 0, expenses_total = 0, expected_cash = 0, counted_cash = 0, cash_variance = 0, net_profit = 0, inventory_variance = 0,
+       station_snapshot = '[]', expense_snapshot = '[]', payment_snapshot = '[]'
+where restaurant_id = (select a from _f) and status = 'open';
+select tests.authenticate_as((select a_cashier from _f));
+select is(tests.run(format($q$select public.fn_confirm_payment(%L, %L, null, 'pay-key-closed-01')$q$, tests.nv('o6'), tests.nv('cash'))),
+          'P0001|day_closed|no open business day', 'no open day: no payment');
+select tests.clear_auth();
+insert into public.day_sessions (restaurant_id, day_no, opened_by) select a, 99, a_admin from _f;
+select tests.authenticate_as((select a_cashier from _f));
+select is(tests.run(format($q$select public.fn_confirm_payment(%L, %L, null, 'pay-key-closed-02')$q$, tests.nv('o6'), tests.nv('cash'))),
+          'P0001|day_closed|order business day is closed', 'an order of a closed day cannot be paid in the new day');
+select tests.clear_auth();
+select tests.aal2((select a_admin from _f));
+select is(tests.run(format($q$select public.fn_reverse_payment(%L, 'late refund', 'rev-key-closed-01')$q$, tests.jv('r6') ->> 'payment_id')),
+          'P0001|day_closed|payment business day is closed', 'a payment of a closed day cannot be reversed (frozen with its day)');
+select tests.clear_auth();
 
 select * from finish();
 rollback;

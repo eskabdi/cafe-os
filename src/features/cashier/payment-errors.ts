@@ -5,7 +5,11 @@ export function paymentErrorMessage(err: unknown): string {
   const { code, detail } = errorCode(err)
   switch (code) {
     case 'day_closed':
-      return 'There is no open business day. Ask a manager to open the day, then take the payment.'
+      return detail === 'payment business day is closed'
+        ? 'This payment belongs to a closed business day and can no longer be reversed here.'
+        : detail === 'order business day is closed'
+          ? 'This order belongs to a closed business day and can no longer be paid here.'
+          : 'There is no open business day. Ask a manager to open the day, then take the payment.'
     case 'order_not_payable':
       return detail === 'paid'
         ? 'This order is already paid. Refresh the list.'
@@ -33,7 +37,9 @@ export function paymentErrorMessage(err: unknown): string {
         ? 'This payment has already been reversed.'
         : detail === 'not_an_order_payment'
           ? 'Only an order payment can be reversed here.'
-          : 'The payment is being processed. Wait a moment and try again.'
+          : detail === 'order_not_paid'
+            ? 'This order is not marked as paid, so the payment cannot be reversed here.'
+            : 'The payment is being processed. Wait a moment and try again.'
     case 'permission_denied':
       return 'You do not have permission to do this.'
     case 'mfa_required':
@@ -50,9 +56,9 @@ export function paymentErrorMessage(err: unknown): string {
       return 'Your session has ended. Sign in again.'
     case 'network':
     case 'rpc_failed':
-      return 'The server could not be reached. The payment was NOT confirmed; try again (it will not be charged twice).'
+      return 'We could not confirm whether this went through. Press Try again: it will not be recorded twice.'
     default:
-      return 'Something went wrong. Try again; the payment will not be charged twice.'
+      return 'We could not confirm whether this went through. Press Try again: it will not be recorded twice.'
   }
 }
 

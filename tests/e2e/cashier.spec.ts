@@ -17,8 +17,13 @@ const ORDER = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const M_AMOLE = '11111111-1111-4111-8111-111111111111'
 const M_CASH = '22222222-2222-4222-8222-222222222222'
 const PAY = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+const REV = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
 
-async function setup(page: Page, opts: { permissions?: string[]; failFirst?: boolean } = {}) {
+async function setup(
+  page: Page,
+  opts: { permissions?: string[]; failFirst?: boolean; history?: boolean } = {},
+) {
+  const reversals: Array<Record<string, unknown>> = []
   const paid: Array<Record<string, unknown>> = []
   const user = {
     id: 'u-1',
@@ -191,6 +196,18 @@ async function setup(page: Page, opts: { permissions?: string[]; failFirst?: boo
           ),
         )
       }
+      if (name === 'fn_reverse_payment') {
+        reversals.push(req.postDataJSON() as Record<string, unknown>)
+        return r.fulfill(
+          json(200, {
+            ...receipt('Cash Drawer', 'wrong table', null),
+            payment_id: REV,
+            receipt_no: 'RCT-0008',
+            kind: 'reversal',
+            reversed_payment_id: PAY,
+          }),
+        )
+      }
       return r.fulfill(json(200, null))
     }
     if (name === 'payment_methods') return r.fulfill(json(200, methods))
@@ -198,10 +215,31 @@ async function setup(page: Page, opts: { permissions?: string[]; failFirst?: boo
       return r.fulfill(
         json(200, url.searchParams.has('id') ? detail : paid.length && !opts.failFirst ? [] : [order]),
       )
-    if (name === 'payments') return r.fulfill(json(200, []))
+    if (name === 'payments')
+      return r.fulfill(
+        json(
+          200,
+          opts.history
+            ? [
+                {
+                  id: PAY,
+                  receipt_no: 'RCT-0007',
+                  kind: 'order_payment',
+                  amount: '173.65',
+                  method_name_snapshot: 'Cash Drawer',
+                  reference: null,
+                  reversed_payment_id: null,
+                  order_id: ORDER,
+                  created_at: '2026-10-10T16:05:00Z',
+                  orders: { order_no: 'ORD-0042' },
+                },
+              ]
+            : [],
+        ),
+      )
     return r.fulfill(json(200, []))
   })
-  return paid
+  return Object.assign(paid, { reversals })
 }
 
 test('pays an order with a method created as data (Amole): reference required, intent only, printable receipt', async ({
@@ -215,7 +253,8 @@ test('pays an order with a method created as data (Amole): reference required, i
     .getByRole('button', { name: /ORD-0042/ })
     .click()
   await expect(page.getByRole('list', { name: 'Order lines' })).toContainText('Macchiato')
-  await page.getByRole('radio', { name: 'Amole' }).click()
+  await page.locator('label', { hasText: 'Amole' }).click()
+  await expect(page.getByRole('radio', { name: 'Amole' })).toBeChecked()
   const confirm = page.getByRole('button', { name: /Confirm payment/ })
   await expect(confirm).toBeDisabled() // the row says a reference is required
   await page.getByLabel('Reference').fill('AM-998877')
@@ -250,7 +289,7 @@ test('cash-drawer method: change preview, and a retry after a failure reuses the
     .getByRole('list', { name: 'Unpaid orders' })
     .getByRole('button', { name: /ORD-0042/ })
     .click()
-  await page.getByRole('radio', { name: 'Cash Drawer' }).click()
+  await page.locator('label', { hasText: 'Cash Drawer' }).click()
   await page.getByLabel('Amount received (ETB)').fill('200')
   await expect(page.getByText('Change:')).toContainText('26.35')
   await page.getByRole('button', { name: /Confirm payment/ }).click()
@@ -267,4 +306,29 @@ test('without payments.create the cashier is not authorised', async ({ page }) =
   await setup(page, { permissions: ['orders.view'] })
   await page.goto('/r/demo-cafe/cashier')
   await expect(page.getByRole('heading', { name: 'Not authorised' })).toBeVisible()
+})
+
+test('reversal: a reason is required, the server gets the payment id and reason only, the reversal receipt is shown', async ({
+  page,
+}) => {
+  const paid = await setup(page, {
+    history: true,
+    permissions: ['payments.create', 'payments.view', 'payments.reverse', 'orders.view', 'orders.view_all'],
+  })
+  await page.goto('/r/demo-cafe/cashier')
+  const history = page.getByRole('table', { name: 'Payments of the open business day' })
+  await expect(history).toContainText('RCT-0007')
+  await expect(history).toContainText('1:05 ማታ')
+  await history.getByRole('button', { name: 'Reverse' }).click()
+  const dialog = page.getByRole('dialog', { name: /Reverse payment RCT-0007/ })
+  const submit = dialog.getByRole('button', { name: 'Reverse payment' })
+  await expect(submit).toBeDisabled()
+  await dialog.getByLabel('Reason').fill('wrong table')
+  await submit.click()
+  await expect(page.getByRole('article', { name: 'Receipt RCT-0008' })).toContainText('Payment reversal')
+  expect(paid.reversals).toHaveLength(1)
+  const body = paid.reversals[0] as Record<string, unknown>
+  expect(Object.keys(body).sort()).toEqual(['p_idempotency_key', 'p_payment_id', 'p_reason'])
+  expect(body.p_payment_id).toBe(PAY)
+  expect(body.p_reason).toBe('wrong table')
 })

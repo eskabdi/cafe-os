@@ -13,6 +13,7 @@ export const paymentsKeys = {
   order: (rid: string, orderId: string) => ['cashier', rid, 'order', orderId] as const,
   history: (rid: string, dayId: string) => ['cashier', rid, 'history', dayId] as const,
   receipt: (rid: string, paymentId: string) => ['cashier', rid, 'receipt', paymentId] as const,
+  timezone: (rid: string) => ['tenant-timezone', rid] as const,
 }
 
 export const paymentMethodSchema = z.object({
@@ -56,6 +57,8 @@ const unpaidOrderSchema = z.object({
 })
 export type UnpaidOrder = z.infer<typeof unpaidOrderSchema>
 
+export const UNPAID_LIMIT = 200
+
 /** Unpaid, not cancelled orders of the open business day with something to pay, oldest first (RLS orders_select). */
 export async function fetchUnpaidOrders(dayId: string): Promise<UnpaidOrder[]> {
   const { data, error } = await supabase
@@ -66,7 +69,7 @@ export async function fetchUnpaidOrders(dayId: string): Promise<UnpaidOrder[]> {
     .neq('status', 'cancelled')
     .gt('total', 0)
     .order('created_at', { ascending: true })
-    .limit(200)
+    .limit(UNPAID_LIMIT)
   if (error) throw new Error('orders_unavailable')
   return z.array(unpaidOrderSchema).parse(data ?? [])
 }
@@ -201,6 +204,14 @@ export async function fetchDayPayments(dayId: string): Promise<PaymentRow[]> {
     .limit(300)
   if (error) throw new Error('payments_unavailable')
   return z.array(paymentRowSchema).parse(data ?? [])
+}
+
+/** The tenant's time zone (restaurants.timezone, RLS: own restaurant) for local dates and the Ethiopian clock. */
+export async function fetchTenantTimezone(): Promise<string> {
+  const { data, error } = await supabase.from('restaurants').select('timezone').maybeSingle()
+  if (error) throw new Error('restaurant_unavailable')
+  const tz = (data as { timezone?: unknown } | null)?.timezone
+  return typeof tz === 'string' && /^[A-Za-z_]+(?:\/[A-Za-z0-9_+-]+){0,2}$/.test(tz) ? tz : 'Africa/Addis_Ababa'
 }
 
 /** Realtime: orders and payments of the tenant (RLS-filtered) invalidate the cashier lists. Unique topic per mount. */

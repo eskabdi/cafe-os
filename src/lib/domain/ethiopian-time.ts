@@ -120,3 +120,11 @@ export function formatInternationalDateTime(iso: string, timeZone = 'Africa/Addi
   const two = (n: number) => String(n).padStart(2, '0')
   return `${p.year}-${two(p.month)}-${two(p.day)} ${two(p.hour)}:${two(p.minute)}`
 }
+
+/** "1:05 ማታ" (Ethiopian clock only) for an instant in the restaurant's time zone. */
+export function formatEthiopianTime(iso: string, timeZone = 'Africa/Addis_Ababa'): string {
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return ''
+  const p = localParts(at, timeZone)
+  return ethiopianClock(p.hour, p.minute)
+}

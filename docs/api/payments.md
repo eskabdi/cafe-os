@@ -8,15 +8,20 @@ All endpoints are **Private** (signed-in tenant user) PostgREST RPCs: `POST /res
 |---|---|---|
 | `fn_confirm_payment(p_order_id, p_payment_method_id, p_reference, p_idempotency_key, p_tendered=null)` | `payments.create` | pays the order IN FULL: amount = `orders.total` (server-side), `RCT-nnnn`, method name / cash-drawer snapshots, `orders.payment_status = 'paid'`, audit `payment.confirmed`; returns the receipt + `tendered` / `change`. Replay of the same key returns the same receipt (`replayed: true`) |
 | `fn_reverse_payment(p_payment_id, p_reason, p_idempotency_key)` | `payments.reverse` + step-up (TOTP ≤ 12 h) | appends a compensating `reversal` row (same amount / method, own receipt number, reason as reference) and sets the order back to `unpaid`; one reversal per payment (unique index); audit `payment.reversed` |
-| `fn_get_receipt(p_payment_id)` | `payments.view` or `payments.create` | the receipt document of a payment of the caller's tenant |
+| `fn_get_receipt(p_payment_id)` | `payments.view` (any receipt of the tenant) or `payments.create` (only receipts the caller issued) | the receipt document |
 
 Rules:
 - The payment method is a tenant row (UUID), never a name. `requires_reference` → `p_reference` is required (≤ 120 chars, no control
   characters). `p_tendered` is accepted only for an `affects_cash_drawer` method and must cover the total; the change is returned, not stored.
 - The client never sends an amount to charge. Money is `numeric`; the client change preview is display-only.
-- Payments are immutable: never updated or deleted; corrections are reversals. A payment lands in the OPEN business day; a reversal of a
-  payment from an earlier day lands in today's day.
-- Lock order: idempotency key → open day (FOR SHARE) → order (FOR UPDATE) → payment method (FOR SHARE) → counter.
+- Payments are immutable: never updated or deleted; corrections are reversals. A payment lands in the OPEN business day, and only an
+  order of the open day can be paid or have its payment reversed: an order / payment of a closed day answers `day_closed`
+  (`order business day is closed` / `payment business day is closed`); closed-day corrections belong to the day-close phase.
+- A reversal requires the order to be `paid` (`invalid_state/order_not_paid` otherwise). After a reversal the order is unpaid and,
+  if no line has started, can be cancelled (`fn_cancel_order` checks the NET payment).
+- Replays rebuild the receipt (current `reversed` flag); the fingerprint includes the actor, so another user reusing a key conflicts.
+- Lock order (every order command, including the 0034 redefinitions of `fn_cancel_order`, `fn_set_station_items_status`,
+  `fn_serve_order`, and Phase 9 `fn_close_day`): idempotency key → open day (FOR SHARE) → order (FOR UPDATE) → payment method (FOR SHARE) → counter.
 
 ```http
 POST /rest/v1/rpc/fn_confirm_payment
@@ -28,8 +33,8 @@ POST /rest/v1/rpc/fn_confirm_payment
 400 { "code": "P0001", "message": "insufficient_tendered", "details": null }
 ```
 
-Errors: `day_closed`, `order_not_payable` (`cancelled|paid|installment|zero_total`), `insufficient_tendered`, `idempotency_conflict`,
-`invalid_state` (`idempotency_pending|already_reversed|not_an_order_payment`), `invalid_input`
+Errors: `day_closed` (`no open business day|order business day is closed|payment business day is closed`), `order_not_payable` (`cancelled|paid|installment|zero_total`), `insufficient_tendered`, `idempotency_conflict`,
+`invalid_state` (`idempotency_pending|already_reversed|not_an_order_payment|order_not_paid`), `invalid_input`
 (`order_id|payment_method_id|reference|tendered|payment_id|reason`), `permission_denied`, `step_up_required`, `mfa_required`, `not_found`,
 `tenant_suspended`, `tenant_read_only`.
 

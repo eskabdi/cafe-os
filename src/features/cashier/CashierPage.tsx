@@ -16,7 +16,7 @@ import { useAuth, useStepUp } from '@/features/auth'
 import { EmptyState, ErrorState, PageSkeleton } from '@/features/shell/states'
 import { iconForSlug } from '@/features/terminal/tile-icons'
 import { formatEtb, parseDecimal } from '@/lib/domain/decimal'
-import { formatInternationalDateTime } from '@/lib/domain/ethiopian-time'
+import { formatEthiopianTime, formatInternationalDateTime } from '@/lib/domain/ethiopian-time'
 import { errorCode } from '@/lib/supabase/menu-inventory-errors'
 import { fetchOpenDay, ordersKeys } from '@/lib/supabase/orders'
 import {
@@ -25,10 +25,13 @@ import {
   fetchOrderDetail,
   fetchPaymentMethods,
   fetchReceipt,
+  fetchTenantTimezone,
   fetchUnpaidOrders,
   paymentsKeys,
   reversePayment,
   subscribeToCashier,
+  UNPAID_LIMIT,
+  type ConfirmPaymentInput,
   type PaymentMethod,
   type PaymentRow,
   type Receipt,
@@ -69,6 +72,13 @@ export function CashierPage() {
     queryFn: () => fetchUnpaidOrders(dayId),
     enabled: Boolean(rid && dayId),
   })
+  const tz = useQuery({
+    queryKey: paymentsKeys.timezone(rid),
+    queryFn: fetchTenantTimezone,
+    enabled: Boolean(rid),
+    staleTime: 300_000,
+  })
+  const timeZone = tz.data ?? 'Africa/Addis_Ababa'
   const canViewHistory = can('payments.view')
   const history = useQuery({
     queryKey: paymentsKeys.history(rid, dayId),
@@ -85,6 +95,8 @@ export function CashierPage() {
   const [unsure, setUnsure] = useState(false)
   const [receipt, setReceipt] = useState<Receipt | null>(null)
   const idemKey = useRef(newKey())
+  // the exact request of the last attempt: "Try again" after an unknown outcome resends it unchanged (same key, same payload)
+  const lastRequest = useRef<ConfirmPaymentInput | null>(null)
 
   const detail = useQuery({
     queryKey: paymentsKeys.order(rid, orderId ?? ''),
@@ -114,6 +126,7 @@ export function CashierPage() {
     setError(null)
   }
   const reset = () => {
+    lastRequest.current = null
     setOrderId(null)
     setMethodId(null)
     setReference('')
@@ -124,14 +137,20 @@ export function CashierPage() {
   }
 
   const pay = useMutation({
-    mutationFn: () =>
-      confirmPayment({
-        orderId: orderId ?? '',
-        paymentMethodId: methodId ?? '',
-        reference: reference.trim() || null,
-        tendered: method?.affects_cash_drawer ? tenderedValue : null,
-        idempotencyKey: idemKey.current,
-      }),
+    mutationFn: (retry: boolean) => {
+      const req: ConfirmPaymentInput =
+        retry && lastRequest.current
+          ? lastRequest.current
+          : {
+              orderId: orderId ?? '',
+              paymentMethodId: methodId ?? '',
+              reference: reference.trim() || null,
+              tendered: method?.affects_cash_drawer ? tenderedValue : null,
+              idempotencyKey: idemKey.current,
+            }
+      lastRequest.current = req
+      return confirmPayment(req)
+    },
     onSuccess: (r) => {
       reset()
       setReceipt(r)
@@ -190,39 +209,46 @@ export function CashierPage() {
         ) : unpaid.data.length === 0 ? (
           <EmptyState title="No unpaid orders">New orders appear here as soon as they are sent.</EmptyState>
         ) : (
-          <ul aria-label="Unpaid orders" className="space-y-2">
-            {unpaid.data.map((o) => (
-              <li key={o.id}>
-                <button
-                  type="button"
-                  aria-pressed={orderId === o.id}
-                  disabled={unsure || pay.isPending}
-                  onClick={() => {
-                    if (orderId === o.id) return
-                    setOrderId(o.id)
-                    setReference('')
-                    setTendered('')
-                    touch()
-                  }}
-                  className={`flex min-h-[56px] w-full items-center justify-between gap-3 rounded-md border px-4 py-2 text-left ${orderId === o.id ? 'border-primary bg-primary/5' : 'border-line bg-white'}`}
-                >
-                  <span>
-                    <span className="block font-medium text-ink">{o.order_no}</span>
-                    <span className="block text-xs text-muted-foreground">
-                      {[
-                        o.table_label_snapshot,
-                        o.created_by_name_snapshot,
-                        formatInternationalDateTime(o.created_at).slice(11),
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
+          <>
+            {unpaid.data.length >= UNPAID_LIMIT && (
+              <p role="status" className="text-sm text-muted-foreground">
+                Showing the {UNPAID_LIMIT} oldest unpaid orders. Take their payments to see the rest.
+              </p>
+            )}
+            <ul aria-label="Unpaid orders" className="space-y-2">
+              {unpaid.data.map((o) => (
+                <li key={o.id}>
+                  <button
+                    type="button"
+                    aria-pressed={orderId === o.id}
+                    disabled={unsure || pay.isPending}
+                    onClick={() => {
+                      if (orderId === o.id) return
+                      setOrderId(o.id)
+                      setReference('')
+                      setTendered('')
+                      touch()
+                    }}
+                    className={`flex min-h-[56px] w-full items-center justify-between gap-3 rounded-md border px-4 py-2 text-left ${orderId === o.id ? 'border-primary bg-primary/5' : 'border-line bg-white'}`}
+                  >
+                    <span>
+                      <span className="block font-medium text-ink">{o.order_no}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {[
+                          o.table_label_snapshot,
+                          o.created_by_name_snapshot,
+                          formatEthiopianTime(o.created_at, timeZone),
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </span>
                     </span>
-                  </span>
-                  <span className="font-semibold tabular-nums">{formatEtb(o.total)}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
+                    <span className="font-semibold tabular-nums">{formatEtb(o.total)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
         )}
       </section>
 
@@ -271,31 +297,36 @@ export function CashierPage() {
                   No payment method is active. Ask an administrator to add one.
                 </p>
               ) : (
-                <div role="radiogroup" aria-label="Payment method" className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   {(methods.data ?? []).map((m) => {
                     const Icon = iconForSlug(m.icon, Wallet)
                     const selected = methodId === m.id
                     return (
-                      <button
+                      <label
                         key={m.id}
-                        type="button"
-                        role="radio"
-                        aria-checked={selected}
-                        onClick={() => {
-                          setMethodId(m.id)
-                          if (!m.affects_cash_drawer) setTendered('')
-                          touch()
-                        }}
-                        className={`flex min-h-[48px] items-center gap-2 rounded-md border px-3 text-sm font-medium ${selected ? 'border-primary bg-primary text-white' : 'border-line bg-white text-ink'}`}
+                        className={`flex min-h-[48px] cursor-pointer items-center gap-2 rounded-md border px-3 text-sm font-medium focus-within:ring-2 focus-within:ring-ring ${selected ? 'border-primary bg-primary text-white' : 'border-line bg-white text-ink'}`}
                         style={!selected && m.color ? { borderColor: m.color } : undefined}
                       >
+                        {/* native radio: arrow keys and one tab stop for the group come from the browser */}
+                        <input
+                          type="radio"
+                          name="payment-method"
+                          value={m.id}
+                          checked={selected}
+                          className="sr-only"
+                          onChange={() => {
+                            setMethodId(m.id)
+                            if (!m.affects_cash_drawer) setTendered('')
+                            touch()
+                          }}
+                        />
                         <Icon
                           aria-hidden="true"
                           className="h-4 w-4 shrink-0"
                           style={!selected && m.color ? { color: m.color } : undefined}
                         />
                         <span className="truncate">{m.name}</span>
-                      </button>
+                      </label>
                     )
                   })}
                 </div>
@@ -348,16 +379,19 @@ export function CashierPage() {
                   )}
                 </FormField>
               )}
-              {changePreview !== null && changePreview >= 0 && (
-                <p className="text-sm text-ink" aria-live="polite">
-                  Change: <span className="font-semibold tabular-nums">{formatEtb(changePreview)}</span>
-                </p>
-              )}
+              {/* the live region stays mounted so every change of the amount is announced */}
+              <p className="min-h-[1.25rem] text-sm text-ink" aria-live="polite">
+                {changePreview !== null && changePreview >= 0 && (
+                  <>
+                    Change: <span className="font-semibold tabular-nums">{formatEtb(changePreview)}</span>
+                  </>
+                )}
+              </p>
             </fieldset>
             <FormError message={error} />
             {unsure ? (
               <div className="flex flex-wrap gap-2">
-                <Button type="button" onClick={() => pay.mutate()} disabled={pay.isPending}>
+                <Button type="button" onClick={() => pay.mutate(true)} disabled={pay.isPending}>
                   Try again
                 </Button>
                 <Button
@@ -373,7 +407,7 @@ export function CashierPage() {
                 </Button>
               </div>
             ) : (
-              <Button type="button" className="w-full" disabled={!canPay} onClick={() => pay.mutate()}>
+              <Button type="button" className="w-full" disabled={!canPay} onClick={() => pay.mutate(false)}>
                 {pay.isPending
                   ? 'Confirming…'
                   : `Confirm payment${total !== null ? ` ${formatEtb(total)}` : ''}`}
@@ -391,6 +425,7 @@ export function CashierPage() {
           onRetry={() => void history.refetch()}
           canReverse={can('payments.reverse')}
           onShow={setReceipt}
+          timeZone={timeZone}
         />
       )}
 
@@ -424,6 +459,7 @@ function PaymentHistory({
   onRetry,
   canReverse,
   onShow,
+  timeZone,
 }: {
   rows: PaymentRow[] | undefined
   loading: boolean
@@ -431,6 +467,7 @@ function PaymentHistory({
   onRetry: () => void
   canReverse: boolean
   onShow: (r: Receipt) => void
+  timeZone: string
 }) {
   const qc = useQueryClient()
   const { context } = useAuth()
@@ -438,6 +475,7 @@ function PaymentHistory({
   const stepUp = useStepUp()
   const [busy, setBusy] = useState<string | null>(null)
   const [reverseFor, setReverseFor] = useState<PaymentRow | null>(null)
+  const [reverseOpen, setReverseOpen] = useState(false)
   const [reason, setReason] = useState('')
   const [reverseError, setReverseError] = useState<string | null>(null)
   const [reverseUnsure, setReverseUnsure] = useState(false)
@@ -461,6 +499,7 @@ function PaymentHistory({
   const reverse = useMutation({
     mutationFn: (p: PaymentRow) => stepUp.run(() => reversePayment(p.id, reason.trim(), reverseKey.current)),
     onSuccess: (r) => {
+      setReverseOpen(false)
       setReverseFor(null)
       setReason('')
       setReverseUnsure(false)
@@ -470,9 +509,10 @@ function PaymentHistory({
       onShow(r)
     },
     onError: (e) => {
-      const { code } = errorCode(e)
+      const { code, detail } = errorCode(e)
       setReverseError(paymentErrorMessage(e))
-      setReverseUnsure(!code || !DEFINITIVE_PAYMENT_ERRORS.has(code))
+      // same rule as the payment: an unknown outcome keeps the reason and the key until a definitive answer
+      setReverseUnsure(!code || !DEFINITIVE_PAYMENT_ERRORS.has(code) || detail === 'idempotency_pending')
     },
   })
 
@@ -481,7 +521,7 @@ function PaymentHistory({
   return (
     <section aria-labelledby="cashier-history" className="space-y-3 lg:col-span-2">
       <h2 id="cashier-history" className="text-lg font-semibold text-ink">
-        Payments today
+        Payments this business day
       </h2>
       {loading ? (
         <PageSkeleton label="Loading payments" />
@@ -535,7 +575,12 @@ function PaymentHistory({
                     <td className="px-3 py-2 text-right tabular-nums">
                       {isReversal ? `−${formatEtb(p.amount)}` : formatEtb(p.amount)}
                     </td>
-                    <td className="px-3 py-2">{formatInternationalDateTime(p.created_at).slice(11)}</td>
+                    <td className="px-3 py-2">
+                      <span className="font-amharic">{formatEthiopianTime(p.created_at, timeZone)}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {formatInternationalDateTime(p.created_at, timeZone).slice(11)}
+                      </span>
+                    </td>
                     <td className="space-x-2 whitespace-nowrap px-3 py-2 text-right">
                       <Button
                         type="button"
@@ -552,7 +597,10 @@ function PaymentHistory({
                           size="sm"
                           variant="outline"
                           onClick={() => {
+                            const resume = reverseUnsure && reverseFor?.id === p.id
                             setReverseFor(p)
+                            setReverseOpen(true)
+                            if (resume) return // an attempt with an unknown outcome: same reason, same key
                             setReason('')
                             setReverseError(null)
                             setReverseUnsure(false)
@@ -572,8 +620,8 @@ function PaymentHistory({
       )}
 
       <Dialog
-        open={reverseFor !== null}
-        onOpenChange={(o) => !o && !reverse.isPending && setReverseFor(null)}
+        open={reverseOpen && reverseFor !== null}
+        onOpenChange={(o) => !o && !reverse.isPending && setReverseOpen(false)}
       >
         <DialogContent>
           <DialogHeader>
@@ -604,7 +652,7 @@ function PaymentHistory({
               type="button"
               variant="outline"
               disabled={reverse.isPending}
-              onClick={() => setReverseFor(null)}
+              onClick={() => setReverseOpen(false)}
             >
               Cancel
             </Button>
