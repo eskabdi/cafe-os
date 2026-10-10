@@ -148,7 +148,7 @@ export async function fetchDayOrders(dayId: string): Promise<MyOrder[]> {
 /** Realtime: any change to the tenant's visible orders (RLS-filtered) invalidates the list. */
 export function subscribeToOrders(restaurantId: string, onChange: () => void): () => void {
   const channel = supabase
-    .channel(`pos-orders-${restaurantId}`)
+    .channel(`pos-orders-${restaurantId}-${crypto.randomUUID()}`)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `restaurant_id=eq.${restaurantId}` }, onChange)
     .subscribe()
   return () => {

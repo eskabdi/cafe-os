@@ -13,6 +13,13 @@ const h = vi.hoisted(() => ({
   subscribeToStations: vi.fn(() => () => {}),
 }))
 vi.mock('@/lib/supabase/client', () => ({ supabase: {} }))
+vi.mock('@/lib/supabase/kds', () => ({
+  KDS_LIMIT: 300,
+  kdsKey: (rid: string, sid: string, day: string) => ['kds', rid, sid, day],
+  fetchStationLines: () => Promise.resolve({ lines: [], truncated: false }),
+  setStationStatus: () => Promise.resolve(),
+  subscribeToStation: () => () => undefined,
+}))
 vi.mock('@/lib/supabase/stations', async (orig) => ({
   ...(await orig<typeof StationsModule>()),
   fetchActiveStations: h.fetchActiveStations,

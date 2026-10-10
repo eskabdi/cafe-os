@@ -1,5 +1,5 @@
 /**
- * The ONLY file allowed to touch localStorage (allowlisted in
+ * Per-viewer UI preferences in localStorage (allowlisted, like kiosk-token.ts and device-token.ts, in
  * scripts/check-forbidden-patterns.mjs). Per-viewer UI preferences only
  * (e.g. collapsed sidebar). Never domain data, tokens, PINs or tenant data.
  */
