@@ -10,6 +10,8 @@ export interface KdsLine {
   tableLabel: string | null
   orderType: string
   orderCreatedAt: string
+  /** The whole order's status (submitted / preparing / ready): cancel is possible only while it is 'submitted'. */
+  orderStatus: string
   lineNo: number | null
   name: string
   qty: number
@@ -23,6 +25,7 @@ export interface Ticket {
   tableLabel: string | null
   orderType: string
   createdAt: string
+  orderStatus: string
   lines: KdsLine[]
   /** The ticket's state at this station: pending until any line starts, ready only when every line is ready. */
   status: LineStatus
@@ -33,7 +36,7 @@ export function groupTickets(lines: readonly KdsLine[]): Ticket[] {
   for (const l of lines) {
     let t = byOrder.get(l.orderId)
     if (!t) {
-      t = { orderId: l.orderId, orderNo: l.orderNo, tableLabel: l.tableLabel, orderType: l.orderType, createdAt: l.orderCreatedAt, lines: [], status: 'pending' }
+      t = { orderId: l.orderId, orderNo: l.orderNo, tableLabel: l.tableLabel, orderType: l.orderType, createdAt: l.orderCreatedAt, orderStatus: l.orderStatus, lines: [], status: 'pending' }
       byOrder.set(l.orderId, t)
     }
     t.lines.push(l)

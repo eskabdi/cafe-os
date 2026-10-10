@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { ageBand, groupTickets, minutesSince, nextAction, type KdsLine } from './kds'
 
 const line = (o: Partial<KdsLine>): KdsLine => ({
-  id: 'l1', orderId: 'o1', orderNo: 'ORD-0001', tableLabel: null, orderType: 'dine-in', orderCreatedAt: '2026-10-10T08:00:00Z',
+  id: 'l1', orderId: 'o1', orderNo: 'ORD-0001', tableLabel: null, orderType: 'dine-in', orderCreatedAt: '2026-10-10T08:00:00Z', orderStatus: 'submitted',
   lineNo: 1, name: 'Item', qty: 1, note: null, status: 'pending', ...o,
 })
 

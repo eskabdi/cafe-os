@@ -117,7 +117,7 @@ export function subscribeToMenu(restaurantId: string, onChange: (table: MenuReal
   if (!isUuid(restaurantId)) return () => {}
   const filter = `restaurant_id=eq.${restaurantId}`
   const channel = supabase
-    .channel(`menu:${restaurantId}`)
+    .channel(`menu:${restaurantId}:${crypto.randomUUID()}`)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'menu_items', filter }, () => onChange('menu_items'))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'recipe_lines', filter }, () => onChange('recipe_lines'))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'categories', filter }, () => onChange('categories'))

@@ -9,6 +9,7 @@ const RID = '99999999-9999-4999-8999-999999999999'
 const GRILL = '11111111-1111-4111-8111-111111111111'
 const O1 = '22222222-2222-4222-8222-222222222222'
 const O2 = '33333333-3333-4333-8333-333333333333'
+const DAY = '44444444-4444-4444-8444-444444444444'
 
 async function setup(page: Page) {
   const calls: Array<Record<string, unknown>> = []
@@ -30,15 +31,16 @@ async function setup(page: Page) {
     station_ids: [GRILL],
     pin_change_status: 'none',
     pin_length: 4,
+    open_day: { id: DAY, day_no: 3, opened_at: '2026-10-10T05:00:00Z' },
   }
   const now = new Date().toISOString()
   const old = new Date(Date.now() - 25 * 60_000).toISOString()
   let status1 = 'pending'
   const rows = () => [
     { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1', order_id: O1, line_no: 1, name_snapshot: 'Mixed Grill', qty: 2, note: 'well done', item_status: status1,
-      orders: { order_no: 'ORD-0007', table_label_snapshot: 'T3', order_type: 'dine-in', status: 'submitted', created_at: old } },
+      orders: { order_no: 'ORD-0007', table_label_snapshot: 'T3', order_type: 'dine-in', status: 'submitted', created_at: old, day_session_id: DAY } },
     { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2', order_id: O2, line_no: 1, name_snapshot: 'Kitfo', qty: 1, note: null, item_status: 'pending',
-      orders: { order_no: 'ORD-0008', table_label_snapshot: null, order_type: 'takeaway', status: 'submitted', created_at: now } },
+      orders: { order_no: 'ORD-0008', table_label_snapshot: null, order_type: 'takeaway', status: 'submitted', created_at: now, day_session_id: DAY } },
   ]
   await page.route('**/auth/v1/**', (r) => (r.request().method() === 'OPTIONS' ? r.fulfill({ status: 204, headers: CORS }) : r.fulfill(json(200, user))))
   await page.route('**/rest/v1/**', (r) => {
@@ -49,6 +51,7 @@ async function setup(page: Page) {
     const name = parts.pop() ?? ''
     if (parts.includes('rpc')) {
       if (name === 'fn_get_session_context') return r.fulfill(json(200, context))
+      if (name === 'fn_get_open_day') return r.fulfill(json(200, context.open_day))
       if (name === 'fn_set_station_items_status') {
         const body = req.postDataJSON() as Record<string, unknown>
         calls.push(body)

@@ -30,6 +30,14 @@ export function chimeArmed(): boolean {
   return ctx !== null && ctx.state === 'running'
 }
 
+/** Notifies when the audio context starts / is suspended by the browser (background tab, iOS), so the UI never claims sound it lacks. */
+export function onChimeStateChange(cb: () => void): () => void {
+  if (!ctx) return () => undefined
+  const c = ctx
+  c.addEventListener('statechange', cb)
+  return () => c.removeEventListener('statechange', cb)
+}
+
 /** Two short rising tones (about 0.4 s). Silent when not armed. */
 export function playChime(): void {
   if (!ctx || ctx.state !== 'running') return
