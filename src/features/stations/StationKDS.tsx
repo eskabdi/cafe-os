@@ -1,14 +1,15 @@
 import { useParams } from 'react-router-dom'
-import { ComingSoonState, EmptyState, ErrorState, PageSkeleton } from '@/features/shell/states'
+import { EmptyState, ErrorState, PageSkeleton } from '@/features/shell/states'
 import { DEFAULT_STATION_ICON } from '@/features/shell/nav-config'
 import { iconForSlug } from '@/features/terminal/tile-icons'
 import { tileStyle } from '@/lib/domain/tile-style'
+import { StationTickets } from './StationTickets'
 import { useStations } from './useStations'
 
 /**
  * THE generic kitchen display for any station (`/r/<slug>/stations/:stationId`). Everything is resolved from the station
- * row by UUID: name, colour, icon. There is no per-station component and no branching on a station name. Tickets, item
- * statuses and timers arrive with the orders phase (Realtime on order_items, RLS-filtered by current_station_ids()).
+ * row by UUID: name, colour, icon. There is no per-station component and no branching on a station name. Tickets come from
+ * order_items of this station (RLS: station access), live through Realtime, with a sound when an order is fired here.
  */
 export function StationKDS() {
   const { stationId } = useParams<{ stationId: string }>()
@@ -48,11 +49,7 @@ export function StationKDS() {
           {station.description && <p className="text-sm text-muted-foreground">{station.description}</p>}
         </div>
       </header>
-      <ComingSoonState
-        level={2}
-        title="Station display"
-        summary="Live tickets, item statuses and timers for this station will appear here."
-      />
+      <StationTickets stationId={station.id} />
     </div>
   )
 }

@@ -33,3 +33,16 @@ ingredient of the cart in ONE statement (id order) → ledger. Order quotas are 
 Frontend: `/r/<slug>/pos` (`src/features/pos/PosPage.tsx`): categories and menu from the tenant's rows, cart as intent, one idempotency key
 per cart (kept across retries, renewed when the cart changes), send disabled without an open day, server totals shown after sending,
 Realtime refresh of menu and orders.
+
+## Station display (Phase 5)
+
+`/r/<slug>/stations/<stationId>` (`src/features/stations/StationTickets.tsx`) is the ONE generic board for every station row:
+- reads `order_items` of that station (`pending | preparing | ready`, order not cancelled / served) with the order header (RLS
+  `order_items_select`: `orders.view` + station access); tickets grouped per order, oldest first, age badge (10 / 20 min bands, fixed
+  status colours);
+- actions: Start / Ready → `fn_set_station_items_status(order, station, preparing|ready)`; Cancel (only with `orders.cancel`, every line
+  still pending) → `fn_cancel_order`;
+- Realtime on `order_items` filtered by `station_id` (RLS applies to every event): any change refreshes the board, an INSERT plays the
+  **order-fired chime** (owner requirement; Web Audio, armed by the "Turn sound on" button because browsers block audio without a
+  gesture; the on/off choice is a per-device UI pref);
+- a new station works without a redeploy: name, colour and icon come from its row (E2E `kds.spec.ts` uses a data-only "Grill").
