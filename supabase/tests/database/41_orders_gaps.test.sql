@@ -47,6 +47,7 @@ insert into _n select 'wait_role', (select role_id::text from public.profiles wh
 select tests.authenticate_as((select a_waiter from _f));
 insert into _n select 'oa', public.fn_submit_order(tests.cart('central-cafe', array['Doro Wat:1', 'Macchiato:1']), 'gap-order-a-0001') ->> 'id';
 insert into _n select 'ok', public.fn_submit_order(tests.cart('central-cafe', array['Doro Wat:1']), 'gap-order-k-0001') ->> 'id';
+insert into _n select 'drain', public.fn_submit_order(tests.cart('central-cafe', array['Doro Wat:1']), 'gap-order-k-0002') ->> 'id';
 insert into _n select 'oc', public.fn_submit_order(tests.cart('central-cafe', array['Shiro Wat:1']), 'gap-order-c-0001') ->> 'id';
 select tests.clear_auth();
 select tests.authenticate_as((select b_waiter from _f));
@@ -84,12 +85,12 @@ select tests.clear_auth();
 -- ═════════ station access ═════════
 update public.stations set is_active = false where id = tests.nv('a_kit');
 select tests.authenticate_as((select a_kitchen from _f));
-select is(tests.run(format($q$select public.fn_set_station_items_status(%L, %L, 'preparing')$q$, tests.nv('ok'), tests.nv('a_kit'))), 'P0001|permission_denied|station',
-          'operator with access to a DEACTIVATED station cannot drive it');
+select is(tests.run(format($q$select public.fn_set_station_items_status(%L, %L, 'preparing')$q$, tests.nv('drain'), tests.nv('a_kit'))), 'ok:1',
+          'a DEACTIVATED station still finishes the lines it already received (no order is stranded; it gets no new lines)');
 select tests.clear_auth();
 select tests.authenticate_as((select a_admin from _f));
-select is(tests.run(format($q$select public.fn_set_station_items_status(%L, %L, 'preparing')$q$, tests.nv('ok'), tests.nv('a_kit'))), 'P0001|permission_denied|station',
-          'tenant_admin (every station) is refused on a deactivated station too');
+select is(tests.run(format($q$select public.fn_set_station_items_status(%L, %L, 'preparing')$q$, tests.nv('drain'), tests.nv('a_kit'))), 'P0001|invalid_state_transition|no_lines_to_preparing',
+          'and the started lines are not started twice');
 select tests.clear_auth();
 update public.stations set is_active = true where id = tests.nv('a_kit');
 delete from public.role_station_access where role_id = tests.nv('kit_role') and station_id = tests.nv('a_kit');
@@ -158,8 +159,8 @@ select tests.clear_auth();
 
 -- ═════════ audit integrity ═════════
 select is(tests.n_order_audit((select a from _f)) || '|' || tests.n_order_audit((select b from _f)),
-          ((select a from _aud) + 3) || '|' || (select b from _aud),
-          'refused calls wrote no audit row: A gained exactly its 3 accepted order events (Kitchen start, no-view submit, cancel), B none');
+          ((select a from _aud) + 4) || '|' || (select b from _aud),
+          'refused calls wrote no audit row: A gained exactly its 4 accepted order events (2 Kitchen starts, no-view submit, cancel), B none');
 select is(tests.audit_of((select a from _f), 'order.submitted', tests.nv('oa')) || ';' || tests.audit_of((select a from _f), 'order.cancelled', tests.nv('oc'))
           || ';' || tests.audit_of((select a from _f), 'order.station_status', tests.nv('ok')),
           (select a_waiter || '/user;' || a_waiter || '/user;' || a_kitchen || '/user' from _f),

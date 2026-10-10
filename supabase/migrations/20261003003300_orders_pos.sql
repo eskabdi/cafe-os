@@ -345,7 +345,9 @@ begin
   if p_order_id is null then perform public.fn_err('invalid_input', 'order_id'); end if;
   if p_status is null or p_status not in ('preparing', 'ready') then perform public.fn_err('invalid_input', 'status'); end if;
   if p_station_id is null or not public.has_station_access(p_station_id)
-     or not exists (select 1 from public.stations st where st.id = p_station_id and st.restaurant_id = v_rid and st.is_active) then
+     -- the caller's own tenant's station; a DEACTIVATED station may still finish the lines it already received (otherwise those
+     -- orders could never become ready); it gets no new lines because fn_order_create refuses items of an inactive station
+     or not exists (select 1 from public.stations st where st.id = p_station_id and st.restaurant_id = v_rid) then
     perform public.fn_err('permission_denied', 'station');
   end if;
   select * into v_o from public.orders o where o.id = p_order_id and o.restaurant_id = v_rid for update;
