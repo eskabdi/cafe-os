@@ -100,6 +100,8 @@ const sessionContextSchema = z
       })
       .passthrough()
       .optional(),
+    // the OPEN business day (id, number, opened at) or null; Phase 4 POS refuses to submit without one (the server re-checks)
+    open_day: z.object({ id: z.string(), day_no: z.number(), opened_at: z.string() }).nullable().optional(),
     permissions: z.array(z.string()).default([]),
     station_ids: z.array(z.string()).default([]),
     tenant_writable: z.boolean().optional(),

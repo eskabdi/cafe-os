@@ -8,6 +8,9 @@
 #   * closed-day guard vs fn_close_day-style UPDATE, both orders of arrival             (H3)
 #   * 60 concurrent wrong PIN guesses against one account                               (SM3) -> failed_attempts stays 3
 #   * 20 concurrent blocked-login handlers for one user                                 (SS1) -> exactly one notification set
+#   * Phase 4 orders (0030): 8 submits racing for the last unit of stock -> exactly 1 order; 10 concurrent retries of ONE
+#     idempotency key -> exactly 1 order; 20 submits with opposite cart line order + concurrent receipts -> no deadlock, ledger
+#     consistent; cancel vs KDS start in both orders of arrival -> exactly one wins, no half state
 # Needs PGHOST / PGPORT / PGUSER=postgres / PGDATABASE in the environment (db-test.sh exports them) and the seeded
 # schema. NEVER run it against a real project: it provisions throwaway tenants (race-*) and leaves them behind.
 set -uo pipefail
@@ -154,6 +157,92 @@ check "one notification for the user (the owner admin gets one too)" 2 "$(q "sel
 check "the user's own notifications" 1 "$(q "select count(*) from public.user_notifications where recipient_id = '$P'")"
 check "must_change_pin is set" t "$(q "select must_change_pin from public.profile_secrets where profile_id = '$P'")"
 
-rm -f /tmp/race.$$.*
+echo "== P4: order pipeline under concurrency"
+O=00000000-0000-4000-8000-0000000fe000
+new_tenant race-orders $O race-orders@race.example.com
+RID="(select id from public.restaurants where slug = 'race-orders')"
+q "do \$x\$
+declare
+  v_rid uuid := (select id from public.restaurants where slug = 'race-orders');
+  v_day uuid := (select id from public.day_sessions where restaurant_id = v_rid and status = 'open');
+  v_st uuid := (select id from public.stations where restaurant_id = v_rid and name = 'Kitchen');
+  v_cat uuid := (select id from public.categories where restaurant_id = v_rid and name = 'Lunch');
+  v_lo uuid; v_hi uuid;
+begin
+  insert into public.ingredients (restaurant_id, name, station_id, unit, stock, opening_stock) values
+    (v_rid, 'Race A', v_st, 'pcs', 1000, 1000), (v_rid, 'Race B', v_st, 'pcs', 1000, 1000), (v_rid, 'Race Last', v_st, 'pcs', 1, 1);
+  insert into public.stock_movements (restaurant_id, ingredient_id, station_id, qty_delta, reason, day_session_id)
+  select v_rid, i.id, v_st, i.stock, 'opening', v_day from public.ingredients i where i.restaurant_id = v_rid;
+  select (array_agg(id order by id))[1], (array_agg(id order by id desc))[1] into v_lo, v_hi from public.ingredients where restaurant_id = v_rid and name in ('Race A', 'Race B');
+  insert into public.menu_items (restaurant_id, name, category_id, station_id, price) values
+    (v_rid, 'Race P', v_cat, v_st, 10), (v_rid, 'Race Q', v_cat, v_st, 20), (v_rid, 'Race Last', v_cat, v_st, 30);
+  -- P consumes the HIGHER ingredient id, Q the LOWER one: a cart [P, Q] and a cart [Q, P] would lock in opposite order line by line
+  insert into public.recipe_lines (restaurant_id, menu_item_id, ingredient_id, qty_per_serving)
+  select v_rid, (select id from public.menu_items where restaurant_id = v_rid and name = 'Race P'), v_hi, 1
+  union all select v_rid, (select id from public.menu_items where restaurant_id = v_rid and name = 'Race Q'), v_lo, 1
+  union all select v_rid, (select id from public.menu_items where restaurant_id = v_rid and name = 'Race Last'),
+                   (select id from public.ingredients where restaurant_id = v_rid and name = 'Race Last'), 1;
+end \$x\$" >/dev/null
+item() { q "select id from public.menu_items where restaurant_id = $RID and name = '$1'"; }
+P_ID=$(item 'Race P'); Q_ID=$(item 'Race Q'); L_ID=$(item 'Race Last')
+LEDGER_GAP="select count(*) from public.ingredients i where i.restaurant_id = $RID and i.stock <> (select coalesce(sum(m.qty_delta), 0) from public.stock_movements m where m.ingredient_id = i.id)"
+
+for i in $(seq 1 8); do
+  ( as_user $O "select public.fn_submit_order('[{\"menu_item_id\": \"$L_ID\", \"qty\": 1}]', 'race-last-unit-000$i');" | "${PSQL[@]}" >/tmp/race.$$.last.$i 2>&1 ) &
+done
+wait
+check "8 submits racing for the last unit: exactly one order" 1 "$(q "select count(*) from public.order_items where restaurant_id = $RID and menu_item_id = '$L_ID'")"
+check "the other 7 got insufficient_stock" 7 "$(grep -l insufficient_stock /tmp/race.$$.last.* | wc -l)"
+check "stock is exactly 0, never negative" 0.000 "$(q "select stock from public.ingredients where restaurant_id = $RID and name = 'Race Last'")"
+check "ledger consistent" 0 "$(q "$LEDGER_GAP")"
+
+for i in $(seq 1 10); do
+  ( as_user $O "select public.fn_submit_order('[{\"menu_item_id\": \"$P_ID\", \"qty\": 2}]', 'race-same-key-0001') ->> 'id';" | "${PSQL[@]}" >/tmp/race.$$.key.$i 2>&1 ) &
+done
+wait
+check "10 concurrent retries of one idempotency key: exactly one order" 1 "$(q "select count(*) from public.orders where restaurant_id = $RID and client_key = 'race-same-key-0001'")"
+check "every retry got that same order id" 1 "$(cat /tmp/race.$$.key.* | grep -E '^[0-9a-f-]{36}$' | sort -u | wc -l | tr -d ' ')"
+check "and none failed" 0 "$(cat /tmp/race.$$.key.* | grep -c ERROR)"
+check "stock consumed once (2 units)" 2 "$(q "select -sum(m.qty_delta)::int from public.stock_movements m join public.orders o on o.id = m.order_id where o.client_key = 'race-same-key-0001'")"
+
+BEFORE=$(q "select count(*) from public.orders where restaurant_id = $RID")
+for i in $(seq 1 10); do
+  ( as_user $O "select public.fn_submit_order('[{\"menu_item_id\": \"$P_ID\", \"qty\": 1}, {\"menu_item_id\": \"$Q_ID\", \"qty\": 1}]', 'race-pq-00000$i');" | "${PSQL[@]}" >/tmp/race.$$.pq.$i 2>&1 ) &
+  ( as_user $O "select public.fn_submit_order('[{\"menu_item_id\": \"$Q_ID\", \"qty\": 1}, {\"menu_item_id\": \"$P_ID\", \"qty\": 1}]', 'race-qp-00000$i');" | "${PSQL[@]}" >/tmp/race.$$.qp.$i 2>&1 ) &
+  # one receipt = one request = one transaction (as the app sends them); two receipts in ONE transaction would lock A then B by
+  # name, i.e. in arbitrary id order, which no client does and which can deadlock against any id-ordered locker
+  ( { as_user $O "select public.fn_receive_stock((select id from public.ingredients where restaurant_id = $RID and name = 'Race A'), 1, 'race-recv-a-000$i');"
+      as_user $O "select public.fn_receive_stock((select id from public.ingredients where restaurant_id = $RID and name = 'Race B'), 1, 'race-recv-b-000$i');"; } | "${PSQL[@]}" >/tmp/race.$$.rcv.$i 2>&1 ) &
+done
+wait
+check "20 submits with opposite line order + 20 receipts: no deadlock" 0 "$(cat /tmp/race.$$.pq.* /tmp/race.$$.qp.* /tmp/race.$$.rcv.* | grep -ci deadlock)"
+check "no error at all" 0 "$(cat /tmp/race.$$.pq.* /tmp/race.$$.qp.* /tmp/race.$$.rcv.* | grep -c ERROR)"
+check "all 20 orders created" 20 "$(( $(q "select count(*) from public.orders where restaurant_id = $RID") - BEFORE ))"
+check "ledger consistent after the mix" 0 "$(q "$LEDGER_GAP")"
+check "Race A + Race B = 2000 - 2 (same-key order) - 40 (20 carts x 2 lines) + 20 received" 1978.000 "$(q "select sum(stock) from public.ingredients where restaurant_id = $RID and name in ('Race A', 'Race B')")"
+
+KIT="(select id from public.stations where restaurant_id = $RID and name = 'Kitchen')"
+for scenario in start_first cancel_first; do
+  OID=$(as_user $O "select public.fn_submit_order('[{\"menu_item_id\": \"$Q_ID\", \"qty\": 1}]', 'race-cvs-$scenario') ->> 'id';" | "${PSQL[@]}" | grep -E '^[0-9a-f-]{36}$')
+  START="select public.fn_set_station_items_status('$OID', $KIT, 'preparing');"
+  CANCEL="select public.fn_cancel_order('$OID');"
+  if [ $scenario = start_first ]; then FIRST="$START"; SECOND="$CANCEL"; else FIRST="$CANCEL"; SECOND="$START"; fi
+  as_user $O "$FIRST select pg_sleep(1.5);" | "${PSQL[@]}" >/tmp/race.$$.1 2>&1 &
+  p1=$!; sleep 0.4
+  as_user $O "$SECOND" | "${PSQL[@]}" >/tmp/race.$$.2 2>&1 &
+  p2=$!; wait $p1 $p2
+  if [ $scenario = start_first ]; then
+    check "start then cancel: order stays preparing" preparing "$(q "select status from public.orders where id = '$OID'")"
+    grep -q order_not_cancellable /tmp/race.$$.2 && pass "the late cancel got order_not_cancellable" || fail "late cancel: $(cat /tmp/race.$$.2)"
+    check "no reversal was written" 0 "$(q "select count(*) from public.stock_movements where order_id = '$OID' and reason = 'reversal'")"
+  else
+    check "cancel then start: order stays cancelled" cancelled "$(q "select status from public.orders where id = '$OID'")"
+    grep -q invalid_state_transition /tmp/race.$$.2 && pass "the late start got invalid_state_transition" || fail "late start: $(cat /tmp/race.$$.2)"
+    check "the consumption was reversed exactly once" 1 "$(q "select count(*) from public.stock_movements where order_id = '$OID' and reason = 'reversal'")"
+  fi
+done
+check "ledger consistent at the end" 0 "$(q "$LEDGER_GAP")"
+
+[ -n "${RACE_KEEP:-}" ] || rm -f /tmp/race.$$.*
 if [ "$FAILS" -ne 0 ]; then echo "race tests: $FAILS failure(s)"; exit 1; fi
 echo "race tests: all passed"

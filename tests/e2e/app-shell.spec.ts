@@ -138,7 +138,7 @@ test('a module or station without access renders 403', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Not authorised' })).toBeVisible()
 })
 
-test('mobile: drawer navigation reaches a coming-soon module', async ({ page }) => {
+test('mobile: drawer navigation reaches a module and closes', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await setup(page)
   await page.goto('/r/demo-cafe')
@@ -147,6 +147,5 @@ test('mobile: drawer navigation reaches a coming-soon module', async ({ page }) 
   const drawer = page.getByRole('dialog', { name: 'Navigation' })
   await drawer.getByRole('link', { name: 'POS' }).click()
   await expect(drawer).toBeHidden()
-  await expect(page.getByRole('heading', { level: 1, name: 'POS' })).toBeVisible()
-  await expect(page.getByText('Coming soon')).toBeVisible()
+  await expect(page).toHaveURL(/\/r\/demo-cafe\/pos$/)
 })

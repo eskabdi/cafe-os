@@ -785,6 +785,7 @@ export type Database = {
           created_at: string
           id: string
           item_status: string
+          line_no: number | null
           menu_item_id: string
           name_snapshot: string
           note: string | null
@@ -803,6 +804,7 @@ export type Database = {
           created_at?: string
           id?: string
           item_status?: string
+          line_no?: number | null
           menu_item_id: string
           name_snapshot: string
           note?: string | null
@@ -821,6 +823,7 @@ export type Database = {
           created_at?: string
           id?: string
           item_status?: string
+          line_no?: number | null
           menu_item_id?: string
           name_snapshot?: string
           note?: string | null
@@ -2686,6 +2689,10 @@ export type Database = {
         Args: { p_role_id: string }
         Returns: boolean
       }
+      fn_cancel_order: {
+        Args: { p_order_id: string; p_reason?: string }
+        Returns: Json
+      }
       fn_change_user_role: {
         Args: { p_profile_id: string; p_role_id: string }
         Returns: Json
@@ -2988,6 +2995,29 @@ export type Database = {
       fn_ops_register_platform_admin: {
         Args: { p_user_id: string; p_full_name: string }
         Returns: Json
+      }
+      fn_order_create: {
+        Args: {
+          p_rid: string
+          p_source: string
+          p_created_by: string
+          p_items: Json
+          p_idempotency_key: string
+          p_order_type?: string
+          p_table_id?: string
+          p_table_session_id?: string
+          p_customer_session_id?: string
+          p_customer_note?: string
+        }
+        Returns: Json
+      }
+      fn_order_json: {
+        Args: { p_order_id: string; p_station_id?: string }
+        Returns: Json
+      }
+      fn_order_visible: {
+        Args: { p_created_by: string; p_station_ids: string[] }
+        Returns: boolean
       }
       fn_pin_eligible: {
         Args: { p_profile_id: string }
@@ -3316,6 +3346,10 @@ export type Database = {
         Args: { p_restaurant_id: string }
         Returns: Json
       }
+      fn_serve_order: {
+        Args: { p_order_id: string }
+        Returns: Json
+      }
       fn_session_timers_json: {
         Args: { p_restaurant_id: string }
         Returns: Json
@@ -3338,6 +3372,10 @@ export type Database = {
       }
       fn_set_role_station_access: {
         Args: { p_role_id: string; p_station_ids: string[] }
+        Returns: Json
+      }
+      fn_set_station_items_status: {
+        Args: { p_order_id: string; p_station_id: string; p_status: string }
         Returns: Json
       }
       fn_set_stock_stepup_threshold: {
@@ -3402,6 +3440,16 @@ export type Database = {
           p_signout_seconds: number
           p_pin_pad_idle_seconds: number
           p_reset: boolean
+        }
+        Returns: Json
+      }
+      fn_submit_order: {
+        Args: {
+          p_items: Json
+          p_idempotency_key: string
+          p_order_type?: string
+          p_table_id?: string
+          p_customer_note?: string
         }
         Returns: Json
       }

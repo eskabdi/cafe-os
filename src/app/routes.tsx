@@ -32,6 +32,7 @@ const AcceptInvitationPage = lazy(() =>
   import('@/features/invitations/AcceptInvitationPage').then((m) => ({ default: m.AcceptInvitationPage })),
 )
 const MenuPage = lazy(() => import('@/features/menu').then((m) => ({ default: m.MenuPage })))
+const PosPage = lazy(() => import('@/features/pos/PosPage').then((m) => ({ default: m.PosPage })))
 const InventoryPage = lazy(() => import('@/features/inventory').then((m) => ({ default: m.InventoryPage })))
 const RestaurantSettingsPage = lazy(() =>
   import('@/features/tenant-admin/RestaurantSettingsPage').then((m) => ({ default: m.RestaurantSettingsPage })),
@@ -168,6 +169,15 @@ export const routes: RouteObject[] = [
                         element: (
                           <RequireNavPermission permission="settings.manage">
                             <SubscriptionPage />
+                          </RequireNavPermission>
+                        ),
+                      },
+                      // Phase 4 Waiter POS (orders.create, same code as the nav entry and fn_submit_order)
+                      {
+                        path: 'pos',
+                        element: (
+                          <RequireNavPermission permission="orders.create">
+                            <PosPage />
                           </RequireNavPermission>
                         ),
                       },
