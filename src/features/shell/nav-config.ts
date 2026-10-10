@@ -47,6 +47,7 @@ export const MODULE_NAV: readonly ModuleNavItem[] = [
     group: 'operations',
     icon: ShoppingCart,
     summary: 'Take orders at the table or counter.',
+    implemented: true,
   },
   {
     id: 'cashier',
