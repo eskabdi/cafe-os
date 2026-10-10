@@ -68,7 +68,7 @@ Owner decision, non-negotiable: Platform Admin Portal (Super Admin) and Tenant P
 
 ## Remaining roadmap (§58)
 
-Phase 3 menu/inventory (merged #10, #11) → 3B portals → 4 POS → 5 KDS → 6 cashier → 7 installments → 8 dashboard → 9 day close → 10 settings → 11 hardening → 12 cutover.
+Phase 3 menu/inventory (merged #10, #11) → 3B portals (#12) → 4 POS (#13) → 5 KDS (#14) → 6 cashier (this PR) → 7 installments → 8 dashboard → 9 day close → 10 settings → 11 hardening → 12 cutover.
 
 Work order in every phase: schema → migration → RPCs → RLS → pgTAP → types → hooks → UI → realtime → E2E → gate.
 
