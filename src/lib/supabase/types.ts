@@ -2721,6 +2721,16 @@ export type Database = {
         Args: { p_profile_id: string }
         Returns: Json
       }
+      fn_confirm_payment: {
+        Args: {
+          p_order_id: string
+          p_payment_method_id: string
+          p_reference: string
+          p_idempotency_key: string
+          p_tendered?: number
+        }
+        Returns: Json
+      }
       fn_create_ingredient: {
         Args: {
           p_name: string
@@ -2815,6 +2825,10 @@ export type Database = {
       }
       fn_get_open_day: {
         Args: Record<PropertyKey, never>
+        Returns: Json
+      }
+      fn_get_receipt: {
+        Args: { p_payment_id: string }
         Returns: Json
       }
       fn_get_restaurant_profile: {
@@ -3241,6 +3255,10 @@ export type Database = {
         Args: { p_restaurant_id: string; p_reason: string }
         Returns: Json
       }
+      fn_receipt_json: {
+        Args: { p_payment_id: string }
+        Returns: Json
+      }
       fn_receive_stock: {
         Args: {
           p_ingredient_id: string
@@ -3297,6 +3315,14 @@ export type Database = {
       fn_reverse_order_consumption: {
         Args: { p_order_id: string }
         Returns: number
+      }
+      fn_reverse_payment: {
+        Args: {
+          p_payment_id: string
+          p_reason: string
+          p_idempotency_key: string
+        }
+        Returns: Json
       }
       fn_reverse_stock_movement: {
         Args: {

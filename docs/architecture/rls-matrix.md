@@ -35,7 +35,7 @@ Suspended/cancelled tenants resolve to NULL (no access); `past_due` is read-only
 | kiosk_devices | T + `kiosks.manage` (column grant: no `token_hash`) | none (`fn_register_kiosk`) | none (`fn_revoke_kiosk`; service role refreshes `last_seen_at`) | none |
 | user_notifications | T and `recipient_id = auth.uid()` (own rows only, not even tenant_admin sees others'; column grant on every column, no secret column) | none (`fn_staff_login_blocked`, service-only) | none (`fn_mark_notification_read` sets `read_at` once; trigger refuses any other change, even for the owner role) | none |
 | restaurant_session_settings | T (any active member, no permission: every client needs the timers, also while a PIN change is required/pending; column grant on every column, no secret column) | none (`trg_create_session_settings` on `restaurants` insert) | none (`fn_update_session_timers` / `fn_reset_session_timers`: `settings.session_timers` + aal2 (0026) + W) | none |
-| payments | T + `payments.view` | none (fn_confirm_payment later) | trigger-blocked for all roles | trigger-blocked for all roles |
+| payments | T + `payments.view` | none: `fn_confirm_payment` / `fn_reverse_payment` (0034) only | trigger-blocked for all roles | trigger-blocked for all roles |
 | vouchers, installments | T + `vouchers.view` | none | none | none |
 | expenses | T + `expenses.view`/`expenses.manage` | T + `expenses.manage` + W (actor, day, method snapshot set by trigger; **requires an open business day**, else `day_closed`; a foreign `restaurant_id` is refused with the RLS 42501 before any lookup) | same; frozen once its day is closed | same; frozen once its day is closed |
 

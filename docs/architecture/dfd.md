@@ -162,3 +162,19 @@ is deleted after the update succeeds (the Storage delete policy refuses an objec
 ## Level 1: operational write path (Phases 4+)
 Clients send intents (ids, quantities) to `fn_*` RPCs; the RPC derives tenant and user, checks permission and open day, prices server-side,
 writes orders/stock/payments atomically, appends audit rows, and Realtime delivers RLS-filtered changes to authorized devices.
+
+## Level 1: cashier and payments (Phase 6)
+```mermaid
+flowchart LR
+    CASH["Cashier SPA /r/<slug>/cashier"] -->|select unpaid orders of the open day (RLS orders_select)| ORD[("orders / order_items")]
+    CASH -->|select active payment_methods rows (RLS)| PM[("payment_methods")]
+    CASH -->|fn_confirm_payment(order id, method id, reference, tendered, key)| RPC["definer RPC: tenant from JWT, payments.create, open day, idempotency"]
+    RPC -->|amount = orders.total, RCT-nnnn, snapshots| PAY[("payments (immutable)")]
+    RPC -->|payment_status = paid| ORD
+    RPC -->|payment.confirmed| AUD[("audit_logs")]
+    CASH -->|fn_reverse_payment + step-up| REV["compensating reversal row; order unpaid"]
+    REV --> PAY
+    PAY -.->|Realtime INSERT (RLS)| CASH
+    RPC -->|receipt JSON| RCPT["ReceiptView (React text) -> print"]
+```
+
