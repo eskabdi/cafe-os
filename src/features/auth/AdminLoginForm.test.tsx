@@ -9,6 +9,8 @@ const auth = vi.hoisted(() => ({
   mfa: { getAuthenticatorAssuranceLevel: vi.fn(), listFactors: vi.fn(), challengeAndVerify: vi.fn() },
 }))
 vi.mock('@/lib/supabase/client', () => ({ supabase: { auth } }))
+const devices = vi.hoisted(() => ({ checkThisDevice: vi.fn(), trustThisDevice: vi.fn() }))
+vi.mock('@/lib/supabase/trusted-devices', () => devices)
 
 async function fillAndSubmit(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByLabelText('Email'), 'owner@example.com')
@@ -20,6 +22,8 @@ describe('AdminLoginForm', () => {
   beforeEach(() => {
     vi.resetAllMocks()
     auth.signOut.mockResolvedValue({ error: null })
+    devices.checkThisDevice.mockResolvedValue(false)
+    devices.trustThisDevice.mockResolvedValue(undefined)
     auth.mfa.getAuthenticatorAssuranceLevel.mockResolvedValue({
       data: { currentLevel: 'aal1', nextLevel: 'aal1' },
       error: null,
@@ -149,5 +153,65 @@ describe('AdminLoginForm', () => {
     await fillAndSubmit(user)
     await waitFor(() => expect(auth.signOut).toHaveBeenCalled())
     expect(onSignedIn).not.toHaveBeenCalled()
+  })
+
+  describe('trusted device (30 days)', () => {
+    const mfaUser = () => {
+      auth.signInWithPassword.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
+      auth.mfa.getAuthenticatorAssuranceLevel.mockResolvedValue({ data: { currentLevel: 'aal1', nextLevel: 'aal2' }, error: null })
+      auth.mfa.listFactors.mockResolvedValue({ data: { totp: [{ id: 'factor-1' }] }, error: null })
+      auth.mfa.challengeAndVerify.mockResolvedValue({ data: {}, error: null })
+    }
+
+    it('a trusted browser skips the code', async () => {
+      const user = userEvent.setup()
+      mfaUser()
+      devices.checkThisDevice.mockResolvedValue(true)
+      const onSignedIn = vi.fn()
+      render(<AdminLoginForm onSignedIn={onSignedIn} />)
+      await fillAndSubmit(user)
+      await waitFor(() => expect(onSignedIn).toHaveBeenCalled())
+      expect(devices.checkThisDevice).toHaveBeenCalledWith('user-1')
+      expect(auth.mfa.challengeAndVerify).not.toHaveBeenCalled()
+      expect(screen.queryByLabelText('Authentication code')).not.toBeInTheDocument()
+    })
+
+    it('a new browser asks the code, then trusts the device by default', async () => {
+      const user = userEvent.setup()
+      mfaUser()
+      const onSignedIn = vi.fn()
+      render(<AdminLoginForm onSignedIn={onSignedIn} />)
+      await fillAndSubmit(user)
+      expect(screen.getByRole('checkbox', { name: 'Trust this device for 30 days' })).toBeChecked()
+      await user.type(await screen.findByLabelText('Authentication code'), '123456')
+      await user.click(screen.getByRole('button', { name: 'Verify' }))
+      await waitFor(() => expect(onSignedIn).toHaveBeenCalled())
+      expect(devices.trustThisDevice).toHaveBeenCalledWith('user-1')
+    })
+
+    it('unticked: the device is not remembered', async () => {
+      const user = userEvent.setup()
+      mfaUser()
+      const onSignedIn = vi.fn()
+      render(<AdminLoginForm onSignedIn={onSignedIn} />)
+      await fillAndSubmit(user)
+      await user.click(screen.getByRole('checkbox', { name: 'Trust this device for 30 days' }))
+      await user.type(await screen.findByLabelText('Authentication code'), '123456')
+      await user.click(screen.getByRole('button', { name: 'Verify' }))
+      await waitFor(() => expect(onSignedIn).toHaveBeenCalled())
+      expect(devices.trustThisDevice).not.toHaveBeenCalled()
+    })
+
+    it('a failed trust call never blocks the sign-in', async () => {
+      const user = userEvent.setup()
+      mfaUser()
+      devices.trustThisDevice.mockRejectedValue(new Error('x'))
+      const onSignedIn = vi.fn()
+      render(<AdminLoginForm onSignedIn={onSignedIn} />)
+      await fillAndSubmit(user)
+      await user.type(await screen.findByLabelText('Authentication code'), '123456')
+      await user.click(screen.getByRole('button', { name: 'Verify' }))
+      await waitFor(() => expect(onSignedIn).toHaveBeenCalled())
+    })
   })
 })

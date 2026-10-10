@@ -52,9 +52,23 @@ Read this first in the next session, then `CLAUDE.md` and `docs/spec/execution-p
   - **Phase 9 TODO (deferred on purpose):** reset / derive `ingredients.received_today` / `consumed_today` in `fn_open_day` / `fn_close_day`;
     exclude the stock columns from the `ingredients` row-audit trigger (the ledger is the record).
 
+## Phase 3B — Two portals (inserted 2026-10-08, before Phase 4; Phase 4 paused)
+
+Owner decision, non-negotiable: Platform Admin Portal (Super Admin) and Tenant Portal (Tenant Admin), fully separated. See execution prompt §34A and Phase 3B. Roles/permission matrix/user management/branding moved from Phase 10 into 3B. Phase 4 DB work had started in a worktree but stopped on a rate limit with nothing committed; it resumes after 3B.
+- **3B built (2026-10-09, branch `ccr-013f0187-mxaao1`):** migrations `0030` platform portal, `0031` tenant portal, `0032` trusted devices; Edge Functions
+  `tenant-admin-invite` (DB-planned delivery: decoys, re-invite, magic link, record after success), `staff-pin-reset` (signs out + forces a new PIN),
+  `tenant-logo` (Public, 10-minute signed logo URL); pgTAP `32`-`37`; types regenerated (postgres-meta v0.91.0, cached image, `dockerd` + kept db-test cluster
+  on TCP). Frontend: `/platform/*` (Overview, Tenants + detail with restore, Create tenant, Plans, Invoices, System health, Backups, Audit log, Super Admins,
+  Security), Tenant Portal settings (Restaurant, Users, Roles & rights, Subscription, Security + trusted devices), `/invite` acceptance page, tenant logo on
+  sign-in, trusted-device sign-in (code once per new device, 30 days), `e2e/portals.spec.ts`.
+  Owner decisions 1-8 are recorded at the end of `docs/api/portals.md`.
+  Hosted setup still to do by the owner: the two e-mail templates (`supabase/templates/*`) in Auth > Email Templates; schedule `fn_ops_purge_expired_cancelled_tenants`.
+  Open: no lost-phone recovery flow for a Tenant Admin's authenticator yet (another Tenant Admin or the Super Admin cannot reset a factor; proposal: an audited
+  platform-side factor reset); Phase 4 resumes from local branch `wip/phase4-db` (renumber its migration after 0032).
+
 ## Remaining roadmap (§58)
 
-Phase 3 menu/inventory → 4 POS → 5 KDS → 6 cashier → 7 installments → 8 dashboard → 9 day close → 10 settings → 11 hardening → 12 cutover.
+Phase 3 menu/inventory (merged #10, #11) → 3B portals → 4 POS → 5 KDS → 6 cashier → 7 installments → 8 dashboard → 9 day close → 10 settings → 11 hardening → 12 cutover.
 
 Work order in every phase: schema → migration → RPCs → RLS → pgTAP → types → hooks → UI → realtime → E2E → gate.
 

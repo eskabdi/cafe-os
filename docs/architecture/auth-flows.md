@@ -1,4 +1,4 @@
-# Authentication flows (Phase 1)
+# Authentication flows (Phase 1, extended through Phase 3B)
 
 Binding rule: `platform_super_admin` and `tenant_admin` NEVER use a PIN. They sign in with Supabase Auth email + password (TOTP MFA capable).
 PIN login is only for non-admin staff (`profiles.auth_method = 'pin'`); the PIN path answers admins exactly like a wrong PIN.
@@ -93,8 +93,45 @@ sequenceDiagram
 ```
 
 ## Platform admins
-`is_platform_admin()` / `is_platform_super_admin()` additionally require `aal2` (TOTP verified this session) unless `app.platform_mfa_required = 'off'` and the
-user has no verified factor. Production default = required. Local/CI opt out per session; the pgTAP helpers do it per transaction.
+`is_platform_admin()` / `is_platform_super_admin()` (the RLS read helpers) and every platform RPC (`fn_platform_guard()`) require an active platform
+admin row AND an MFA-satisfied session (`fn_mfa_session_ok`, 0032): `aal2` with a verified factor the account still owns, or a session attested by a
+trusted device (below). There is no opt-out (owner decision 7). The local seed enrols a verified TOTP factor with the public TEST secret
+`JBSWY3DPEHPK3PXP` for the demo Super Admin (`admin@cafeos.example.com`; local only, the seed refuses hosted projects). Errors:
+`permission_denied` (not an active super admin; every tenant user), `mfa_required` (aal1, or no live factor).
+
+### Adding a Super Admin (ops procedure; no client path exists)
+There is deliberately no RPC or Edge Function that lets a signed-in user create a platform admin (a compromised Super Admin session must not be able to mint
+more). Two-person ops procedure, recorded in the change log:
+1. Create the Auth user with a real e-mail, already CONFIRMED ("Auto confirm"), in the Supabase dashboard (Authentication > Users), and do step 2
+   right away. Do not use "invite" here: until step 2 the account is an orphan, and a pending Tenant Admin invitation to the same address could
+   attach to it or replace an unconfirmed one (isolation review L3). It must not be a tenant user.
+2. With the service-role key (SQL editor or a one-off script, never a browser): `select public.fn_ops_register_platform_admin('<auth user id>', '<full name>');`
+   It refuses an unconfirmed / synthetic e-mail (`owner_email_unconfirmed`), an existing tenant profile or pending tenant invitation (`owner_already_assigned`)
+   and writes `admin_audit_log` (`platform_admin.registered`; actor null = service job).
+3. The new admin signs in (password only: the sign-in checks the identity), is taken to the MFA gate, enrols TOTP (mandatory for every platform RPC) and is visible in the portal's Super Admin list
+   (`fn_platform_list_admins`). Deactivation is `fn_platform_set_admin_active` (never yourself; the last active super admin is protected by trigger).
+
+### Tenant Admin invitation (Phase 3B, `tenant-admin-invite`)
+```mermaid
+sequenceDiagram
+    participant SA as Super Admin (aal2) / tenant_admin (aal2)
+    participant EF as tenant-admin-invite
+    participant DB as Postgres
+    participant GT as Supabase Auth
+    participant IN as Invitee
+    SA->>EF: POST {action: invite, restaurant_id (platform only), email, names, username} + JWT
+    EF->>DB: fn_prepare_tenant_admin_invitation(...) AS THE CALLER (guard, validation, reservation, audit)
+    EF->>GT: auth.admin.inviteUserByEmail(email, redirectTo = INVITE_REDIRECT_URL) (service role)
+    EF->>DB: fn_attach_tenant_admin_invitation(invitation, auth user) (service role)
+    Note over EF,DB: failure -> fn_abort_tenant_admin_invitation (+ delete the never-confirmed user)
+    GT-->>IN: invitation e-mail
+    IN->>GT: follows the link (e-mail confirmed, session), sets a password (min 12, policy)
+    IN->>DB: fn_get_my_invitation() (where am I invited?)
+    IN->>DB: fn_accept_tenant_admin_invitation() -> tenant_admin profile (auth_method password)
+    IN->>GT: enrol TOTP (recommended; required for aal2 actions)
+```
+The first Tenant Admin of a tenant created with `fn_platform_create_tenant` arrives this way. Invitations expire after 7 days (resend renews; at most 5 sends,
+60 s apart); an existing Auth account is never re-bound (`email_in_use`), so a platform admin can never also become a tenant admin.
 
 ## PIN length by role (documented exception, user decision 2026-10-03)
 The role named `Cashier` signs in with a 6-digit PIN; every other PIN role with exactly 4. It is the ONLY name-keyed rule in the system and lives in two twin
@@ -253,3 +290,23 @@ All of this is UX; the database (`fn_pin_restricted` behind `has_permission` / s
 - **StepUpDialog** with no authenticator: a Supabase Auth account sees "Set one up in Security settings" with a link to this page; PIN sessions still see "ask your administrator".
 - Tests: `src/lib/domain/authenticator.test.ts`, `src/features/settings/SecurityPage.test.tsx` (mocked `supabase.auth.mfa`), `src/features/settings/AuthenticatorEnroll.test.tsx`, `src/features/auth/StepUpDialog.test.tsx`, `tests/e2e/security.spec.ts` (page.route mocks).
 - `src/lib/supabase/types.ts` is still the placeholder (no Docker for `supabase gen types`); its `Functions` was hand-extended with the three 0025 RPCs.
+
+## Trusted devices (migration 0032, owner decision 2026-10-09)
+
+"TOTP on each sign-in is not acceptable." For the Super Admin and every password account (Tenant Admin):
+
+1. Password sign-in (Supabase Auth) gives an **aal1** session. If an authenticator is enrolled, the SPA reads this browser's device token for that
+   user (`localStorage`, `src/lib/utils/device-token.ts`) and calls `fn_check_trusted_device`. Trusted → the database writes an attestation for the
+   session's `session_id`; `fn_mfa_session_ok()` (used by `fn_platform_guard`, the RLS platform helpers, `fn_require_aal2`, `fn_require_step_up`)
+   now accepts the session. No code is asked.
+2. Not trusted (new device, expired, revoked, other user) → the TOTP code is asked (`challengeAndVerify`, aal2). "Trust this device for 30 days" is
+   ticked by default → `fn_trust_device` (needs a code ≤ 10 min old) returns a random 32-byte token ONCE; only its sha256 is stored.
+3. **Very sensitive actions** (plan change, cancel / restore tenant, role matrix / station access) need a real TOTP verification at most 12 h old (JWT
+   `amr`), even on a trusted device → `step_up_required` → the step-up dialog asks the code and the SAME request is retried.
+4. Revocation: per device or all (own Security page; a Tenant Admin for its users; a Super Admin for platform admins). Automatic on user disable, PIN
+   change / reset, platform admin disable. A device is tied to the factor it was trusted with: removing that factor ends the trust at once.
+
+Residual risks: the device token sits in `localStorage` (XSS on the app origin could read it, but it is useless without the user's password session
+and is bound to one user); an attestation lives as long as the session (refresh keeps `session_id`) or the device's 30 days, whichever ends first;
+revoking deletes the attestations immediately.
+

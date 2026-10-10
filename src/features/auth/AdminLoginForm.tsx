@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { supabase } from '@/lib/supabase/client'
+import { checkThisDevice, trustThisDevice } from '@/lib/supabase/trusted-devices'
 
 export interface AdminLoginFormProps {
   /**
@@ -30,13 +31,19 @@ function signInErrorMessage(error: { status?: number; code?: string }): string {
   return MESSAGES.credentials
 }
 
-/** Email + password sign-in for tenant_admin / platform admins (Supabase Auth), with a TOTP step when enrolled. */
+/**
+ * Email + password sign-in for tenant_admin / platform admins (Supabase Auth). With an authenticator enrolled, the TOTP code is
+ * asked only on a NEW device: a browser trusted in the last 30 days (owner decision 2026-10-09) skips it, the server attesting
+ * this session (fn_check_trusted_device). After a code, "Trust this device for 30 days" (default on) remembers the browser.
+ */
 export function AdminLoginForm({ verify, deniedMessage = MESSAGES.denied, onSignedIn }: AdminLoginFormProps) {
   const [step, setStep] = useState<'credentials' | 'mfa'>('credentials')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [code, setCode] = useState('')
   const [factorId, setFactorId] = useState<string | null>(null)
+  const [userId, setUserId] = useState<string | null>(null)
+  const [trustDevice, setTrustDevice] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -44,6 +51,7 @@ export function AdminLoginForm({ verify, deniedMessage = MESSAGES.denied, onSign
     await supabase.auth.signOut()
     setStep('credentials')
     setFactorId(null)
+    setUserId(null)
     setCode('')
     setPassword('')
     setError(message)
@@ -68,7 +76,7 @@ export function AdminLoginForm({ verify, deniedMessage = MESSAGES.denied, onSign
     setBusy(true)
     setError(null)
     try {
-      const { error: signInError } = await supabase.auth.signInWithPassword({ email: email.trim(), password })
+      const { data: signedIn, error: signInError } = await supabase.auth.signInWithPassword({ email: email.trim(), password })
       if (signInError) {
         setPassword('')
         setError(signInErrorMessage(signInError))
@@ -77,6 +85,13 @@ export function AdminLoginForm({ verify, deniedMessage = MESSAGES.denied, onSign
       const { data: aal, error: aalError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
       if (aalError || !aal) return await abort(MESSAGES.generic)
       if (aal.nextLevel === 'aal2' && aal.currentLevel !== 'aal2') {
+        const uid = signedIn?.user?.id ?? null
+        // a browser trusted in the last 30 days: no code (the server attests this session)
+        if (uid && (await checkThisDevice(uid))) {
+          setPassword('')
+          return await finish()
+        }
+        setUserId(uid)
         const { data: factors, error: factorError } = await supabase.auth.mfa.listFactors()
         const totp = factors?.totp[0]
         if (factorError || !totp) return await abort(MESSAGES.noFactor)
@@ -109,6 +124,13 @@ export function AdminLoginForm({ verify, deniedMessage = MESSAGES.denied, onSign
         setError(MESSAGES.code)
         return
       }
+      if (trustDevice && userId) {
+        try {
+          await trustThisDevice(userId)
+        } catch {
+          // not remembered: the code is simply asked again next time on this device
+        }
+      }
       await finish()
     } catch {
       setError(MESSAGES.generic)
@@ -140,6 +162,15 @@ export function AdminLoginForm({ verify, deniedMessage = MESSAGES.denied, onSign
           />
           <p className="text-xs text-muted-foreground">Enter the 6-digit code from your authenticator app.</p>
         </div>
+        <label className="flex min-h-[44px] items-center gap-3 text-sm text-ink">
+          <input
+            type="checkbox"
+            className="h-5 w-5 accent-primary"
+            checked={trustDevice}
+            onChange={(e) => setTrustDevice(e.target.checked)}
+          />
+          Trust this device for 30 days
+        </label>
         {errorEl}
         <Button type="submit" className="w-full" disabled={busy}>
           {busy ? 'Verifying…' : 'Verify'}

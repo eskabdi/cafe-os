@@ -1243,6 +1243,72 @@ Any impersonation/support access must:
 
 ---
 
+34A. TWO PORTALS (NON-NEGOTIABLE — owner decision 2026-10-08)
+
+CafeOS has exactly two portals. They are separate surfaces with separate
+identities, navigation, routes, guards and data access. Neither portal can
+reach the other's screens or data.
+
+1. Platform Admin Portal (`/platform/*`)
+
+   Actor: "Super Admin" (system role `platform_super_admin`, table
+   `platform_admins`, Supabase Auth email + password + MFA, never PIN).
+
+   Manages the CafeOS business, never a restaurant's operations:
+
+   - tenants: list, search, filter by status/plan, detail
+   - tenant provisioning and invitation of the first Tenant Admin
+   - tenant activation, suspension, reactivation, cancellation
+   - subscriptions and plans: plan catalogue, change plan, status, invoices
+   - usage and quota monitoring per tenant against plan limits
+     (users, menu items, stations, terminals/kiosks, storage, orders/month)
+   - system health (database, auth, storage, realtime, edge functions,
+     error rates) and backup status / backup history
+   - platform audit log (`admin_audit_log`)
+   - platform settings and Super Admin accounts
+
+   The Super Admin never sees tenant operational screens or data:
+   no tenant dashboard, Waiter POS, station boards (Kitchen, Pastry, Bar, ...),
+   cashier, installments, inventory, menu, day close, staff PINs, orders or
+   payments. Tenant data visible in this portal is limited to tenant
+   metadata, subscription/billing data and aggregate usage counters
+   returned by platform RPCs. No impersonation / "log in as tenant" is built.
+
+2. Tenant Portal (`/r/<slug>/*`)
+
+   Actor: "Tenant Admin" (system role `tenant_admin`, Supabase Auth email +
+   password, MFA-capable, never PIN) plus the tenant's staff roles.
+
+   The Tenant Admin manages the restaurant:
+
+   - restaurant profile, branding, business settings
+   - users / staff accounts (create, edit, deactivate, reset PIN, assign role)
+   - roles and the permission matrix (role x permission), station access
+   - security settings (session timers, PIN approvals, terminals/kiosks)
+   - all operational modules (menu, inventory, POS, stations, cashier,
+     installments, dashboard, day close) according to permissions
+
+   Tenant users (including the Tenant Admin) never see the Platform Admin
+   Portal, other tenants, the plan catalogue editor, system health or
+   platform audit.
+
+Enforcement (all layers):
+
+- Routing: `/platform/*` renders only for an authenticated, MFA-verified
+  platform admin; any tenant identity is redirected out. `/r/<slug>/*`
+  renders only for a tenant profile of that tenant; a platform admin is
+  redirected to `/platform`.
+- Navigation is generated per portal; no shared menu contains both.
+- Database: platform admins have no tenant profile and no RLS path to
+  tenant operational tables; platform data is exposed only through
+  platform RPCs that check `is_platform_super_admin()` and write
+  `admin_audit_log`. Tenant RLS never grants platform tables.
+- An account is either a platform admin or a tenant user, never both.
+- Tests: pgTAP proves a platform admin reads zero tenant operational rows;
+  Playwright proves each portal's routes refuse the other actor.
+
+---
+
 35. FRONTEND ARCHITECTURE
 
 Use a maintainable feature-based React structure.
@@ -2204,6 +2270,29 @@ Gate:
 
 ---
 
+Phase 3B — Platform Admin Portal and Tenant Portal (non-negotiable, §34A)
+
+Deliver:
+
+- portal separation at route, navigation, guard and database layers
+- Platform Admin Portal: tenant list/search/detail, provisioning and Tenant
+  Admin invitation, suspend/reactivate/cancel, plans and subscriptions,
+  usage vs quota, system health, backup status, platform audit log,
+  Super Admin account management
+- Tenant Portal administration: restaurant profile and branding, users and
+  staff accounts, role assignment, roles and permission matrix, station
+  access (moved here from Phase 10)
+
+Gate:
+
+- a Super Admin cannot open any tenant screen or read tenant operational data
+- a Tenant Admin or staff member cannot open any platform screen
+- a Super Admin can provision a tenant and invite its Tenant Admin, who can
+  then sign in, create staff, assign roles and edit the permission matrix
+- pgTAP + Playwright cross-portal denial tests pass
+
+---
+
 Phase 4 — Waiter POS
 
 Deliver:
@@ -2314,15 +2403,13 @@ Phase 10 — Settings, Roles and Dynamic Configuration
 
 Deliver:
 
-- roles
-- role matrix
 - stations
 - categories
 - payment methods
 - table areas
 - expense categories
-- user management
-- tenant branding
+- (roles, role matrix, user management and tenant branding are delivered
+  in Phase 3B, Tenant Portal)
 
 Gate:
 

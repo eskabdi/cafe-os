@@ -1,4 +1,4 @@
-# CafeOS entity-relationship diagram (Phase 1 schema)
+# CafeOS entity-relationship diagram (Phase 1 schema + Phase 3 / 3B additions)
 
 Source of truth: `supabase/migrations/*.sql`. Every tenant table carries `restaurant_id`; child tables reference
 parents through **composite foreign keys** `(restaurant_id, parent_id)` so a cross-tenant reference is impossible
@@ -108,3 +108,32 @@ Migration 0029 (menu and inventory): no new table; one new column `restaurants.s
 `reverses_movement_id` is unique, so a row is reversed at most once; every row carries the open `day_session_id`); `ingredients.stock` is the running total maintained only by
 `fn_post_stock_movement` (invariant `stock = sum(qty_delta)`); `recipe_lines` unique `(menu_item_id, ingredient_id)`; `menu_items.image_path` points to Storage bucket `menu-images`
 (`restaurants/<restaurant_id>/menu/<file>`). Storage objects are not part of the relational model.
+
+## Phase 3B (migrations 0030 / 0031): the two portals
+
+```mermaid
+erDiagram
+    restaurants ||--o{ tenant_admin_invitations : "invites its admins (RESTRICT)"
+    auth_users ||--o| tenant_admin_invitations : "auth_user_id (no FK: set by the Edge Function after inviteUserByEmail)"
+    tenant_admin_invitations ||--o| profiles : "accepted -> tenant_admin profile (fn_accept_tenant_admin_invitation)"
+    plans ||--o{ subscriptions : "quotas"
+    platform_backup_runs }o--|| ops_backup_job : "written by service_role only"
+    tenant_admin_invitations { uuid id PK uuid restaurant_id FK text email "lower, real, not .invalid" text username "reserved while pending" uuid auth_user_id text status "pending|accepted|revoked (expiry derived)" text invited_by_type "platform_admin|tenant_admin" timestamptz expires_at "7 days, renewed by resend" int send_count "<= 5 sends" timestamptz last_sent_at "60 s gap" }
+    platform_backup_runs { uuid id PK text kind "supabase_daily|supabase_pitr|logical_dump|storage_copy|restore_drill" text status "running|succeeded|failed" timestamptz started_at timestamptz finished_at bigint size_bytes text location "no credentials / query" text checksum_sha256 text error_code }
+    plans { int max_staff int max_menu_items int max_stations int max_kiosks bigint max_storage_bytes int max_orders_per_month text description int sort_order }
+```
+
+- `tenant_admin_invitations`: tenant table (restaurant_id NOT NULL, FK RESTRICT, `trg_lock_restaurant_id`, never deleted). Partial unique indexes while `pending`:
+  `email` (platform-wide), `auth_user_id`, `(restaurant_id, username)`. CHECKs tie `accepted_at` / `revoked_at` to the status. RLS forced with no policy and no client
+  grant: read and written only through the definer RPCs (0030) and `service_role` (SELECT / INSERT / UPDATE, no DELETE).
+- `platform_backup_runs`: platform table (no restaurant_id). Written only by `service_role` (the ops backup job: INSERT, UPDATE of the result columns while
+  `running`); a finished run is immutable (`trg_guard_backup_run`), nothing is deleted; row-audited into `admin_audit_log`. Read by `fn_platform_list_backup_runs` /
+  `fn_platform_system_health` only.
+- `plans`: new quota columns (NULL = unlimited) `max_stations`, `max_kiosks`, `max_storage_bytes`, `max_orders_per_month` plus `description`, `sort_order`. Enforced
+  today: `max_staff` (staff creation, reactivation, invitations), `max_menu_items` (menu RPCs). The others are monitored (usage vs quota) and reported by
+  `fn_platform_get_tenant` / `fn_get_subscription_usage` (`over_quota`).
+- `platform_invoices`: partial unique `(restaurant_id, period_start, period_end) where status <> 'void'` (a retried create cannot bill twice).
+- `admin_audit_log`: keyset index `(created_at desc, id desc)`.
+- Storage (not relational): private bucket `tenant-branding` (1 MiB, png / jpeg / webp), objects at `restaurants/<restaurant_id>/branding/<file>`;
+  `restaurants.branding.logo_path` points there (validated by `fn_update_restaurant_branding`: own prefix, uploaded object).
+- Identity: an `auth.users` row is a `platform_admins` row OR a `profiles` row, never both (guards on both tables share a per-user advisory lock since 0030).

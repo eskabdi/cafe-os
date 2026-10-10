@@ -505,6 +505,24 @@ export type Database = {
           },
         ]
       }
+      identity_claims: {
+        Row: {
+          created_at: string
+          kind: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          kind: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          kind?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       ingredients: {
         Row: {
           consumed_today: number
@@ -1196,35 +1214,53 @@ export type Database = {
       plans: {
         Row: {
           created_at: string
+          description: string | null
           features: Json
           id: string
           is_active: boolean
+          max_kiosks: number | null
           max_menu_items: number | null
+          max_orders_per_month: number | null
           max_staff: number | null
+          max_stations: number | null
+          max_storage_bytes: number | null
           name: string
           price_etb_monthly: number
+          sort_order: number
           updated_at: string
         }
         Insert: {
           created_at?: string
+          description?: string | null
           features?: Json
           id?: string
           is_active?: boolean
+          max_kiosks?: number | null
           max_menu_items?: number | null
+          max_orders_per_month?: number | null
           max_staff?: number | null
+          max_stations?: number | null
+          max_storage_bytes?: number | null
           name: string
           price_etb_monthly: number
+          sort_order?: number
           updated_at?: string
         }
         Update: {
           created_at?: string
+          description?: string | null
           features?: Json
           id?: string
           is_active?: boolean
+          max_kiosks?: number | null
           max_menu_items?: number | null
+          max_orders_per_month?: number | null
           max_staff?: number | null
+          max_stations?: number | null
+          max_storage_bytes?: number | null
           name?: string
           price_etb_monthly?: number
+          sort_order?: number
           updated_at?: string
         }
         Relationships: []
@@ -1253,6 +1289,48 @@ export type Database = {
           is_active?: boolean
           role?: string
           updated_at?: string
+        }
+        Relationships: []
+      }
+      platform_backup_runs: {
+        Row: {
+          checksum_sha256: string | null
+          created_at: string
+          error_code: string | null
+          finished_at: string | null
+          id: string
+          kind: string
+          location: string | null
+          note: string | null
+          size_bytes: number | null
+          started_at: string
+          status: string
+        }
+        Insert: {
+          checksum_sha256?: string | null
+          created_at?: string
+          error_code?: string | null
+          finished_at?: string | null
+          id?: string
+          kind: string
+          location?: string | null
+          note?: string | null
+          size_bytes?: number | null
+          started_at?: string
+          status?: string
+        }
+        Update: {
+          checksum_sha256?: string | null
+          created_at?: string
+          error_code?: string | null
+          finished_at?: string | null
+          id?: string
+          kind?: string
+          location?: string | null
+          note?: string | null
+          size_bytes?: number | null
+          started_at?: string
+          status?: string
         }
         Relationships: []
       }
@@ -1321,6 +1399,7 @@ export type Database = {
           failed_attempts: number
           locked_until: string | null
           must_change_pin: boolean
+          must_change_reason: string | null
           pin_change_pending: boolean
           pin_change_requested_at: string | null
           pin_changed_at: string
@@ -1334,6 +1413,7 @@ export type Database = {
           failed_attempts?: number
           locked_until?: string | null
           must_change_pin?: boolean
+          must_change_reason?: string | null
           pin_change_pending?: boolean
           pin_change_requested_at?: string | null
           pin_changed_at?: string
@@ -1347,6 +1427,7 @@ export type Database = {
           failed_attempts?: number
           locked_until?: string | null
           must_change_pin?: boolean
+          must_change_reason?: string | null
           pin_change_pending?: boolean
           pin_change_requested_at?: string | null
           pin_changed_at?: string
@@ -1619,6 +1700,7 @@ export type Database = {
           address: string | null
           auto_consume_stock: boolean
           branding: Json
+          cancelled_at: string | null
           created_at: string
           custom_domain: string | null
           id: string
@@ -1626,6 +1708,7 @@ export type Database = {
           onboarded_at: string | null
           opening_float: number
           phone: string | null
+          purged_at: string | null
           slug: string
           status: string
           status_before_suspension: string | null
@@ -1641,6 +1724,7 @@ export type Database = {
           address?: string | null
           auto_consume_stock?: boolean
           branding?: Json
+          cancelled_at?: string | null
           created_at?: string
           custom_domain?: string | null
           id?: string
@@ -1648,6 +1732,7 @@ export type Database = {
           onboarded_at?: string | null
           opening_float?: number
           phone?: string | null
+          purged_at?: string | null
           slug: string
           status?: string
           status_before_suspension?: string | null
@@ -1663,6 +1748,7 @@ export type Database = {
           address?: string | null
           auto_consume_stock?: boolean
           branding?: Json
+          cancelled_at?: string | null
           created_at?: string
           custom_domain?: string | null
           id?: string
@@ -1670,6 +1756,7 @@ export type Database = {
           onboarded_at?: string | null
           opening_float?: number
           phone?: string | null
+          purged_at?: string | null
           slug?: string
           status?: string
           status_before_suspension?: string | null
@@ -1821,6 +1908,38 @@ export type Database = {
             columns: ["restaurant_id"]
             isOneToOne: false
             referencedRelation: "restaurants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      session_device_attestations: {
+        Row: {
+          created_at: string
+          device_id: string
+          expires_at: string
+          session_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          device_id: string
+          expires_at: string
+          session_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          device_id?: string
+          expires_at?: string
+          session_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "session_device_attestations_device_id_fkey"
+            columns: ["device_id"]
+            isOneToOne: false
+            referencedRelation: "trusted_devices"
             referencedColumns: ["id"]
           },
         ]
@@ -2208,6 +2327,92 @@ export type Database = {
           },
         ]
       }
+      tenant_admin_invitations: {
+        Row: {
+          accepted_at: string | null
+          auth_user_id: string | null
+          created_at: string
+          email: string
+          expired_at: string | null
+          expires_at: string
+          first_name: string
+          id: string
+          invited_by: string
+          invited_by_type: string
+          last_attempt_at: string
+          last_name: string | null
+          last_sent_at: string | null
+          middle_name: string | null
+          restaurant_id: string
+          revoke_reason: string | null
+          revoked_at: string | null
+          revoked_by: string | null
+          send_count: number
+          status: string
+          suppressed: boolean
+          updated_at: string
+          username: string
+        }
+        Insert: {
+          accepted_at?: string | null
+          auth_user_id?: string | null
+          created_at?: string
+          email: string
+          expired_at?: string | null
+          expires_at: string
+          first_name: string
+          id?: string
+          invited_by: string
+          invited_by_type: string
+          last_attempt_at?: string
+          last_name?: string | null
+          last_sent_at?: string | null
+          middle_name?: string | null
+          restaurant_id: string
+          revoke_reason?: string | null
+          revoked_at?: string | null
+          revoked_by?: string | null
+          send_count?: number
+          status?: string
+          suppressed?: boolean
+          updated_at?: string
+          username: string
+        }
+        Update: {
+          accepted_at?: string | null
+          auth_user_id?: string | null
+          created_at?: string
+          email?: string
+          expired_at?: string | null
+          expires_at?: string
+          first_name?: string
+          id?: string
+          invited_by?: string
+          invited_by_type?: string
+          last_attempt_at?: string
+          last_name?: string | null
+          last_sent_at?: string | null
+          middle_name?: string | null
+          restaurant_id?: string
+          revoke_reason?: string | null
+          revoked_at?: string | null
+          revoked_by?: string | null
+          send_count?: number
+          status?: string
+          suppressed?: boolean
+          updated_at?: string
+          username?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tenant_admin_invitations_restaurant_id_fkey"
+            columns: ["restaurant_id"]
+            isOneToOne: false
+            referencedRelation: "restaurants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tenant_counters: {
         Row: {
           counter_key: string
@@ -2236,6 +2441,51 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      trusted_devices: {
+        Row: {
+          created_at: string
+          expires_at: string
+          factor_id: string
+          id: string
+          label: string
+          last_seen_at: string
+          revoke_reason: string | null
+          revoked_at: string | null
+          revoked_by: string | null
+          scope: string
+          token_hash: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at: string
+          factor_id: string
+          id?: string
+          label?: string
+          last_seen_at?: string
+          revoke_reason?: string | null
+          revoked_at?: string | null
+          revoked_by?: string | null
+          scope: string
+          token_hash: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          factor_id?: string
+          id?: string
+          label?: string
+          last_seen_at?: string
+          revoke_reason?: string | null
+          revoked_at?: string | null
+          revoked_by?: string | null
+          scope?: string
+          token_hash?: string
+          user_id?: string
+        }
+        Relationships: []
       }
       user_notifications: {
         Row: {
@@ -2387,6 +2637,14 @@ export type Database = {
         Args: Record<PropertyKey, never>
         Returns: string
       }
+      fn_abort_tenant_admin_invitation: {
+        Args: { p_invitation_id: string }
+        Returns: Json
+      }
+      fn_accept_tenant_admin_invitation: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
       fn_active_session_window: {
         Args: Record<PropertyKey, never>
         Returns: unknown
@@ -2400,12 +2658,24 @@ export type Database = {
         }
         Returns: Json
       }
+      fn_admin_reset_user_pin: {
+        Args: {
+          p_profile_id: string
+          p_pin_digest: string
+          p_pin_length: number
+        }
+        Returns: Json
+      }
       fn_apply_recipe_consumption: {
         Args: { p_order_id: string; p_menu_item_id: string; p_qty: number }
         Returns: number
       }
       fn_approve_pin_change: {
         Args: { p_profile_id: string }
+        Returns: Json
+      }
+      fn_attach_tenant_admin_invitation: {
+        Args: { p_invitation_id: string; p_auth_user_id: string }
         Returns: Json
       }
       fn_auth_password_verification_hook: {
@@ -2423,6 +2693,14 @@ export type Database = {
       fn_check_idempotency_key: {
         Args: { p_key: string }
         Returns: undefined
+      }
+      fn_check_patch: {
+        Args: { p_patch: Json; p_allowed: string[] }
+        Returns: undefined
+      }
+      fn_check_trusted_device: {
+        Args: { p_token: string }
+        Returns: Json
       }
       fn_complete_forced_pin_change: {
         Args: {
@@ -2460,6 +2738,10 @@ export type Database = {
         }
         Returns: Json
       }
+      fn_create_role: {
+        Args: { p_role: Json }
+        Returns: Json
+      }
       fn_create_staff_profile: {
         Args: {
           p_auth_user_id: string
@@ -2475,11 +2757,60 @@ export type Database = {
         Args: { p_profile_id: string; p_approve: boolean }
         Returns: Json
       }
+      fn_delete_role: {
+        Args: { p_role_id: string }
+        Returns: Json
+      }
+      fn_device_admin_scope: {
+        Args: { p_user_id: string }
+        Returns: string
+      }
+      fn_device_audit: {
+        Args: {
+          p_event: string
+          p_scope: string
+          p_user_id: string
+          p_detail: Json
+        }
+        Returns: undefined
+      }
+      fn_device_json: {
+        Args: {
+          p_device: Database["public"]["Tables"]["trusted_devices"]["Row"]
+        }
+        Returns: Json
+      }
+      fn_device_live: {
+        Args: {
+          p_device: Database["public"]["Tables"]["trusted_devices"]["Row"]
+        }
+        Returns: boolean
+      }
+      fn_device_scope_ok: {
+        Args: { p_scope: string; p_user_id: string }
+        Returns: boolean
+      }
+      fn_device_trust_satisfied: {
+        Args: Record<PropertyKey, never>
+        Returns: boolean
+      }
       fn_err: {
         Args: { p_code: string; p_detail?: string }
         Returns: undefined
       }
+      fn_expire_tenant_admin_invitations: {
+        Args: { p_rid: string; p_email: string }
+        Returns: number
+      }
+      fn_get_my_invitation: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
       fn_get_open_day: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
+      fn_get_restaurant_profile: {
         Args: Record<PropertyKey, never>
         Returns: Json
       }
@@ -2495,6 +2826,10 @@ export type Database = {
         Args: Record<PropertyKey, never>
         Returns: Json
       }
+      fn_get_subscription_usage: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
       fn_idempotency_begin: {
         Args: { p_key: string; p_command: string; p_request_hash: string }
         Returns: Json
@@ -2503,9 +2838,66 @@ export type Database = {
         Args: { p_key: string; p_command: string; p_result: Json }
         Returns: undefined
       }
+      fn_identity_claim: {
+        Args: { p_user_id: string; p_kind: string }
+        Returns: undefined
+      }
+      fn_identity_lock: {
+        Args: { p_user_id: string }
+        Returns: undefined
+      }
       fn_ingredient_json: {
         Args: { p_id: string }
         Returns: Json
+      }
+      fn_invitation_actor: {
+        Args: { p_rid: string }
+        Returns: Record<string, unknown>
+      }
+      fn_invitation_for_caller: {
+        Args: { p_invitation_id: string }
+        Returns: Record<string, unknown>
+      }
+      fn_invitation_inviter_active: {
+        Args: { p_invitation_id: string }
+        Returns: boolean
+      }
+      fn_invitation_json: {
+        Args: { p_id: string }
+        Returns: Json
+      }
+      fn_invitation_rate_check: {
+        Args: { p_rid: string; p_actor: string }
+        Returns: undefined
+      }
+      fn_invitation_state: {
+        Args: {
+          p_status: string
+          p_expires_at: string
+          p_send_count: number
+          p_created_at: string
+        }
+        Returns: string
+      }
+      fn_invoice_json: {
+        Args: { p_id: string }
+        Returns: Json
+      }
+      fn_json_money: {
+        Args: { p_obj: Json; p_key: string; p_max: number }
+        Returns: number
+      }
+      fn_json_pos_int: {
+        Args: { p_obj: Json; p_key: string; p_max: number }
+        Returns: number
+      }
+      fn_json_text: {
+        Args: { p_obj: Json; p_key: string; p_max: number; p_nullable: boolean }
+        Returns: string
+      }
+      fn_jwt_session_id: {
+        Args: Record<PropertyKey, never>
+        Returns: string
       }
       fn_kiosk_context: {
         Args: { p_token_hash: string; p_slug: string; p_touch?: boolean }
@@ -2527,7 +2919,15 @@ export type Database = {
         Args: Record<PropertyKey, never>
         Returns: Json
       }
+      fn_list_my_trusted_devices: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
       fn_list_pending_pin_changes: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
+      fn_list_roles: {
         Args: Record<PropertyKey, never>
         Returns: Json
       }
@@ -2538,6 +2938,18 @@ export type Database = {
           p_before?: string
           p_before_id?: string
         }
+        Returns: Json
+      }
+      fn_list_tenant_admin_invitations: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
+      fn_list_user_trusted_devices: {
+        Args: { p_user_id: string }
+        Returns: Json
+      }
+      fn_list_users: {
+        Args: { p_include_inactive?: boolean }
         Returns: Json
       }
       fn_mark_notification_read: {
@@ -2556,6 +2968,10 @@ export type Database = {
         Args: { p_id: string }
         Returns: Json
       }
+      fn_mfa_session_ok: {
+        Args: Record<PropertyKey, never>
+        Returns: boolean
+      }
       fn_next_number: {
         Args: {
           p_restaurant_id: string
@@ -2564,6 +2980,14 @@ export type Database = {
           p_pad?: number
         }
         Returns: string
+      }
+      fn_ops_purge_expired_cancelled_tenants: {
+        Args: { p_limit?: number }
+        Returns: Json
+      }
+      fn_ops_register_platform_admin: {
+        Args: { p_user_id: string; p_full_name: string }
+        Returns: Json
       }
       fn_pin_eligible: {
         Args: { p_profile_id: string }
@@ -2585,9 +3009,153 @@ export type Database = {
         Args: { p_user_id: string }
         Returns: boolean
       }
+      fn_plan_json: {
+        Args: { p_plan_id: string }
+        Returns: Json
+      }
+      fn_plan_normalize: {
+        Args: { p_patch: Json }
+        Returns: Json
+      }
+      fn_plan_tenant_admin_invitation_delivery: {
+        Args: { p_invitation_id: string }
+        Returns: Json
+      }
+      fn_platform_cancel_tenant: {
+        Args: {
+          p_restaurant_id: string
+          p_reason: string
+          p_confirm_slug: string
+        }
+        Returns: Json
+      }
+      fn_platform_change_plan: {
+        Args: { p_restaurant_id: string; p_plan_id: string; p_reason: string }
+        Returns: Json
+      }
+      fn_platform_create_invoice: {
+        Args: {
+          p_restaurant_id: string
+          p_amount: number
+          p_period_start: string
+          p_period_end: string
+          p_reference?: string
+        }
+        Returns: Json
+      }
+      fn_platform_create_plan: {
+        Args: { p_plan: Json }
+        Returns: Json
+      }
+      fn_platform_create_tenant: {
+        Args: {
+          p_name: string
+          p_slug: string
+          p_plan_id: string
+          p_trial_days?: number
+          p_timezone?: string
+        }
+        Returns: Json
+      }
+      fn_platform_get_tenant: {
+        Args: { p_restaurant_id: string }
+        Returns: Json
+      }
+      fn_platform_guard: {
+        Args: Record<PropertyKey, never>
+        Returns: string
+      }
+      fn_platform_list_admins: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
+      fn_platform_list_audit_log: {
+        Args: {
+          p_limit?: number
+          p_before?: string
+          p_before_id?: string
+          p_restaurant_id?: string
+          p_action_prefix?: string
+          p_admin_id?: string
+        }
+        Returns: Json
+      }
+      fn_platform_list_backup_runs: {
+        Args: { p_limit?: number; p_before?: string; p_before_id?: string }
+        Returns: Json
+      }
+      fn_platform_list_invoices: {
+        Args: {
+          p_restaurant_id?: string
+          p_status?: string
+          p_limit?: number
+          p_before?: string
+          p_before_id?: string
+        }
+        Returns: Json
+      }
+      fn_platform_list_plans: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
+      fn_platform_list_tenants: {
+        Args: {
+          p_search?: string
+          p_status?: string
+          p_plan_id?: string
+          p_limit?: number
+          p_offset?: number
+        }
+        Returns: Json
+      }
       fn_platform_mfa_satisfied: {
         Args: Record<PropertyKey, never>
         Returns: boolean
+      }
+      fn_platform_reason: {
+        Args: { p_reason: string }
+        Returns: string
+      }
+      fn_platform_restore_tenant: {
+        Args: {
+          p_restaurant_id: string
+          p_reason: string
+          p_confirm_slug: string
+        }
+        Returns: Json
+      }
+      fn_platform_set_admin_active: {
+        Args: { p_admin_id: string; p_active: boolean; p_reason: string }
+        Returns: Json
+      }
+      fn_platform_set_billing_status: {
+        Args: { p_restaurant_id: string; p_status: string; p_reason: string }
+        Returns: Json
+      }
+      fn_platform_set_invoice_status: {
+        Args: {
+          p_invoice_id: string
+          p_status: string
+          p_method?: string
+          p_reference?: string
+        }
+        Returns: Json
+      }
+      fn_platform_set_plan_active: {
+        Args: { p_plan_id: string; p_active: boolean }
+        Returns: Json
+      }
+      fn_platform_system_health: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
+      fn_platform_tenant_json: {
+        Args: { p_rid: string }
+        Returns: Json
+      }
+      fn_platform_update_plan: {
+        Args: { p_plan_id: string; p_patch: Json }
+        Returns: Json
       }
       fn_post_stock_movement: {
         Args: {
@@ -2601,8 +3169,27 @@ export type Database = {
         }
         Returns: Json
       }
+      fn_prepare_pin_reset: {
+        Args: { p_profile_id: string }
+        Returns: Json
+      }
       fn_prepare_staff_creation: {
         Args: { p_username: string; p_role_id: string }
+        Returns: Json
+      }
+      fn_prepare_tenant_admin_invitation: {
+        Args: {
+          p_restaurant_id: string
+          p_email: string
+          p_first_name: string
+          p_middle_name: string
+          p_last_name: string
+          p_username: string
+        }
+        Returns: Json
+      }
+      fn_prepare_tenant_admin_invitation_resend: {
+        Args: { p_invitation_id: string }
         Returns: Json
       }
       fn_provision_tenant: {
@@ -2633,6 +3220,10 @@ export type Database = {
         }
         Returns: Json
       }
+      fn_record_tenant_admin_invitation_sent: {
+        Args: { p_invitation_id: string }
+        Returns: Json
+      }
       fn_register_kiosk: {
         Args: { p_name: string }
         Returns: Json
@@ -2647,6 +3238,10 @@ export type Database = {
       }
       fn_require_aal2: {
         Args: Record<PropertyKey, never>
+        Returns: undefined
+      }
+      fn_require_recent_totp: {
+        Args: { p_max?: unknown }
         Returns: undefined
       }
       fn_require_step_up: {
@@ -2665,6 +3260,10 @@ export type Database = {
         Args: { p_slug: string }
         Returns: Json
       }
+      fn_restaurant_profile_json: {
+        Args: { p_rid: string }
+        Returns: Json
+      }
       fn_reverse_order_consumption: {
         Args: { p_order_id: string }
         Returns: number
@@ -2677,8 +3276,40 @@ export type Database = {
         }
         Returns: Json
       }
+      fn_revoke_all_trusted_devices: {
+        Args: { p_user_id?: string }
+        Returns: Json
+      }
+      fn_revoke_devices_of: {
+        Args: { p_user_id: string; p_reason: string }
+        Returns: number
+      }
+      fn_revoke_invitations_of_inviter: {
+        Args: { p_inviter: string; p_type: string; p_rid: string }
+        Returns: number
+      }
       fn_revoke_kiosk: {
         Args: { p_kiosk_id: string }
+        Returns: Json
+      }
+      fn_revoke_tenant_admin_invitation: {
+        Args: { p_invitation_id: string }
+        Returns: Json
+      }
+      fn_revoke_trusted_device: {
+        Args: { p_device_id: string }
+        Returns: Json
+      }
+      fn_role_for_edit: {
+        Args: { p_rid: string; p_role_id: string }
+        Returns: string
+      }
+      fn_role_json: {
+        Args: { p_role_id: string }
+        Returns: Json
+      }
+      fn_role_normalize: {
+        Args: { p_patch: Json }
         Returns: Json
       }
       fn_seed_tenant_defaults: {
@@ -2701,8 +3332,20 @@ export type Database = {
         Args: { p_menu_item_id: string; p_lines: Json }
         Returns: Json
       }
+      fn_set_role_active: {
+        Args: { p_role_id: string; p_active: boolean }
+        Returns: Json
+      }
+      fn_set_role_station_access: {
+        Args: { p_role_id: string; p_station_ids: string[] }
+        Returns: Json
+      }
       fn_set_stock_stepup_threshold: {
         Args: { p_threshold: number }
+        Returns: Json
+      }
+      fn_set_user_active: {
+        Args: { p_profile_id: string; p_active: boolean }
         Returns: Json
       }
       fn_set_user_pin: {
@@ -2733,6 +3376,14 @@ export type Database = {
         Args: { p_rid: string; p_username: string; p_role_id: string }
         Returns: string
       }
+      fn_staff_quota_check: {
+        Args: { p_rid: string; p_exclude_invitation?: string }
+        Returns: undefined
+      }
+      fn_staff_slots_used: {
+        Args: { p_rid: string; p_exclude_invitation: string }
+        Returns: number
+      }
       fn_stock_day: {
         Args: { p_rid: string }
         Returns: string
@@ -2758,9 +3409,29 @@ export type Database = {
         Args: { p_restaurant_id: string; p_reason: string }
         Returns: Json
       }
+      fn_tenant_admin_invitation_cleanup_user: {
+        Args: { p_invitation_id: string }
+        Returns: Json
+      }
+      fn_tenant_logo_for_slug: {
+        Args: { p_slug: string }
+        Returns: Json
+      }
       fn_tenant_status_guard: {
         Args: { p_write?: boolean }
         Returns: string
+      }
+      fn_tenant_usage: {
+        Args: { p_rid: string }
+        Returns: Json
+      }
+      fn_trust_device: {
+        Args: { p_label?: string }
+        Returns: Json
+      }
+      fn_update_business_settings: {
+        Args: { p_patch: Json }
+        Returns: Json
       }
       fn_update_ingredient: {
         Args: { p_ingredient_id: string; p_patch: Json }
@@ -2768,6 +3439,22 @@ export type Database = {
       }
       fn_update_menu_item: {
         Args: { p_menu_item_id: string; p_patch: Json }
+        Returns: Json
+      }
+      fn_update_restaurant_branding: {
+        Args: {
+          p_primary_color: string
+          p_accent_color: string
+          p_logo_path: string
+        }
+        Returns: Json
+      }
+      fn_update_restaurant_profile: {
+        Args: { p_patch: Json }
+        Returns: Json
+      }
+      fn_update_role: {
+        Args: { p_role_id: string; p_patch: Json }
         Returns: Json
       }
       fn_update_role_permissions: {
@@ -2786,9 +3473,21 @@ export type Database = {
         }
         Returns: Json
       }
+      fn_update_user: {
+        Args: { p_profile_id: string; p_patch: Json }
+        Returns: Json
+      }
       fn_user_auth_method: {
         Args: { p_user_id: string }
         Returns: string
+      }
+      fn_user_for_edit: {
+        Args: { p_rid: string; p_profile_id: string }
+        Returns: string
+      }
+      fn_user_json: {
+        Args: { p_profile_id: string; p_with_secrets: boolean }
+        Returns: Json
       }
       fn_verify_pin: {
         Args: { p_profile_id: string; p_pin_digest: string }
@@ -2962,3 +3661,4 @@ export const Constants = {
     Enums: {},
   },
 } as const
+

@@ -42,7 +42,7 @@ select matches(tests.run(format($q$update public.restaurants set vat_rate = 101 
 select matches(tests.run(format($q$update public.restaurants set vat_rate = -1 where id = %L$q$, (select a from _f))), '^23514\|', 'vat_rate < 0 refused');
 select matches(tests.run(format($q$update public.restaurants set opening_float = -5 where id = %L$q$, (select a from _f))), '^23514\|', 'negative opening_float refused');
 select tests.authenticate_as((select admin from _f));
-select is(tests.run($q$update public.restaurants set timezone = 'Nowhere/City'$q$), 'P0001|invalid_timezone|', 'tenant admin cannot set a bogus timezone either');
+select is(tests.run($q$select public.fn_update_restaurant_profile('{"timezone": "Nowhere/City"}')$q$), 'P0001|invalid_timezone|', 'tenant admin cannot set a bogus timezone either (RPC)');
 select tests.clear_auth();
 
 -- ═════════ expense date / category snapshot ═════════
@@ -162,13 +162,13 @@ begin
     ('00000000-0000-4000-8000-0000000000f2', v_a, 'Greeter', 'greeter', v_greeter, 'pin');
 end $$;
 select tests.authenticate_as('00000000-0000-4000-8000-0000000000f1');
-select is(tests.run(format($q$update public.profiles set is_active = false where id = %L$q$, (select cashier from _f))), 'P0001|permission_escalation|target holds rights the caller does not', 'users.manage cannot deactivate a user whose role holds rights the caller lacks');
-select is(tests.run(format($q$update public.profiles set is_active = false where id = %L$q$, (select kitchen from _f))), 'P0001|permission_escalation|target holds rights the caller does not', '... nor a station user it has no station for');
-select is(tests.run($q$update public.profiles set is_active = false where username = 'greeter'$q$), 'ok:1', 'but it can deactivate a user whose role it fully covers');
-select is(tests.run($q$update public.profiles set first_name = 'Renamed' where username = 'greeter'$q$), 'ok:1', 'renaming is not gated by the rights comparison');
+select is(tests.run(format($q$select public.fn_set_user_active(%L, false)$q$, (select cashier from _f))), 'P0001|permission_escalation|target holds rights the caller does not', 'users.manage cannot deactivate a user whose role holds rights the caller lacks');
+select is(tests.run(format($q$select public.fn_set_user_active(%L, false)$q$, (select kitchen from _f))), 'P0001|permission_escalation|target holds rights the caller does not', '... nor a station user it has no station for');
+select is(tests.run($q$select public.fn_set_user_active('00000000-0000-4000-8000-0000000000f2', false)$q$), 'ok:1', 'but it can deactivate a user whose role it fully covers');
+select is(tests.run($q$select public.fn_update_user('00000000-0000-4000-8000-0000000000f2', '{"first_name": "Renamed"}')$q$), 'ok:1', 'and rename a user whose role it covers');
 select tests.clear_auth();
 select tests.authenticate_as((select admin from _f));
-select is(tests.run(format($q$update public.profiles set is_active = false where id = %L$q$, (select cashier from _f))), 'ok:1', 'tenant_admin holds everything and may deactivate anyone (except the last admin)');
+select is(tests.run(format($q$select public.fn_set_user_active(%L, false)$q$, (select cashier from _f))), 'ok:1', 'tenant_admin holds everything and may deactivate anyone (except the last admin)');
 select tests.clear_auth();
 
 -- ═════════ SL5 column / row exposure ═════════

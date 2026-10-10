@@ -1,6 +1,6 @@
 export { AuthProvider } from './AuthProvider'
 export { useAuth } from './useAuth'
-export { RequireAuth, RequirePermission, RequirePlatformAdmin } from './guards'
+export { RequireAuth, RequirePermission, RequirePlatformAdmin, RequireTenantIdentity } from './guards'
 export { PinPad } from './PinPad'
 export { StaffLogin } from './StaffLogin'
 export { AdminLoginForm } from './AdminLoginForm'
@@ -8,3 +8,4 @@ export { TenantLoginPage, TenantAdminLoginPage, PlatformLoginPage } from './page
 export { InactivityGuard } from './InactivityGuard'
 export { StepUpDialog } from './StepUpDialog'
 export { useStepUp, type StepUpRunner } from './useStepUp'
+export { TrustedDevicesCard } from './TrustedDevicesCard'

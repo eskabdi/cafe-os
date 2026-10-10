@@ -11,7 +11,7 @@ flowchart LR
     end
     subgraph TB2["Trust boundary: Supabase project"]
         api["PostgREST / Realtime / Auth (JWT verified)"]
-        edge["Edge Functions (service_role): pin-login, provisioning, billing webhook"]
+        edge["Edge Functions (service_role confined): pin-login, pin-change, staff-create, staff-roster, staff-pin-reset, tenant-admin-invite, billing webhook"]
         db[("PostgreSQL: RLS + security-definer RPCs + triggers")]
     end
     staff -->|JWT, intents only| api
@@ -76,6 +76,9 @@ and platform admins `fn_verify_pin` returns the same `invalid` result as for an 
 permissions are re-derived from `profiles` on every statement.
 
 ## Level 1: tenant provisioning and suspension
+Phase 3B: the Platform Admin Portal provisions with `fn_platform_create_tenant` (no owner) and invites the first Tenant Admin (see below);
+`fn_provision_tenant` (owner already in Auth, confirmed e-mail) remains for service flows (seed / CI). Suspension, reactivation, cancellation,
+plan and billing-status changes are aal2 platform RPCs.
 ```mermaid
 flowchart LR
     SU["Signup / platform admin console"] --> EF["Edge Function (service_role)"]
@@ -85,6 +88,40 @@ flowchart LR
     DB --> AL["audit_logs + admin_audit_log"]
     PA["platform super admin"] -->|fn_suspend_tenant / fn_reactivate_tenant| DB
     DB -->|status suspended: helpers resolve NULL, all tenant access denied| TEN["tenant users"]
+```
+
+## Level 1: Platform Admin Portal (Phase 3B, `/platform/*`)
+```mermaid
+flowchart LR
+    SA["Super Admin (email + password + TOTP, aal2)"] -->|JWT| RPC["fn_platform_* RPCs: fn_platform_guard (active super admin, aal2, verified factor)"]
+    RPC -->|metadata, subscription, plan limits| PT[("restaurants, subscriptions, plans, platform_invoices")]
+    RPC -->|AGGREGATES only (fn_tenant_usage: counts, byte sums)| OPS[("tenant operational tables + storage.objects")]
+    RPC -->|health: version, sizes, counters, last backup| HB[("pg catalogs, platform_backup_runs")]
+    RPC -->|every write| AAL[("admin_audit_log (+ tenant audit_logs event)")]
+    SA -->|invite / resend / revoke| TAI["tenant-admin-invite (Edge Function)"]
+    TAI -->|1 fn_prepare_tenant_admin_invitation AS CALLER| RPC
+    TAI -->|2 inviteUserByEmail (service role)| GT["Supabase Auth (sends the e-mail)"]
+    TAI -->|3 fn_attach_tenant_admin_invitation (service role)| INV[("tenant_admin_invitations")]
+    OPSJOB["ops backup job (service role)"] -->|insert / finish run| HB
+    SA -.->|no RLS path, no profile| X["tenant operational rows: 0 rows, tenant RPCs: permission_denied"]
+```
+Trust boundaries: the SPA never holds the service role; the Edge Function forwards the caller's JWT for step 1 so the DATABASE decides who may invite; the
+invitee later signs in from the e-mail link (confirmed address) and calls `fn_accept_tenant_admin_invitation()` with its own session, which creates its
+`tenant_admin` profile. Usage counters cross the platform/tenant boundary only as numbers.
+
+## Level 1: Tenant Portal administration (Phase 3B, `/r/<slug>/*`)
+```mermaid
+flowchart LR
+    TA["tenant_admin (or delegate with the permission)"] -->|JWT, intents only| RPC["fn_create_role / fn_update_role / fn_set_role_active / fn_delete_role / fn_set_role_station_access / fn_update_role_permissions"]
+    TA -->|users| URPC["fn_list_users / fn_update_user / fn_set_user_active / fn_change_user_role / fn_reset_pin_lockout"]
+    TA -->|new staff| SC["staff-create (Edge Function)"]
+    TA -->|new PIN| SPR["staff-pin-reset (Edge Function): fn_prepare_pin_reset AS CALLER, then fn_set_user_pin (service role, peppered digest)"]
+    TA -->|co-admin by e-mail (aal2)| TAI["tenant-admin-invite"]
+    TA -->|profile / business settings (aal2) / branding| SRPC["fn_update_restaurant_profile / fn_update_business_settings / fn_update_restaurant_branding"]
+    TA -->|logo upload: tenant-branding/restaurants/&lt;own id&gt;/branding/&lt;file&gt;| STO[("Storage: tenant-branding (private)")]
+    SRPC -->|logo object must exist under own prefix| STO
+    RPC & URPC & SRPC -->|tenant from identity, permission, step-up, validate, audit| DB[("Postgres")]
+    TA -.->|platform RPCs| NO["permission_denied"]
 ```
 
 ## Level 1: tenant shell read path (Phase 2)

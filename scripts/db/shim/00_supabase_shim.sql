@@ -123,7 +123,8 @@ grant all on all tables in schema auth to postgres;
 create table storage.buckets (id text primary key, name text not null, public boolean default false,
                               file_size_limit bigint, allowed_mime_types text[]);
 create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text references storage.buckets(id),
-                              name text, owner uuid, created_at timestamptz default now());
+                              name text, owner uuid, created_at timestamptz default now(),
+                              metadata jsonb);   -- real Storage keeps {size, mimetype, ...} here (0030 usage counters read size)
 alter table storage.objects enable row level security;
 alter table storage.buckets owner to postgres;
 alter table storage.objects owner to postgres;

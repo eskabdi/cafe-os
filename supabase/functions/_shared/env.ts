@@ -30,3 +30,25 @@ export const readStaffCreateEnv = readPinLoginEnv
 
 /** Same variables, read by staff-roster (it does not use the pepper but shares the fail-closed env). */
 export const readRosterEnv = readPinLoginEnv
+
+export interface InviteEnv {
+  supabaseUrl: string
+  serviceRoleKey: string
+  anonKey: string
+  allowedOrigins: string | undefined
+  /** Where the invitation e-mail sends the invitee (the Tenant Portal's accept-invitation page). Absolute https URL. */
+  inviteRedirectUrl: string
+}
+
+/** tenant-admin-invite: no PIN pepper; a missing variable (or an unsafe redirect) disables the function (fail closed). */
+export function readInviteEnv(isSafeRedirect: (url: string | undefined) => boolean): InviteEnv | null {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  const anonKey = Deno.env.get('SUPABASE_ANON_KEY')
+  const inviteRedirectUrl = Deno.env.get('INVITE_REDIRECT_URL')
+  if (!supabaseUrl || !serviceRoleKey || !anonKey || !inviteRedirectUrl || !isSafeRedirect(inviteRedirectUrl)) return null
+  return { supabaseUrl, serviceRoleKey, anonKey, allowedOrigins: Deno.env.get('ALLOWED_ORIGINS'), inviteRedirectUrl }
+}
+
+/** staff-pin-reset: same variables as staff-create (it peppers the new PIN). */
+export const readPinResetEnv = readPinLoginEnv

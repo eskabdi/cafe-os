@@ -26,9 +26,7 @@ grant usage on schema tests to anon, authenticated, service_role;
 create or replace function tests.authenticate_as(p_user_id uuid) returns void
 language plpgsql as $$
 begin
-  -- Platform admins need aal2 in production (migration 0015). Tests opt out per transaction so they do not depend on
-  -- a database-level setting (the real stack has none); 20_platform_hardening.test.sql exercises the gate itself.
-  perform set_config('app.platform_mfa_required', 'off', true);
+  -- aal1 (password only). Platform admins and MFA-gated actions need tests.aal2 (no opt-out since 0032).
   perform set_config('request.jwt.claims',
     json_build_object('sub', p_user_id, 'role', 'authenticated', 'aud', 'authenticated')::text, true);
   perform set_config('request.jwt.claim.sub', p_user_id::text, true);
@@ -169,7 +167,10 @@ language plpgsql as $$
 begin
   perform tests.authenticate_as(p_user_id);
   perform set_config('request.jwt.claims',
-    json_build_object('sub', p_user_id, 'role', 'authenticated', 'aud', 'authenticated', 'aal', 'aal2')::text, true);
+    json_build_object('sub', p_user_id, 'role', 'authenticated', 'aud', 'authenticated', 'aal', 'aal2',
+                      'session_id', gen_random_uuid(),
+                      'amr', json_build_array(json_build_object('method', 'password', 'timestamp', extract(epoch from now())::bigint),
+                                              json_build_object('method', 'totp', 'timestamp', extract(epoch from now())::bigint)))::text, true);
 end $$;
 
 -- A complete authenticator session: the aal2 token AND a verified factor behind it (added only when the user has none, as the

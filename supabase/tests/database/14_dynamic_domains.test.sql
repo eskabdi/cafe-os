@@ -3,7 +3,7 @@
 -- deletes with soft deactivation, renames that keep ids, and a DB-level generalisation proof with names this
 -- codebase has never seen (Grill, Runner, Amole, ...).
 begin;
-select plan(83);
+select plan(86);
 
 -- ═════════ schema contains no knowledge of domain names ═════════
 select is((select count(*)::int from pg_type t join pg_namespace n on n.oid = t.typnamespace
@@ -87,10 +87,10 @@ select matches(tests.run(format($q$delete from public.table_areas where id = %L$
                '^23503\|update or delete on table "table_areas" violates foreign key constraint', 'table area with tables cannot be deleted');
 select matches(tests.run(format($q$delete from public.expense_categories where id = %L$q$, (select exp_rent from _f))),
                '^23503\|update or delete on table "expense_categories" violates foreign key constraint', 'expense category with expenses cannot be deleted');
-select matches(tests.run(format($q$delete from public.roles where id = %L$q$, (select cashier_role from _f))),
-               '^23503\|update or delete on table "roles" violates foreign key constraint', 'role with users cannot be deleted');
-select matches(tests.run(format($q$delete from public.roles where id = %L$q$, (select kitchen_role from _f))),
-               '^23503\|update or delete on table "roles" violates foreign key constraint', 'role with users + matrix rows cannot be deleted');
+select matches(tests.run(format($q$select public.fn_delete_role(%L)$q$, (select cashier_role from _f))),
+               '^P0001\|role_in_use\|users:', 'role with users cannot be deleted (structured error)');
+select matches(tests.run(format($q$select public.fn_delete_role(%L)$q$, (select kitchen_role from _f))),
+               '^P0001\|role_in_use\|users:', 'role with users + matrix rows cannot be deleted');
 select is(tests.run(format($q$delete from public.stations where id = %L$q$, (select st_kitchen from _f))) , tests.run(format($q$delete from public.stations where id = %L$q$, (select st_kitchen from _f))), 'the dependency error is stable (idempotent)');
 -- soft deactivation is the supported path
 select is(tests.run(format($q$update public.stations set is_active = false where id = %L$q$, (select st_bar from _f))), 'ok:1', 'station with dependents can be deactivated');
@@ -98,7 +98,8 @@ select is(tests.run(format($q$update public.categories set is_active = false whe
 select is(tests.run(format($q$update public.payment_methods set is_active = false where id = %L$q$, (select pm_cash from _f))), 'ok:1', 'payment method with dependents can be deactivated');
 select is(tests.run(format($q$update public.table_areas set is_active = false where id = %L$q$, (select area_main from _f))), 'ok:1', 'table area with dependents can be deactivated');
 select is(tests.run(format($q$update public.expense_categories set is_active = false where id = %L$q$, (select exp_rent from _f))), 'ok:1', 'expense category with dependents can be deactivated');
-select is(tests.run(format($q$update public.roles set is_active = false where id = %L$q$, (select cashier_role from _f))), 'ok:1', 'ordinary role with users can be deactivated (but loses its rights)');
+select matches(tests.run(format($q$select public.fn_set_role_active(%L, false)$q$, (select cashier_role from _f))), '^P0001\|role_in_use\|active_users:',
+               'a role held by active users cannot be deactivated (reassign or deactivate the users first)');
 select tests.clear_auth();
 select tests.authenticate_as_service_role();
 select matches(tests.run(format($q$delete from public.stations where id = %L$q$, (select st_kitchen from _f))), '^23503\|', 'service_role is held to the same dependency rule (station)');
@@ -113,7 +114,7 @@ select is(tests.run(format($q$update public.categories set name = 'Midday' where
 select is(tests.run(format($q$update public.payment_methods set name = 'Cash Drawer' where id = %L$q$, (select pm_cash from _f))), 'ok:1', 'rename a payment method');
 select is(tests.run(format($q$update public.table_areas set name = 'Atrium' where id = %L$q$, (select area_main from _f))), 'ok:1', 'rename a table area');
 select is(tests.run(format($q$update public.expense_categories set name = 'Premises' where id = %L$q$, (select exp_rent from _f))), 'ok:1', 'rename an expense category');
-select is(tests.run(format($q$update public.roles set name = 'Line Cook' where id = %L$q$, (select kitchen_role from _f))), 'ok:1', 'rename a role');
+select is(tests.run(format($q$select public.fn_update_role(%L, '{"name": "Line Cook"}')$q$, (select kitchen_role from _f))), 'ok:1', 'rename a role');
 select tests.clear_auth();
 select is((select name from public.stations where id = (select st_kitchen from _f)), 'Hot Line', 'station keeps its id under a new name');
 select is((select count(*)::int from public.menu_items where station_id = (select st_kitchen from _f)), 12, 'menu items still point at the renamed station (by id)');
@@ -125,15 +126,14 @@ select ok((select count(*) from public.role_permissions where role_id = (select 
 select ok(exists (select 1 from public.role_station_access where role_id = (select kitchen_role from _f) and station_id = (select st_kitchen from _f)), 'the renamed role keeps its station access');
 
 -- ═════════ DB-level generalisation proof: names the code has never seen ═════════
-select tests.authenticate_as((select admin from _f));
-update public.roles set is_active = true where id = (select cashier_role from _f);
+select tests.aal2((select admin from _f));
 select is(tests.run(format($q$insert into public.stations (restaurant_id, name, color, icon) values (%L, 'Grill', '#ff5500', 'flame')$q$, (select a from _f))), 'ok:1', 'new station "Grill" is just a row');
 select is(tests.run(format($q$insert into public.categories (restaurant_id, name) values (%L, 'Desserts')$q$, (select a from _f))), 'ok:1', 'new category "Desserts" is just a row');
 select is(tests.run(format($q$insert into public.payment_methods (restaurant_id, name, requires_reference) values (%L, 'Amole', true)$q$, (select a from _f))), 'ok:1', 'new payment method "Amole" is just a row');
 select is(tests.run(format($q$insert into public.table_areas (restaurant_id, name) values (%L, 'Rooftop')$q$, (select a from _f))), 'ok:1', 'new table area "Rooftop" is just a row');
 select is(tests.run(format($q$insert into public.expense_categories (restaurant_id, name) values (%L, 'Fuel')$q$, (select a from _f))), 'ok:1', 'new expense category "Fuel" is just a row');
-select is(tests.run(format($q$insert into public.roles (restaurant_id, name) values (%L, 'Runner')$q$, (select a from _f))), 'ok:1', 'new role "Runner" is just a row');
-select is(tests.run(format($q$insert into public.roles (restaurant_id, name) values (%L, 'ሰራተኛ')$q$, (select a from _f))), 'ok:1', 'names are free text (Amharic script)');
+select is(tests.run($q$select public.fn_create_role('{"name": "Runner"}')$q$), 'ok:1', 'new role "Runner" is just a row');
+select is(tests.run($q$select public.fn_create_role('{"name": "ሰራተኛ"}')$q$), 'ok:1', 'names are free text (Amharic script)');
 select is(tests.run(format($q$insert into public.stations (restaurant_id, name) values (%L, ' GRILL ')$q$, (select a from _f))), '23505|duplicate key value violates unique constraint "stations_tenant_name_key"|', 'names are unique per tenant after normalisation');
 update _ctx set grill = (select id from public.stations where restaurant_id = (select a from _f) and name = 'Grill'),
                 desserts = (select id from public.categories where restaurant_id = (select a from _f) and name = 'Desserts'),
@@ -182,8 +182,8 @@ select is((select count(*)::int from public.payments), 0, 'Runner cannot read pa
 select tests.clear_auth();
 
 -- a second invented role with a different shape: sees every order but no station-only data
-select tests.authenticate_as((select admin from _f));
-select is(tests.run(format($q$insert into public.roles (restaurant_id, name) values (%L, 'Floor Captain')$q$, (select a from _f))), 'ok:1', 'another invented role');
+select tests.aal2((select admin from _f));
+select is(tests.run($q$select public.fn_create_role('{"name": "Floor Captain"}')$q$), 'ok:1', 'another invented role');
 select is(tests.run(format($q$select public.fn_update_role_permissions((select id from public.roles where name = 'Floor Captain' and restaurant_id = %L), array['orders.view','orders.view_all','tables.view'], '{}')$q$, (select a from _f))),
           'ok:1', 'matrix: orders.view + orders.view_all, no stations');
 select is(tests.run(format($q$select public.fn_change_user_role(%L, (select id from public.roles where name = 'Floor Captain' and restaurant_id = %L))$q$, (select kitchen_user from _f), (select a from _f))),
@@ -196,17 +196,21 @@ select is((select count(*)::int from public.ingredients), 0, 'and no stock');
 select tests.clear_auth();
 
 -- the role in use cannot now be deleted, but an unused one can once its matrix is cleared
-select tests.authenticate_as((select admin from _f));
-select matches(tests.run(format($q$delete from public.roles where id = %L$q$, (select runner from _ctx))), '^23503\|', 'unused role with matrix rows: delete is blocked until the matrix is cleared');
-select is(tests.run(format($q$select public.fn_update_role_permissions(%L, '{}', '{}')$q$, (select runner from _ctx))), 'ok:1', 'clear the matrix');
-select is(tests.run(format($q$delete from public.roles where id = %L$q$, (select runner from _ctx))), 'ok:1', 'then the unused role can be deleted');
-select is(tests.run(format($q$delete from public.stations where id = %L$q$, (select grill from _ctx))), '23503|update or delete on table "stations" violates foreign key constraint "menu_items_station_fk" on table "menu_items"|Key is still referenced from table "menu_items".', 'the new station is protected as soon as it has dependents');
+select tests.aal2((select admin from _f));
+select matches(tests.run(format($q$select public.fn_delete_role((select id from public.roles where name = 'Floor Captain' and restaurant_id = %L))$q$, (select a from _f))),
+               '^P0001\|role_in_use\|users:1', 'the role in use cannot be deleted');
+select is(tests.run(format($q$select public.fn_delete_role(%L)$q$, (select runner from _ctx))), 'P0001|role_in_use|history', 'a role an account once held is history: deactivate, never delete');
+select is(tests.run(format($q$select public.fn_create_role('{"name": "Spare"}')$q$)), 'ok:1', 'a never-held role');
+select is(tests.run(format($q$select public.fn_update_role_permissions((select id from public.roles where name = 'Spare' and restaurant_id = %L), array['orders.view'], array[%L]::uuid[])$q$, (select a from _f), (select grill from _ctx))), 'ok:1', 'with matrix and station rows');
+select is(tests.run(format($q$select public.fn_delete_role((select id from public.roles where name = 'Spare' and restaurant_id = %L))$q$, (select a from _f))), 'ok:1', 'an unused role (matrix and station rows included) can be deleted');
+select is((select count(*)::int from public.roles where name = 'Spare'), 0, 'its matrix and station rows went with it (FKs would block otherwise)');
+select matches(tests.run(format($q$delete from public.stations where id = %L$q$, (select grill from _ctx))), '^23503\|update or delete on table "stations" violates foreign key constraint', 'the new station is protected as soon as it has dependents');
 select tests.clear_auth();
 
 -- ═════════ names are scoped per tenant: B can use the very same names ═════════
 select tests.authenticate_as((select b_admin from _f));
 select is(tests.run(format($q$insert into public.stations (restaurant_id, name) values (%L, 'Grill')$q$, (select b from _f))), 'ok:1', 'tenant B creates its own "Grill" (no cross-tenant collision, no oracle on A''s names)');
-select is(tests.run(format($q$insert into public.roles (restaurant_id, name) values (%L, 'Runner')$q$, (select b from _f))), 'ok:1', 'tenant B creates its own "Runner"');
+select is(tests.run($q$select public.fn_create_role('{"name": "Runner"}')$q$), 'ok:1', 'tenant B creates its own "Runner"');
 select is((select count(*)::int from public.stations where normalized_name = 'grill'), 1, 'B sees only its own Grill');
 select tests.clear_auth();
 

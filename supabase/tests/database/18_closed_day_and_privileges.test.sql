@@ -1,7 +1,7 @@
 -- H3/SL1/SM1/L1/SL7/H2: closed-day freeze on every day-bound table, service_role privilege cuts, audit writer,
 -- default-privilege canary, last-admin guard (single session; the concurrent race is scripts/db/race-tests.sh).
 begin;
-select plan(42);
+select plan(43);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -129,11 +129,12 @@ select ok(not has_function_privilege('anon', 'public.fn_err(text, text)', 'execu
 
 -- ═════════ H2 last tenant_admin (single session) ═════════
 select tests.authenticate_as((select admin from _f));
-select lives_ok(format($q$update public.profiles set is_active = false where id = %L$q$, (select admin2 from _f)), 'one of two admins can be deactivated');
-select is(tests.run(format($q$update public.profiles set is_active = false where id = %L$q$, (select admin from _f))), 'P0001|last_tenant_admin|', 'the last active admin cannot be deactivated');
+select lives_ok(format($q$select public.fn_set_user_active(%L, false)$q$, (select admin2 from _f)), 'one of two admins can be deactivated');
+select is(tests.run(format($q$select public.fn_set_user_active(%L, false)$q$, (select admin from _f))), 'P0001|permission_denied|cannot change your own account state', 'nobody deactivates itself through the RPC');
 select is(tests.run(format($q$select public.fn_change_user_role(%L, %L)$q$, (select admin from _f), (select id from public.roles where restaurant_id = (select a from _f) and name = 'Waiter'))),
           'P0001|last_tenant_admin|', 'nor demoted through fn_change_user_role');
 select tests.clear_auth();
+select is(tests.run(format($q$update public.profiles set is_active = false where id = %L$q$, (select admin from _f))), 'P0001|last_tenant_admin|', 'the last active admin cannot be deactivated on any path (trigger)');
 select is((select count(*)::int from public.profiles p join public.roles r on r.id = p.role_id where p.restaurant_id = (select a from _f) and p.is_active and r.system_key = 'tenant_admin'), 1, 'exactly one active admin remains');
 
 select * from finish();

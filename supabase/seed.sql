@@ -17,6 +17,10 @@
 --     central-cafe owners    selam@centralcafe.example.com, dawit@centralcafe.example.com
 --     second-cafe owner      owner@secondcafe.example.com
 --     DEMO-ONLY password for all four: DemoAdmin#2026   (never use outside local/dev)
+--   MFA has no opt-out (owner decision 7, migration 0032). The demo super admin gets a VERIFIED TOTP factor with the
+--   PUBLIC TEST secret JBSWY3DPEHPK3PXP (base32): add it to any authenticator app (or `oathtool --totp -b JBSWY3DPEHPK3PXP`)
+--   to produce codes locally. LOCAL ONLY: a hosted project never runs this file (guard below). The tenant admins enrol
+--   their own factor in the Tenant Portal (Security page) the first time an aal2 action asks for it.
 --   Staff (non-admin roles) sign in by PIN, verified server-side (profile_secrets + fn_verify_pin).
 --     Their auth.users rows use synthetic non-routable emails <username>@<slug>.staff.cafeos.invalid and
 --     random unusable passwords; profiles.auth_method = 'pin'.
@@ -51,16 +55,6 @@ $guard$;
 -- act as the service role for the duration of the seed (fn_provision_tenant / fn_set_user_pin require it)
 select set_config('request.jwt.claims', '{"role":"service_role"}', false);
 
--- Local demo platform admin: it has no TOTP factor and platform admins need aal2 in production (migration 0015). On the
--- local stack opt the DATABASE out so the demo console is usable; takes effect for NEW sessions. Needs ownership of the
--- database: if the role lacks it we only warn (set it yourself: alter database postgres set app.platform_mfa_required = 'off').
-do $mfa$
-begin
-  execute format('alter database %I set app.platform_mfa_required to %L', current_database(), 'off');
-exception when insufficient_privilege then
-  raise warning 'could not set app.platform_mfa_required=off; the demo platform admin needs aal2 (enrol TOTP) or run: alter database % set app.platform_mfa_required to ''off''', current_database();
-end
-$mfa$;
 
 -- ── platform plans & admin ──
 insert into public.plans (name, price_etb_monthly, max_staff, max_menu_items, features) values
@@ -94,6 +88,25 @@ on conflict (id) do nothing;
 insert into public.platform_admins (id, full_name, role)
 values ('00000000-0000-4000-8000-0000000000c1', 'Platform Admin', 'platform_super_admin')
 on conflict (id) do nothing;
+
+-- demo super admin: a verified TOTP factor with the public TEST secret (see DEMO CREDENTIALS). GoTrue's table has a
+-- `secret` column; the plain-Postgres test shim does not, so the insert adapts.
+do $mfa$
+begin
+  if not exists (select 1 from auth.mfa_factors where user_id = '00000000-0000-4000-8000-0000000000c1' and status = 'verified') then
+    if exists (select 1 from information_schema.columns
+               where table_schema = 'auth' and table_name = 'mfa_factors' and column_name = 'secret') then
+      execute $i$insert into auth.mfa_factors (id, user_id, friendly_name, factor_type, status, created_at, updated_at, secret)
+                 values ('00000000-0000-4000-8000-0000000000f1', '00000000-0000-4000-8000-0000000000c1', 'Demo authenticator (TEST secret)',
+                         'totp', 'verified', now(), now(), 'JBSWY3DPEHPK3PXP')$i$;
+    else
+      execute $i$insert into auth.mfa_factors (id, user_id, friendly_name, factor_type, status, created_at, updated_at)
+                 values ('00000000-0000-4000-8000-0000000000f1', '00000000-0000-4000-8000-0000000000c1', 'Demo authenticator (TEST secret)',
+                         'totp', 'verified', now(), now())$i$;
+    end if;
+  end if;
+end
+$mfa$;
 
 -- ═════════ Tenant 1: Central Cafe ═════════
 -- forbidden-patterns: allow-seed-data (demo rows are resolved by their own freshly inserted names; seed never runs in production)

@@ -2,7 +2,7 @@
 -- RPC that takes a UUID. Denial alone is not enough: the outcome must be identical to an id that exists
 -- nowhere (no existence oracle), and B's data must be byte-for-byte unchanged afterwards.
 begin;
-select plan(74);
+select plan(78);
 
 -- ── fixtures: make sure tenant B owns at least one row in EVERY tenant table ──
 create temp table _f on commit drop as
@@ -53,6 +53,8 @@ insert into public.idempotency_keys (restaurant_id, key, command) select b, 'ide
 insert into public.tenant_counters (restaurant_id, counter_key, last_value) select b, 'order', 1 from _f on conflict do nothing;
 insert into public.platform_invoices (restaurant_id, subscription_id, amount, period_start, period_end, status)
   select b, b_sub, 990, current_date, current_date + 30, 'pending' from _f;
+insert into public.tenant_admin_invitations (restaurant_id, email, first_name, username, invited_by, invited_by_type, expires_at)
+  select b, 'invitee@secondcafe.example.com', 'Invitee', 'invitee', b_admin, 'tenant_admin', now() + interval '7 days' from _f;
 
 insert into public.orders (restaurant_id, day_session_id, order_no, created_by, subtotal, vat_rate_snapshot, vat_amount, total)
   select a, (select id from public.day_sessions where restaurant_id = a and status = 'open'), 'ORD-0007', tests.user_id('meron', 'central-cafe'), 10, 15, 1.5, 11.5 from _f;
@@ -187,7 +189,7 @@ select matches(tests.run(format($q$insert into public.table_areas (restaurant_id
 select matches(tests.run(format($q$insert into public.expense_categories (restaurant_id, name) values (%L, 'Forged')$q$, (select b from _f))),
                '^42501\|new row violates row-level security', 'A admin cannot insert an expense category into B');
 select matches(tests.run(format($q$insert into public.roles (restaurant_id, name) values (%L, 'Forged')$q$, (select b from _f))),
-               '^42501\|new row violates row-level security', 'A admin cannot insert a role into B');
+               '^42501\|permission denied for table roles', 'A admin cannot insert a role into B (no client INSERT since 0031)');
 select matches(tests.run(format($q$insert into public.menu_items (restaurant_id, name, category_id, station_id, price) select %L, 'Forged', %L, %L, 1$q$,
                                 (select b from _f), (select b_category from _f), (select b_station from _f))),
                '^42501\|permission denied for table menu_items', 'A admin cannot insert a menu item into B (no client INSERT since 0029)');
@@ -226,10 +228,14 @@ select is(tests.oracle($q$select 1 from public.stations where id = {id}$q$, (sel
 select is(tests.oracle($q$select 1 from public.restaurants where id = {id}$q$, (select b from _f)), 'ok:0', 'select B restaurants row by id = unknown id');
 select is(tests.oracle($q$select 1 from public.subscriptions where id = {id}$q$, (select b_sub from _f)), 'ok:0', 'select B subscription by id = unknown id');
 select is(tests.oracle($q$update public.stations set name = 'pwn' where id = {id}$q$, (select b_station from _f)), 'ok:0', 'update B station by id = unknown id');
-select is(tests.oracle($q$update public.profiles set is_active = false where id = {id}$q$, (select b_waiter from _f)), 'ok:0', 'deactivate B profile by id = unknown id');
-select is(tests.oracle($q$update public.roles set name = 'pwn' where id = {id}$q$, (select b_waiter_role from _f)), 'ok:0', 'rename B role by id = unknown id');
+select is(tests.oracle($q$update public.profiles set is_active = false where id = {id}$q$, (select b_waiter from _f)), '42501|permission denied for table profiles|', 'deactivate B profile directly: no client UPDATE at all (0031)');
+select is(tests.oracle($q$select public.fn_set_user_active({id}, false)$q$, (select b_waiter from _f)), 'P0001|not_found|', 'fn_set_user_active(B profile): not_found, same as unknown');
+select is(tests.oracle($q$select public.fn_update_user({id}, '{"first_name": "pwn"}')$q$, (select b_waiter from _f)), 'P0001|not_found|', 'fn_update_user(B profile): not_found, same as unknown');
+select is(tests.oracle($q$select public.fn_prepare_pin_reset({id})$q$, (select b_waiter from _f)), 'P0001|not_found|', 'fn_prepare_pin_reset(B profile): not_found, same as unknown');
+select is(tests.oracle($q$select public.fn_update_role({id}, '{"name": "pwn"}')$q$, (select b_waiter_role from _f)), 'P0001|not_found|', 'fn_update_role(B role): not_found, same as unknown');
+select is(tests.oracle($q$select public.fn_set_role_active({id}, false)$q$, (select b_admin_role from _f)), 'P0001|not_found|', 'fn_set_role_active(B tenant_admin role): not_found (no system-role oracle)');
 select is(tests.oracle($q$delete from public.menu_items where id = {id}$q$, (select b_menu from _f)), '42501|permission denied for table menu_items|', 'delete B menu item by id: no client DELETE at all (same answer as unknown id)');
-select is(tests.oracle($q$delete from public.roles where id = {id}$q$, (select b_waiter_role from _f)), 'ok:0', 'delete B role by id = unknown id');
+select is(tests.oracle($q$select public.fn_delete_role({id})$q$, (select b_waiter_role from _f)), 'P0001|not_found|', 'fn_delete_role(B role): not_found, same as unknown');
 select is(tests.oracle($q$delete from public.tables where id = {id}$q$, (select b_table from _f)), 'ok:0', 'delete B table by id = unknown id');
 select is(tests.oracle($q$select 1 from public.orders where id = {id}$q$, (select b_order from _g)), 'ok:0', 'select B order by id = unknown id');
 select is(tests.oracle($q$select 1 from public.payments where id = {id}$q$, (select b_payment from _g)), 'ok:0', 'select B payment by id = unknown id');
@@ -300,7 +306,7 @@ select is(tests.oracle($q$select 1 from public.orders where id = {id}$q$, (selec
 select tests.clear_auth();
 
 -- ═════════ tenant B admin and waiter against tenant A (the other direction) ═════════
-select tests.authenticate_as((select b_admin from _f));
+select tests.aal2((select b_admin from _f));
 select is(tests.leaks_read((select b from _f)), '', 'B admin: no row of any other tenant is readable');
 select is(tests.leaks_write((select a from _f)), '', 'B admin: no write reaches tenant A');
 select is(tests.oracle(format($q$select public.fn_change_user_role({id}, %L)$q$, (select b_waiter_role from _f)), (select a_waiter from _f)),

@@ -144,6 +144,7 @@ describe('mapRpcError / shaping', () => {
   it('maps actionable codes and collapses the rest', () => {
     expect(mapRpcError('permission_denied')).toBe('forbidden')
     expect(mapRpcError('tenant_suspended')).toBe('forbidden')
+    expect(mapRpcError('mfa_required')).toBe('mfa_required')
     expect(mapRpcError('username_taken')).toBe('username_taken')
     expect(mapRpcError('staff_limit_reached')).toBe('staff_limit_reached')
     expect(mapRpcError('invalid_role')).toBe('invalid_request')
