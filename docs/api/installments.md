@@ -28,6 +28,10 @@ Rules:
 - A settled voucher leaves its order at `payment_status = 'installment'` (a closed-day order is frozen); "fully paid" is the voucher's
   computed `settled` status, which reports use.
 - `fn_get_receipt` also lets a `vouchers.manage` holder reprint the voucher payments they took.
+- PII: the customer's name and phone are visible to `vouchers.view` holders (lists, voucher, Realtime) by design; receipts carry the
+  name only for `vouchers.view` holders and never the phone; the row audit strips `customer_phone` (immutable logs).
+- Reads (`vouchers.view`) do not require order visibility; collection does (fails closed with `not_found`).
+- DB backstops: `payments_one_installment_payment_idx`, `payments_one_down_payment_idx`.
 - Customer names follow First + Middle + Last (form hint; not enforced, since a guest may give fewer names).
 
 ```http

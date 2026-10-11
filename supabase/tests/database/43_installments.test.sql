@@ -2,7 +2,7 @@
 -- (next installment only, server amount, double payment / overpayment / settled / invalid number), computed status, fn_get_voucher /
 -- fn_list_vouchers, receipts with the voucher block, cross-tenant / IDOR, audit. Gate: the installment lifecycle.
 begin;
-select plan(55);
+select plan(57);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -186,6 +186,12 @@ select is((tests.jv('c3') -> 'voucher' ->> 'outstanding')::numeric,
 -- ═════════ audit ═════════
 select is(tests.ev((select a from _f), 'voucher.issued'), 4, 'audit: voucher.issued x4 (the replay wrote none)');
 select is(tests.ev((select a from _f), 'installment.collected'), 4, 'audit: installment.collected x4');
+
+-- ═════════ security review follow-ups ═════════
+select is((select count(*)::int from public.audit_logs where new_data ? 'customer_phone' or old_data ? 'customer_phone'), 0,
+          'the customer''s phone never reaches the immutable audit log');
+select ok(exists (select 1 from pg_indexes where indexname = 'payments_one_installment_payment_idx')
+          and exists (select 1 from pg_indexes where indexname = 'payments_one_down_payment_idx'), 'DB backstops: one payment per installment / down payment');
 
 select * from finish();
 rollback;

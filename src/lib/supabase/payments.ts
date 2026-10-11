@@ -121,7 +121,7 @@ export const receiptSchema = z.object({
   voucher: z
     .object({
       voucher_no: z.string(),
-      customer_name: z.string(),
+      customer_name: z.string().nullable(),
       installment_no: z.number().int().nullable(),
       installment_count: z.number().int(),
       total: numericValue,

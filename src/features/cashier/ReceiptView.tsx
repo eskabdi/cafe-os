@@ -58,8 +58,12 @@ export function ReceiptView({ receipt }: { receipt: Receipt }) {
           <dl className="grid grid-cols-[1fr_auto] gap-x-3">
             <dt>Voucher</dt>
             <dd className="text-right">{receipt.voucher.voucher_no}</dd>
-            <dt>Customer</dt>
-            <dd className="break-words text-right">{receipt.voucher.customer_name}</dd>
+            {receipt.voucher.customer_name && (
+              <>
+                <dt>Customer</dt>
+                <dd className="break-words text-right">{receipt.voucher.customer_name}</dd>
+              </>
+            )}
             <dt>{receipt.voucher.installment_no ? 'Installment' : 'Down payment'}</dt>
             <dd className="text-right">
               {receipt.voucher.installment_no

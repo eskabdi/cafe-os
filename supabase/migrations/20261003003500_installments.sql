@@ -79,7 +79,9 @@ as $$
                                      and oi.item_status <> 'cancelled'), '[]'::jsonb))
               from public.orders o where o.id = p.order_id and o.restaurant_id = p.restaurant_id),
     'voucher', case when p.voucher_id is null then null else (
-      select jsonb_build_object('voucher_no', v.voucher_no, 'customer_name', v.customer_name, 'installment_no', p.installment_no,
+      select jsonb_build_object('voucher_no', v.voucher_no,
+                                -- the customer's name only for voucher readers (payments.view alone does not reveal it)
+                                'customer_name', case when public.has_permission('vouchers.view') then v.customer_name end, 'installment_no', p.installment_no,
                                 'installment_count', v.installment_count, 'total', v.total,
                                 -- the balance right after THIS payment (later payments excluded), so a reprint shows the same figures
                                 -- collection is strictly in order, so the balance after installment n is the total minus the down
@@ -369,8 +371,10 @@ begin
   if p_payment_id is null or not exists (
        select 1 from public.payments p where p.id = p_payment_id and p.restaurant_id = v_rid
          and (public.has_permission('payments.view')
-              or (public.has_permission('payments.create') and p.created_by = (select auth.uid()))
-              or (public.has_permission('vouchers.manage') and p.voucher_id is not null and p.created_by = (select auth.uid())))) then
+              -- own receipts: they carry the order lines, so order visibility (orders.view) is still required
+              or (public.has_permission('payments.create') and public.has_permission('orders.view') and p.created_by = (select auth.uid()))
+              or (public.has_permission('vouchers.manage') and public.has_permission('orders.view') and p.voucher_id is not null
+                  and p.created_by = (select auth.uid())))) then
     perform public.fn_err('not_found');
   end if;
   select p.created_by into v_by from public.payments p where p.id = p_payment_id and p.restaurant_id = v_rid;
@@ -378,5 +382,67 @@ begin
     perform public.fn_write_audit('payment.receipt_viewed', jsonb_build_object('payment_id', p_payment_id));
   end if;
   return public.fn_receipt_json(p_payment_id, v_rid);
+end;
+$$;
+
+-- ── DB backstops (security review L4): one payment per installment, one down payment per voucher ───────────────────────────
+create unique index payments_one_installment_payment_idx on public.payments (restaurant_id, voucher_id, installment_no)
+  where kind = 'installment_payment';
+create unique index payments_one_down_payment_idx on public.payments (restaurant_id, voucher_id) where kind = 'down_payment';
+
+-- ── row audit without the customer's phone (security review L1) ──────────────────────────────────────────────────────────
+create or replace function public.fn_audit_row()
+returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  -- 0035: + customer_phone (PII; audit rows are immutable, so a phone stored there could never be erased)
+  v_secret text[] := array['pin_hash', 'token_hash', 'session_token_hash', 'public_token_hash', 'customer_phone'];
+  v_old jsonb;
+  v_new jsonb;
+  v_row jsonb;
+  v_keys text[];
+  v_pk text[] := string_to_array(coalesce(nullif(tg_argv[0], ''), 'id'), ',');
+  v_rid uuid;
+  v_record text;
+  v_uid uuid := (select auth.uid());
+  v_type text;
+begin
+  if tg_op = 'DELETE' then
+    v_row := to_jsonb(old) - v_secret;
+    v_old := v_row;
+  elsif tg_op = 'INSERT' then
+    v_row := to_jsonb(new) - v_secret;
+    v_new := v_row;
+  else
+    v_old := to_jsonb(old) - v_secret - 'updated_at';
+    v_new := to_jsonb(new) - v_secret - 'updated_at';
+    v_row := v_new;
+    select array_agg(k.key) into v_keys
+    from jsonb_each(v_new) k
+    where v_old -> k.key is distinct from k.value;
+    if v_keys is null then
+      return null; -- nothing but updated_at changed
+    end if;
+    select coalesce(jsonb_object_agg(k.key, k.value), '{}'::jsonb) into v_new
+    from jsonb_each(v_new) k where k.key = any (v_keys);
+    select coalesce(jsonb_object_agg(k.key, k.value), '{}'::jsonb) into v_old
+    from jsonb_each(v_old) k where k.key = any (v_keys);
+  end if;
+
+  v_rid := case when tg_table_name = 'restaurants' then (v_row ->> 'id')::uuid
+                else (v_row ->> 'restaurant_id')::uuid end;
+  select string_agg(coalesce(v_row ->> c, ''), ':') into v_record from unnest(v_pk) c;
+
+  v_type := case
+    when v_uid is null then 'system'
+    when exists (select 1 from public.profiles pr where pr.id = v_uid) then 'user'
+    when exists (select 1 from public.platform_admins pa where pa.id = v_uid) then 'platform_admin'
+    else 'user'
+  end;
+
+  insert into public.audit_logs (restaurant_id, actor_id, actor_type, event, action, table_name, record_id, old_data, new_data)
+  values (v_rid, v_uid, v_type, tg_table_name || '.' || lower(tg_op), lower(tg_op), tg_table_name, v_record, v_old, v_new);
+  return null;
 end;
 $$;
