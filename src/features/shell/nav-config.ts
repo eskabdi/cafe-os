@@ -68,6 +68,8 @@ export const MODULE_NAV: readonly ModuleNavItem[] = [
     icon: ReceiptText,
     summary: 'Installment vouchers and collections.',
     implemented: true,
+    // sold by the plan: without it the entry is marked "Upgrade"; existing vouchers can still be collected
+    planFeature: 'installments',
   },
   {
     id: 'menu',

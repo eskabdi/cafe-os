@@ -52,3 +52,19 @@ export function readInviteEnv(isSafeRedirect: (url: string | undefined) => boole
 
 /** staff-pin-reset: same variables as staff-create (it peppers the new PIN). */
 export const readPinResetEnv = readPinLoginEnv
+
+export interface MfaResetEnv {
+  supabaseUrl: string
+  serviceRoleKey: string
+  anonKey: string
+  allowedOrigins: string | undefined
+}
+
+/** tenant-admin-mfa-reset: no PIN pepper; a missing variable disables the function (fail closed). */
+export function readMfaResetEnv(): MfaResetEnv | null {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  const anonKey = Deno.env.get('SUPABASE_ANON_KEY')
+  if (!supabaseUrl || !serviceRoleKey || !anonKey) return null
+  return { supabaseUrl, serviceRoleKey, anonKey, allowedOrigins: Deno.env.get('ALLOWED_ORIGINS') }
+}

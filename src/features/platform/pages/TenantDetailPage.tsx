@@ -15,6 +15,7 @@ import { formatCount, formatDate, formatDateTime } from '@/lib/domain/portal'
 import { restoreDeadline, type TenantDetail } from '@/lib/supabase/platform'
 import { portalErrorMessage } from '@/lib/supabase/portal-errors'
 import { TenantActionDialog, type TenantActionKind } from '../components/TenantActionDialog'
+import { TenantAdminsCard } from '../components/TenantAdminsCard'
 import { useInvitationCommand, useInviteTenantAdmin, useTenant } from '../usePlatform'
 
 function actionsFor(t: TenantDetail, now: Date): TenantActionKind[] {
@@ -39,8 +40,8 @@ const ACTION_LABEL: Readonly<Record<TenantActionKind, string>> = {
 }
 
 /**
- * Tenant detail (fn_platform_get_tenant): metadata, subscription, plan, aggregate usage vs quota, Tenant Admin invitations and
- * latest invoices, plus the lifecycle actions. Never an operational row of the tenant (orders, menu, staff PINs ...).
+ * Tenant detail (fn_platform_get_tenant): metadata, subscription, plan, aggregate usage vs quota, Tenant Admins (MFA posture,
+ * authenticator reset), Tenant Admin invitations and latest invoices, plus the lifecycle actions. Never an operational row of the tenant (orders, menu, staff PINs ...).
  */
 export function TenantDetailPage() {
   const { tenantId = '' } = useParams<{ tenantId: string }>()
@@ -183,6 +184,7 @@ export function TenantDetailPage() {
             {formatCount(Number(t.usage.orders_last_30_days ?? 0))}
           </p>
         </Card>
+        <TenantAdminsCard restaurantId={t.id} admins={t.tenant_admins} run={stepUp.run} />
         <Card
           title="Tenant Admin invitations"
           actions={

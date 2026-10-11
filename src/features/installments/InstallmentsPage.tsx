@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { Lock } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -18,6 +19,7 @@ import { EmptyState, ErrorState, PageSkeleton } from '@/features/shell/states'
 import { formatEtb, parseDecimal } from '@/lib/domain/decimal'
 import { formatEthiopianDate } from '@/lib/domain/ethiopian-time'
 import { FREQUENCIES, buildSchedule } from '@/lib/domain/installments'
+import { hasPlanFeature, INSTALLMENTS_LOCKED_TEXT, INSTALLMENTS_UPGRADE_HINT } from '@/lib/domain/plan-features'
 import { errorCode } from '@/lib/supabase/menu-inventory-errors'
 import { fetchOpenDay, ordersKeys } from '@/lib/supabase/orders'
 import {
@@ -68,6 +70,9 @@ export function InstallmentsPage() {
   const rid = context?.restaurant?.id ?? ''
   const qc = useQueryClient()
   const canManage = can('vouchers.manage')
+  // Plan entitlement (UX only; fn_generate_voucher refuses plan_feature_unavailable). Collection of existing vouchers stays.
+  const entitled = hasPlanFeature(context, 'installments')
+  const lockedId = useId()
   const [filter, setFilter] = useState<Filter>('all')
   const [openId, setOpenId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
@@ -94,8 +99,29 @@ export function InstallmentsPage() {
     <div className="space-y-4 p-4 lg:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold text-ink">Installments</h1>
-        {canManage && <Button onClick={() => setCreating(true)}>New voucher</Button>}
+        {canManage && (
+          <Button
+            onClick={() => setCreating(true)}
+            disabled={!entitled}
+            aria-describedby={entitled ? undefined : lockedId}
+          >
+            {!entitled && <Lock aria-hidden="true" className="h-4 w-4" />}
+            New voucher
+          </Button>
+        )}
       </div>
+      {!entitled && (
+        <div
+          role="note"
+          aria-label="Plan"
+          className="flex items-start gap-3 rounded-card border border-line bg-white p-4 text-sm text-ink"
+        >
+          <Lock aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
+          <p id={lockedId}>
+            <span className="font-medium">{INSTALLMENTS_LOCKED_TEXT}</span> {INSTALLMENTS_UPGRADE_HINT}
+          </p>
+        </div>
+      )}
       <div role="group" aria-label="Status" className="flex flex-wrap gap-2">
         {FILTERS.map((f) => (
           <button
@@ -164,7 +190,7 @@ export function InstallmentsPage() {
           onReceipt={setReceipt}
         />
       )}
-      {creating && (
+      {creating && entitled && (
         <NewVoucherDialog
           onClose={() => setCreating(false)}
           onIssued={(v, down) => {

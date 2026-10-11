@@ -63,6 +63,19 @@ describe('session context', () => {
     expect(ctx?.session_timers).toBeUndefined()
   })
 
+  it('reads plan_features and tolerates absent or malformed values (older payloads still parse)', async () => {
+    h.rpc.mockResolvedValueOnce({ data: { ...base, plan_features: { installments: true, multi_station: false } }, error: null })
+    expect((await getSessionContext())?.plan_features).toEqual({ installments: true, multi_station: false })
+    h.rpc.mockResolvedValueOnce({ data: base, error: null })
+    expect((await getSessionContext())?.plan_features).toBeUndefined()
+    h.rpc.mockResolvedValueOnce({ data: { ...base, plan_features: null }, error: null })
+    expect((await getSessionContext())?.plan_features).toBeNull()
+    h.rpc.mockResolvedValueOnce({ data: { ...base, plan_features: ['installments'] }, error: null })
+    const ctx = await getSessionContext()
+    expect(ctx?.user?.id).toBe('u')
+    expect(ctx?.plan_features).toBeUndefined()
+  })
+
   it('fails loudly on an unknown pin_change_status instead of guessing', async () => {
     h.rpc.mockResolvedValueOnce({ data: { ...base, pin_change_status: 'mystery' }, error: null })
     await expect(getSessionContext()).rejects.toThrow()

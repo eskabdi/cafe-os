@@ -18,7 +18,7 @@ const M_AMOLE = '11111111-1111-4111-8111-111111111111'
 const M_CASH = '22222222-2222-4222-8222-222222222222'
 const PAY = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 
-async function setup(page: Page) {
+async function setup(page: Page, opts: { planFeatures?: Record<string, unknown> | null } = {}) {
   const calls: Record<string, Array<Record<string, unknown>>> = { collect: [], generate: [] }
   const user = {
     id: 'u-1',
@@ -58,6 +58,7 @@ async function setup(page: Page) {
     pin_change_status: 'none',
     pin_length: 4,
     open_day: { id: DAY, day_no: 12, opened_at: '2026-10-10T05:00:00Z' },
+    plan_features: opts.planFeatures === undefined ? { installments: true } : opts.planFeatures,
   }
   const methods = [
     {
@@ -251,4 +252,39 @@ test('a new voucher previews the schedule and sends only the intent', async ({ p
   expect(body.p_installment_count).toBe(3)
   expect(body.p_interval_days).toBe(30)
   expect(JSON.stringify(body)).not.toMatch(/amount|schedule|total/)
+})
+
+test('a plan without installment vouchers marks the module, locks new vouchers and still collects existing ones', async ({
+  page,
+}) => {
+  const calls = await setup(page, { planFeatures: { installments: false, multi_station: true } })
+  await page.goto('/r/demo-cafe/installments')
+  await expect(page.getByRole('heading', { level: 1, name: 'Installments' })).toBeVisible()
+  // nav entry stays reachable, marked "Upgrade", described as not in the plan
+  const link = page.getByRole('navigation', { name: 'Main' }).first().getByRole('link', { name: 'Installments' })
+  await expect(link).toHaveAttribute('href', '/r/demo-cafe/installments')
+  await expect(link).toContainText('Upgrade')
+  await expect(link).toHaveAccessibleDescription('Not included in your plan')
+  // explanatory banner; "New voucher" disabled and described by it
+  await expect(page.getByRole('note', { name: 'Plan' })).toContainText(
+    'Your plan does not include installment vouchers. Existing vouchers can still be collected.',
+  )
+  const create = page.getByRole('button', { name: 'New voucher' })
+  await expect(create).toBeDisabled()
+  await expect(create).toHaveAccessibleDescription(/does not include installment vouchers/)
+  // collection of an existing voucher still works
+  await page.getByRole('list', { name: 'Vouchers' }).getByRole('button', { name: /VCH-0003/ }).click()
+  const dialog = page.getByRole('dialog', { name: /Voucher VCH-0003/ })
+  await dialog.locator('label', { hasText: 'Amole' }).click()
+  await dialog.getByLabel('Reference').fill('AM-1')
+  await dialog.getByRole('button', { name: 'Collect' }).click()
+  await expect(page.getByRole('article', { name: 'Receipt RCT-0011' })).toBeVisible()
+  expect(calls.collect).toHaveLength(1)
+  expect(calls.generate).toHaveLength(0)
+})
+
+test('an absent plan_features (older backend) is treated as not entitled', async ({ page }) => {
+  await setup(page, { planFeatures: null })
+  await page.goto('/r/demo-cafe/installments')
+  await expect(page.getByRole('button', { name: 'New voucher' })).toBeDisabled()
 })

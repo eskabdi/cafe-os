@@ -133,6 +133,37 @@ export async function resetStaffPin(profileId: string, pin: string): Promise<voi
   )
 }
 
+// ── tenant-admin-mfa-reset (Platform Admin Portal) ─────────────────────────────────────────────────────────────────────
+export interface ResetTenantAdminMfaInput {
+  /** The target tenant (a Super Admin names it; the server re-checks the profile belongs to it and is a Tenant Admin). */
+  restaurantId: string
+  profileId: string
+  /** Audited reason, 3..500 characters (re-validated by the server). */
+  reason: string
+}
+
+const mfaResetSchema = z.object({
+  profile_id: uuid,
+  factors_removed: z.number().int().nonnegative(),
+  sessions_revoked: z.number().int().nonnegative(),
+  devices_revoked: z.number().int().nonnegative(),
+})
+export type TenantAdminMfaReset = z.infer<typeof mfaResetSchema>
+
+/**
+ * Super Admin only: removes a Tenant Admin's authenticator factors and trusted devices and signs them out (audited). The server
+ * requires a TOTP verified within 12 h (step_up_required, handled by the step-up runner) and rate-limits the call.
+ */
+export async function resetTenantAdminMfa(i: ResetTenantAdminMfaInput): Promise<TenantAdminMfaReset> {
+  return mfaResetSchema.parse(
+    await invokeEdge('tenant-admin-mfa-reset', {
+      restaurant_id: i.restaurantId,
+      profile_id: i.profileId,
+      reason: i.reason.trim(),
+    }),
+  )
+}
+
 // ── reachability (Platform Admin Portal, System health) ───────────────────────────────────────────────────────────────
 /** The Edge Functions the portals depend on. */
 export const EDGE_FUNCTIONS = [
@@ -142,6 +173,7 @@ export const EDGE_FUNCTIONS = [
   'staff-roster',
   'staff-pin-reset',
   'tenant-admin-invite',
+  'tenant-admin-mfa-reset',
   'tenant-logo',
 ] as const
 

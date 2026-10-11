@@ -3110,6 +3110,10 @@ export type Database = {
         Args: { p_restaurant_id: string; p_plan_id: string; p_reason: string }
         Returns: Json
       }
+      fn_platform_complete_mfa_reset: {
+        Args: { p_profile_id: string; p_actor: string; p_reason: string }
+        Returns: Json
+      }
       fn_platform_create_invoice: {
         Args: {
           p_restaurant_id: string
@@ -3188,6 +3192,14 @@ export type Database = {
       fn_platform_mfa_satisfied: {
         Args: Record<PropertyKey, never>
         Returns: boolean
+      }
+      fn_platform_prepare_mfa_reset: {
+        Args: {
+          p_restaurant_id: string
+          p_profile_id: string
+          p_reason: string
+        }
+        Returns: Json
       }
       fn_platform_reason: {
         Args: { p_reason: string }

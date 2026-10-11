@@ -2,6 +2,7 @@ import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClie
 import {
   inviteTenantAdmin,
   resendTenantAdminInvitation,
+  resetTenantAdminMfa,
   revokeTenantAdminInvitation,
   type InviteTenantAdminInput,
 } from '@/lib/supabase/edge-functions'
@@ -154,6 +155,16 @@ export function useInvitationCommand(restaurantId: string) {
   return useMutation({
     mutationFn: (a: { kind: 'resend' | 'revoke'; invitationId: string }) =>
       a.kind === 'resend' ? resendTenantAdminInvitation(a.invitationId) : revokeTenantAdminInvitation(a.invitationId),
+    onSuccess: () => inv(restaurantId),
+  })
+}
+
+/** Tenant-admin-mfa-reset Edge Function; refreshes the tenant detail (MFA posture) and the platform audit log. */
+export function useResetTenantAdminMfa(restaurantId: string) {
+  const inv = useInvalidateTenant()
+  return useMutation({
+    mutationFn: (a: { profileId: string; reason: string }) =>
+      resetTenantAdminMfa({ restaurantId, profileId: a.profileId, reason: a.reason }),
     onSuccess: () => inv(restaurantId),
   })
 }
