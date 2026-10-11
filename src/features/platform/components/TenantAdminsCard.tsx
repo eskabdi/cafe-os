@@ -81,7 +81,7 @@ export function ResetAuthenticatorDialog({
 
 /**
  * Tenant Admins of the tenant with their MFA posture (authenticator enrolled, trusted devices). Identity data only; no tenant
- * operational data. An enrolled admin's authenticator can be reset (lost phone) through the audited Edge Function.
+ * operational data. An active, enrolled admin's authenticator can be reset (lost phone) through the audited Edge Function.
  */
 export function TenantAdminsCard({
   restaurantId,
@@ -118,7 +118,7 @@ export function TenantAdminsCard({
                   </dl>
                 </div>
                 <StatusBadge status={a.is_active ? 'active' : 'inactive'} />
-                {a.mfa_enrolled && (
+                {a.is_active && a.mfa_enrolled && (
                   <Button
                     variant="outline"
                     aria-label={`Reset authenticator for ${name}`}
@@ -132,7 +132,12 @@ export function TenantAdminsCard({
           })}
         </ul>
       )}
-      <ResetAuthenticatorDialog restaurantId={restaurantId} admin={target} run={run} onClose={() => setTarget(null)} />
+      <ResetAuthenticatorDialog
+        restaurantId={restaurantId}
+        admin={target}
+        run={run}
+        onClose={() => setTarget(null)}
+      />
     </Card>
   )
 }

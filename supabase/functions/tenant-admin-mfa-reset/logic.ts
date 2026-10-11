@@ -150,10 +150,17 @@ export function shapeFailure(kind: FailureKind, retryAfterSec?: number): ShapedR
   }
 }
 
-export function shapeSuccess(profileId: string, result: CompleteResult): ShapedResponse {
+/** factorsRemoved: factors GoTrue deleted in this call (an unverified leftover that failed to delete does not block the reset). */
+export function shapeSuccess(profileId: string, result: CompleteResult, factorsRemoved: number): ShapedResponse {
   return {
     status: 200,
-    body: { profile_id: profileId, mfa_reset: true, sessions_revoked: result.sessionsRevoked, devices_revoked: result.devicesRevoked },
+    body: {
+      profile_id: profileId,
+      mfa_reset: true,
+      factors_removed: factorsRemoved,
+      sessions_revoked: result.sessionsRevoked,
+      devices_revoked: result.devicesRevoked,
+    },
     headers: { ...NO_STORE },
   }
 }

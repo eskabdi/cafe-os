@@ -135,8 +135,8 @@ select is((select array(select jsonb_array_elements_text(v -> 'factor_ids') orde
 select is((select count(*)::int from public.admin_audit_log where action = 'tenant_admin.mfa_reset_requested'
              and platform_admin_id = (select su from _f) and restaurant_id = (select a from _f) and detail ->> 'profile_id' = (select a_admin::text from _f)),
           2, 'admin_audit_log: one mfa_reset_requested per prepare, actor = the super admin, tenant = central');
-select is((select detail ->> 'reason' from public.admin_audit_log where action = 'tenant_admin.mfa_reset_requested' order by created_at, id limit 1),
-          'lost phone, verified by call', 'the trimmed reason is recorded');
+select is((select string_agg(detail ->> 'reason', '|' order by detail ->> 'reason') from public.admin_audit_log where action = 'tenant_admin.mfa_reset_requested'),
+          'lost phone, verified by call|retry after network error', 'the trimmed reason of each request is recorded');
 select is((select tests.n_factors((select a_admin from _f))), 2, 'prepare changes nothing (factors still there)');
 
 -- ═════════ C4. complete: service role only ═════════

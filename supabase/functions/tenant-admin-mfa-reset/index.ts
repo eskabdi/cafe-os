@@ -12,7 +12,7 @@
 //      device attestations, deletes their auth sessions (signed out everywhere). Audited (admin_audit_log tenant_admin.mfa_reset with
 //      the caller as actor; the tenant's audit_logs auth.mfa_reset_by_platform).
 // Step 4 runs even when an individual deletion failed: the database decides from the factors that remain. Returns
-// { profile_id, mfa_reset, sessions_revoked, devices_revoked }. Nothing sensitive is logged.
+// { profile_id, mfa_reset, factors_removed, sessions_revoked, devices_revoked }. Nothing sensitive is logged.
 //
 // NOT EXECUTED here: Deno / Docker were unavailable when this was written. See README.md.
 import { createClient } from '@supabase/supabase-js'
@@ -77,7 +77,7 @@ async function reset(token: string, input: MfaResetInput): Promise<ShapedRespons
   if (done.error) return shapeFailure('server_error')
   const result = interpretComplete(done.data, input.profile_id)
   if (!result) return shapeFailure('server_error')
-  return shapeSuccess(input.profile_id, result)
+  return shapeSuccess(input.profile_id, result, prepared.factorIds.length - failed)
 }
 
 Deno.serve(async (req: Request): Promise<Response> => {

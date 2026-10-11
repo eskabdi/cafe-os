@@ -15,7 +15,15 @@ vi.mock('@/lib/supabase/edge-functions', async (orig) => ({
   resetTenantAdminMfa: h.resetTenantAdminMfa,
 }))
 vi.mock('@/features/auth/StepUpDialog', () => ({
-  StepUpDialog: ({ open, onVerified, onCancel }: { open: boolean; onVerified: () => void; onCancel: () => void }) =>
+  StepUpDialog: ({
+    open,
+    onVerified,
+    onCancel,
+  }: {
+    open: boolean
+    onVerified: () => void
+    onCancel: () => void
+  }) =>
     open ? (
       <div role="dialog" aria-label="step-up">
         <button onClick={onVerified}>Verify code</button>
@@ -94,13 +102,25 @@ describe('Tenant Admins card', () => {
     expect(within(dawit).queryByRole('button', { name: /Reset authenticator/ })).toBeNull()
   })
 
+  it('offers no reset for an inactive admin (the server only resets an active Tenant Admin)', () => {
+    const qc = new QueryClient()
+    render(
+      <QueryClientProvider client={qc}>
+        <TenantAdminsCard
+          restaurantId={RID}
+          admins={[{ ...(admins[0] as TenantAdminRow), is_active: false }]}
+          run={(fn) => fn()}
+        />
+      </QueryClientProvider>,
+    )
+    expect(screen.queryByRole('button', { name: /Reset authenticator/ })).toBeNull()
+  })
+
   it('requires a reason, explains the effects, runs through step-up and invalidates the tenant', async () => {
     // the mocked step-up prompt sits outside the Radix modal (which sets pointer-events: none on the body)
     const user = userEvent.setup({ pointerEventsCheck: 0 })
     const { invalidate } = renderCard()
-    h.resetTenantAdminMfa
-      .mockRejectedValueOnce(new RpcError('step_up_required'))
-      .mockResolvedValueOnce(ok)
+    h.resetTenantAdminMfa.mockRejectedValueOnce(new RpcError('step_up_required')).mockResolvedValueOnce(ok)
     await user.click(screen.getByRole('button', { name: 'Reset authenticator for Selam Bekele Tadesse' }))
     const dialog = screen.getByRole('dialog', { name: 'Reset authenticator: Selam Bekele' })
     expect(dialog).toHaveTextContent(/removes their authenticator app and every trusted device/)

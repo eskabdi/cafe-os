@@ -46,7 +46,10 @@ export function splitPlanFeatures<V>(features: Readonly<Record<string, V>> | nul
   switches: Record<PlanFeatureKey, boolean>
   other: Record<string, V>
 } {
-  const switches = Object.fromEntries(PLAN_FEATURE_KEYS.map((k) => [k, false])) as Record<PlanFeatureKey, boolean>
+  const switches = Object.fromEntries(PLAN_FEATURE_KEYS.map((k) => [k, false])) as Record<
+    PlanFeatureKey,
+    boolean
+  >
   const other: Record<string, V> = {}
   for (const [k, v] of Object.entries(features ?? {})) {
     if (isKnownPlanFeature(k)) switches[k] = v === true

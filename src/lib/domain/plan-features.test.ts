@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { hasPlanFeature, isKnownPlanFeature, mergePlanFeatures, PLAN_FEATURE_KEYS, splitPlanFeatures } from './plan-features'
+import {
+  hasPlanFeature,
+  isKnownPlanFeature,
+  mergePlanFeatures,
+  PLAN_FEATURE_KEYS,
+  splitPlanFeatures,
+} from './plan-features'
 
 describe('hasPlanFeature', () => {
   it('is true only when the key is exactly true', () => {
@@ -25,7 +31,12 @@ describe('hasPlanFeature', () => {
 
 describe('splitPlanFeatures / mergePlanFeatures', () => {
   it('turns known keys into switches (exactly true = on) and keeps unknown keys', () => {
-    const { switches, other } = splitPlanFeatures({ installments: true, multi_station: 'yes', qr_ordering: true, seats: 4 })
+    const { switches, other } = splitPlanFeatures({
+      installments: true,
+      multi_station: 'yes',
+      qr_ordering: true,
+      seats: 4,
+    })
     expect(switches).toEqual({ installments: true, multi_station: false })
     expect(other).toEqual({ qr_ordering: true, seats: 4 })
   })

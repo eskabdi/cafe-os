@@ -138,9 +138,9 @@ describe('mapRpcError / shapeFailure', () => {
     expect(shapeFailure('unauthorized').headers['Cache-Control']).toBe('no-store')
   })
   it('shapes success', () => {
-    expect(shapeSuccess(PID, { sessionsRevoked: 3, devicesRevoked: 2 })).toEqual({
+    expect(shapeSuccess(PID, { sessionsRevoked: 3, devicesRevoked: 2 }, 1)).toEqual({
       status: 200,
-      body: { profile_id: PID, mfa_reset: true, sessions_revoked: 3, devices_revoked: 2 },
+      body: { profile_id: PID, mfa_reset: true, factors_removed: 1, sessions_revoked: 3, devices_revoked: 2 },
       headers: { 'Cache-Control': 'no-store', 'Content-Type': 'application/json' },
     })
   })

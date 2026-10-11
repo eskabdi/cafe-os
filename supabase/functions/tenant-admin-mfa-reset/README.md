@@ -11,7 +11,7 @@ with the password and enrol a new one. Platform Admin Portal only. Classificatio
 
 | result | status | body |
 |---|---|---|
-| reset done | 200 | `{ "profile_id", "mfa_reset": true, "sessions_revoked": <int or null>, "devices_revoked": <int> }` |
+| reset done | 200 | `{ "profile_id", "mfa_reset": true, "factors_removed": <int>, "sessions_revoked": <int or null>, "devices_revoked": <int> }` |
 | bad shape / bad reason | 400 | `{ "error": "invalid_request" }` |
 | no / invalid JWT | 401 | `{ "error": "unauthorized" }` |
 | not an active Super Admin, own account | 403 | `{ "error": "forbidden" }` |

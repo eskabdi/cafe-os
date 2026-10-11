@@ -33,11 +33,17 @@ describe('plan form features', () => {
   it('a new plan defaults installments on and every other known feature off', () => {
     const v = planToForm(null)
     expect(v.switches).toEqual({ installments: true, multi_station: false })
-    expect(formToPlan({ ...v, name: 'X', price: '0' }).features).toEqual({ installments: true, multi_station: false })
+    expect(formToPlan({ ...v, name: 'X', price: '0' }).features).toEqual({
+      installments: true,
+      multi_station: false,
+    })
   })
 
   it('an existing plan shows a switch on only for an exact true and keeps unknown keys', () => {
-    const v = planToForm({ ...PLAN, features: { installments: 'true', multi_station: true, qr_ordering: true } })
+    const v = planToForm({
+      ...PLAN,
+      features: { installments: 'true', multi_station: true, qr_ordering: true },
+    })
     expect(v.switches).toEqual({ installments: false, multi_station: true })
     expect(v.features).toBe('qr_ordering = true')
   })
@@ -77,7 +83,9 @@ describe('plan form features', () => {
     await user.clear(other)
     await user.type(other, 'installments = true')
     await user.click(screen.getByRole('button', { name: 'Save plan' }))
-    expect(await screen.findByText(/Use the switches above for installments, multi_station/)).toBeInTheDocument()
+    expect(
+      await screen.findByText(/Use the switches above for installments, multi_station/),
+    ).toBeInTheDocument()
     expect(onSubmit).not.toHaveBeenCalled()
   })
 })

@@ -37,7 +37,7 @@ reused for the two portals (execution prompt §34A). Migrations: `20261003003000
 | endpoint | class | parameters | returns |
 |---|---|---|---|
 | `fn_platform_list_tenants` | Private | `p_search text?` (≤100, name/slug, case-insensitive), `p_status text?` (`trialing|active|past_due|suspended|cancelled`), `p_plan_id uuid?`, `p_limit int = 50` (1..100), `p_offset int = 0` | `{ total, limit, offset, items: [{ id, name, slug, status, created_at, suspended_at, plan: {id, name}, subscription_status, trial_ends_at, current_period_end }] }` (newest first) |
-| `fn_platform_get_tenant` | Private | `p_restaurant_id uuid` | tenant metadata (`id, name, slug, status, custom_domain, timezone, phone, address, tin, onboarded_at, suspended_at, suspension_reason, created_at, updated_at`), `subscription {.., plan}`, `limits`, `usage`, `over_quota`, `invitations[]` (last 20), `recent_invoices[]` (last 5) |
+| `fn_platform_get_tenant` | Private | `p_restaurant_id uuid` | tenant metadata (`id, name, slug, status, custom_domain, timezone, phone, address, tin, onboarded_at, suspended_at, suspension_reason, created_at, updated_at`), `subscription {.., plan}`, `limits`, `usage`, `over_quota`, `invitations[]` (last 20), `recent_invoices[]` (last 5), `tenant_admins[]` (0036: `{ profile_id, first_name, middle_name, last_name, email, is_active, mfa_enrolled, trusted_devices }` for every profile holding the system tenant_admin role, oldest first; `mfa_enrolled` = a verified factor exists, `trusted_devices` = live count; no operational data) |
 | `fn_platform_create_tenant` | Private | `p_name`, `p_slug`, `p_plan_id`, `p_trial_days int = 14` (0..90; 0 = active), `p_timezone = 'Africa/Addis_Ababa'` | `{ restaurant_id, slug, status, day_session_id }` — default roles/stations/categories/payment methods/areas/expense categories seeded as rows, day 1 open, **no owner** (invite one) |
 | `fn_provision_tenant` (reused) | Private + Internal | unchanged signature (owner must already exist with a confirmed e-mail) | unchanged; platform callers now need aal2 (`fn_platform_guard`), service_role unchanged |
 | `fn_platform_change_plan` | Private | `p_restaurant_id`, `p_plan_id` (active), `p_reason` (3..500) | `{ restaurant_id, plan_id, changed, over_quota: ["staff"|"menu_items"|"stations"|"kiosks"|"storage"|"orders"] }` (a downgrade below usage is allowed and reported) |
@@ -69,6 +69,31 @@ Errors: `invalid_input` (`name|trial_days|reason|status|search|limit|offset|conf
 | `fn_platform_set_plan_active` | Private | `p_plan_id`, `p_active boolean` | `plan` (no delete: subscriptions reference plans with RESTRICT) |
 
 Errors: `invalid_input` (`patch` for an unknown key, else the field), `duplicate_name` (detail = the name), `not_found`.
+
+Plan features (0036): a submitted `features` object without `installments` is stored with `"installments": false`; `create_plan` without
+`features` stores `{"installments": false}`; `installments`, when present, must be a boolean (`invalid_input/features`). Absent always meant
+"not entitled"; existing plans were backfilled with `false`. Entitlement is enforced by the RPCs; the tenant's features are also returned to
+tenant users as `plan_features` by `fn_get_session_context` (UX only).
+
+### Tenant Admin MFA reset (0036; owner decision 2026-10-11)
+
+A Super Admin removes the authenticator of a Tenant Admin who lost it. Two steps behind one Edge Function; the Super Admin needs a real TOTP
+verification at most 12 h old (a trusted-device session is not enough).
+
+| endpoint | class | parameters | returns / rules |
+|---|---|---|---|
+| `tenant-admin-mfa-reset` (Edge Function) | Private, recent TOTP | `{ restaurant_id, profile_id, reason }` (exactly these keys, ≤2048 bytes, reason 3..500 chars) | `200 { profile_id, mfa_reset: true, factors_removed, sessions_revoked (int or null), devices_revoked }`; errors `400 invalid_request`, `401 unauthorized`, `403 forbidden \| mfa_required \| step_up_required`, `404 not_found`, `409 no_factor`, `429 try_later`, `503 server_error`; see its README |
+| `fn_platform_prepare_mfa_reset` | Private (step 1, AS THE CALLER) | `p_restaurant_id uuid`, `p_profile_id uuid`, `p_reason text` | `{ profile_id, user_id, factor_ids: [uuid] }` (every factor of the user, any status). `fn_platform_guard` (`permission_denied`, `mfa_required`), `step_up_required`, `invalid_input` (`restaurant_id\|profile_id\|reason`), `permission_denied` (own id), `not_found` (unknown / other tenant / not a tenant_admin / inactive: one answer), `invalid_state/no_factor`. Audit: admin_audit_log `tenant_admin.mfa_reset_requested` `{profile_id, reason}` |
+| `fn_platform_complete_mfa_reset` | Internal (service_role only) | `p_profile_id uuid`, `p_actor uuid` (the Super Admin), `p_reason text` | `{ profile_id, sessions_revoked (null when auth.sessions is not writable by the DB role), devices_revoked }`. `permission_denied` (not service role / actor not an active Super Admin), `invalid_input/reason`, `not_found`, `invalid_state/factors_remain` (a verified factor still exists: nothing revoked). Revokes live trusted devices (`revoke_reason = 'mfa_reset'`, `revoked_by = actor`), deletes session attestations and every `auth.sessions` row of the user. Audit: admin_audit_log `tenant_admin.mfa_reset` (actor = `p_actor`) + tenant audit_logs `auth.mfa_reset_by_platform` (actor = `p_actor`, `actor_type = platform_admin`) |
+
+Example:
+```http
+POST /functions/v1/tenant-admin-mfa-reset
+{ "restaurant_id": "2b1e…", "profile_id": "7c40…", "reason": "Lost phone, identity confirmed by call" }
+200 { "profile_id": "7c40…", "mfa_reset": true, "factors_removed": 1, "sessions_revoked": 2, "devices_revoked": 1 }
+403 { "error": "step_up_required" }
+409 { "error": "no_factor" }
+```
 
 ### Invoices
 

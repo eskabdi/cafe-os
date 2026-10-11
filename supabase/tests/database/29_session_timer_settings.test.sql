@@ -349,8 +349,8 @@ delete from public.role_permissions where role_id = (select r_waiter from _f) an
 -- ═════════ session context: every 0024 field preserved ═════════
 select tests.authenticate_as((select admin from _f));
 select is((select string_agg(k, ',' order by k) from jsonb_object_keys(public.fn_get_session_context()) k),
-          'must_change_pin,open_day,permissions,pin_change_status,pin_length,restaurant,role,session_timers,station_ids,tenant_writable,user',
-          'context keys = the 0024 keys + session_timers');
+          'must_change_pin,open_day,permissions,pin_change_status,pin_length,plan_features,restaurant,role,session_timers,station_ids,tenant_writable,user',
+          'context keys = the 0024 keys + session_timers (+ plan_features since 0036)');
 select ok(public.fn_get_session_context() -> 'permissions' ? 'settings.session_timers', 'tenant_admin context lists settings.session_timers');
 select tests.clear_auth();
 

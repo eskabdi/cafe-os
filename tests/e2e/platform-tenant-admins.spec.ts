@@ -23,7 +23,10 @@ interface Calls {
   rpc: Array<{ fn: string; body: Record<string, unknown> }>
 }
 
-async function setup(page: Page, opts: { resetError?: { status: number; code: string } } = {}): Promise<Calls> {
+async function setup(
+  page: Page,
+  opts: { resetError?: { status: number; code: string } } = {},
+): Promise<Calls> {
   const calls: Calls = { reset: [], rpc: [] }
   let reset = false
   const factors = [
@@ -128,7 +131,8 @@ async function setup(page: Page, opts: { resetError?: { status: number; code: st
   await page.route(/\/auth\/v1\/factors/, (r) => {
     if (preflight(r)) return
     const action = new URL(r.request().url()).pathname.split('/').filter(Boolean)[4]
-    if (action === 'challenge') return r.fulfill(json(200, { id: 'challenge-1', type: 'totp', expires_at: exp }))
+    if (action === 'challenge')
+      return r.fulfill(json(200, { id: 'challenge-1', type: 'totp', expires_at: exp }))
     if (action === 'verify') return r.fulfill(json(200, session('aal2')))
     return r.fulfill(json(404, {}))
   })
@@ -140,7 +144,9 @@ async function setup(page: Page, opts: { resetError?: { status: number; code: st
     if (calls.reset.length === 1) return r.fulfill(json(403, { error: 'step_up_required' }))
     if (opts.resetError) return r.fulfill(json(opts.resetError.status, { error: opts.resetError.code }))
     reset = true
-    return r.fulfill(json(200, { profile_id: ADMIN, factors_removed: 1, sessions_revoked: 3, devices_revoked: 2 }))
+    return r.fulfill(
+      json(200, { profile_id: ADMIN, factors_removed: 1, sessions_revoked: 3, devices_revoked: 2 }),
+    )
   })
   await page.route('**/rest/v1/**', (r) => {
     if (preflight(r)) return
@@ -151,11 +157,17 @@ async function setup(page: Page, opts: { resetError?: { status: number; code: st
     calls.rpc.push({ fn, body: (req.postDataJSON() as Record<string, unknown> | null) ?? {} })
     if (fn === 'fn_get_session_context')
       return r.fulfill(
-        json(200, { permissions: [], station_ids: [], platform_role: 'platform_super_admin', platform_mfa: true }),
+        json(200, {
+          permissions: [],
+          station_ids: [],
+          platform_role: 'platform_super_admin',
+          platform_mfa: true,
+        }),
       )
     if (fn === 'fn_platform_get_tenant') return r.fulfill(json(200, tenant()))
     if (fn === 'fn_platform_list_plans') return r.fulfill(json(200, [plan]))
-    if (fn === 'fn_platform_update_plan' || fn === 'fn_platform_create_plan') return r.fulfill(json(200, plan))
+    if (fn === 'fn_platform_update_plan' || fn === 'fn_platform_create_plan')
+      return r.fulfill(json(200, plan))
     return r.fulfill(json(200, null))
   })
   return calls
@@ -189,7 +201,11 @@ test('a Super Admin resets a Tenant Admin authenticator with a reason and a fres
 
   expect(calls.reset).toHaveLength(2)
   for (const c of calls.reset) {
-    expect(c.body).toEqual({ restaurant_id: RID, profile_id: ADMIN, reason: 'Lost phone, identity confirmed by call' })
+    expect(c.body).toEqual({
+      restaurant_id: RID,
+      profile_id: ADMIN,
+      reason: 'Lost phone, identity confirmed by call',
+    })
     expect(c.auth).toMatch(/^Bearer /)
   }
 })
@@ -212,7 +228,9 @@ test('the plan editor writes explicit feature switches and keeps unknown keys', 
   const calls = await setup(page)
   await page.goto('/platform/plans')
   const card = page.getByRole('article', { name: 'Basic' })
-  await expect(card.getByRole('list', { name: 'Basic features' })).toContainText('Installment vouchers: not included')
+  await expect(card.getByRole('list', { name: 'Basic features' })).toContainText(
+    'Installment vouchers: not included',
+  )
   await card.getByRole('button', { name: 'Edit Basic' }).click()
   const dialog = page.getByRole('dialog', { name: 'Edit plan Basic' })
   const inst = dialog.getByRole('switch', { name: 'Installment vouchers' })
