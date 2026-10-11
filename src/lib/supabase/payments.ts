@@ -116,6 +116,7 @@ export const receiptSchema = z.object({
   affects_cash_drawer: z.boolean(),
   reference: z.string().nullable(),
   reversed_payment_id: uuid.nullable(),
+  reversed_receipt_no: z.string().nullable().optional(),
   reversed: z.boolean(),
   received_by: z.string().nullable(),
   restaurant: z
@@ -169,7 +170,7 @@ export async function confirmPayment(i: ConfirmPaymentInput): Promise<Receipt> {
   )
 }
 
-/** Appends a compensating reversal (payments.reverse + a recent authenticator code); the order becomes unpaid again. */
+/** Appends a compensating reversal (payments.reverse, email account + authenticator code of the last 12 h); the order becomes unpaid again. */
 export async function reversePayment(paymentId: string, reason: string, idempotencyKey: string): Promise<Receipt> {
   return receiptSchema.parse(
     await callRpc('fn_reverse_payment', { p_payment_id: paymentId, p_reason: reason, p_idempotency_key: idempotencyKey }),

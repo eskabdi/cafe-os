@@ -6,9 +6,9 @@ All endpoints are **Private** (signed-in tenant user) PostgREST RPCs: `POST /res
 
 | endpoint | permission | effect |
 |---|---|---|
-| `fn_confirm_payment(p_order_id, p_payment_method_id, p_reference, p_idempotency_key, p_tendered=null)` | `payments.create` | pays the order IN FULL: amount = `orders.total` (server-side), `RCT-nnnn`, method name / cash-drawer snapshots, `orders.payment_status = 'paid'`, audit `payment.confirmed`; returns the receipt + `tendered` / `change`. Replay of the same key returns the same receipt (`replayed: true`) |
-| `fn_reverse_payment(p_payment_id, p_reason, p_idempotency_key)` | `payments.reverse` + step-up (TOTP ≤ 12 h) | appends a compensating `reversal` row (same amount / method, own receipt number, reason as reference) and sets the order back to `unpaid`; one reversal per payment (unique index); audit `payment.reversed` |
-| `fn_get_receipt(p_payment_id)` | `payments.view` (any receipt of the tenant) or `payments.create` (only receipts the caller issued) | the receipt document |
+| `fn_confirm_payment(p_order_id, p_payment_method_id, p_reference, p_idempotency_key, p_tendered=null)` | `payments.create` + `orders.view` | pays the order IN FULL: amount = `orders.total` (server-side), `RCT-nnnn`, method name / cash-drawer snapshots, `orders.payment_status = 'paid'`, audit `payment.confirmed`; returns the receipt + `tendered` / `change`. Replay of the same key returns the same receipt (`replayed: true`) |
+| `fn_reverse_payment(p_payment_id, p_reason, p_idempotency_key)` | `payments.reverse` + aal2 on an email/password account (never a PIN session) + TOTP ≤ 12 h | appends a compensating `reversal` row (same amount / method, own receipt number; the reason is kept in the audit row only, never on the row or the printed receipt) and sets the order back to `unpaid`; one reversal per payment (unique index); audit `payment.reversed` |
+| `fn_get_receipt(p_payment_id)` | `payments.view` (any receipt of the tenant) or `payments.create` (only receipts the caller issued) | the receipt document; a reprint by anyone but the issuer writes `payment.receipt_viewed` |
 
 Rules:
 - The payment method is a tenant row (UUID), never a name. `requires_reference` → `p_reference` is required (≤ 120 chars, no control

@@ -27,6 +27,12 @@ export function ReceiptView({ receipt }: { receipt: Receipt }) {
       <dl className="grid grid-cols-[auto_1fr] gap-x-3">
         <dt>Receipt</dt>
         <dd className="text-right">{receipt.receipt_no}</dd>
+        {isReversal && receipt.reversed_receipt_no && (
+          <>
+            <dt>Reverses</dt>
+            <dd className="text-right">{receipt.reversed_receipt_no}</dd>
+          </>
+        )}
         {o && (
           <>
             <dt>Order</dt>
@@ -91,7 +97,7 @@ export function ReceiptView({ receipt }: { receipt: Receipt }) {
         <dd className="text-right font-semibold">{formatEtb(receipt.amount)}</dd>
         {receipt.reference && (
           <>
-            <dt>{isReversal ? 'Reason' : 'Reference'}</dt>
+            <dt>Reference</dt>
             <dd className="break-all text-right">{receipt.reference}</dd>
           </>
         )}

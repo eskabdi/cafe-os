@@ -2,7 +2,7 @@
 -- rules, tendered / change, idempotency, open day, order state), fn_reverse_payment (compensating row, step-up, once only),
 -- fn_get_receipt, RLS reads, cross-tenant / IDOR, audit. Gate: the complete order-to-payment flow.
 begin;
-select plan(58);
+select plan(63);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -44,7 +44,7 @@ select tests.clear_auth();
 -- ═════════ structure ═════════
 select is((select count(*)::int from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prosecdef and p.proconfig @> array['search_path=""']
            and p.proname in ('fn_receipt_json','fn_confirm_payment','fn_reverse_payment','fn_get_receipt')), 4, 'all four: security definer, empty search_path');
-select ok(not has_function_privilege('authenticated', 'public.fn_receipt_json(uuid)', 'execute'), 'the receipt builder is internal');
+select ok(not has_function_privilege('authenticated', 'public.fn_receipt_json(uuid, uuid)', 'execute'), 'the receipt builder is internal');
 select tests.authenticate_as((select a_admin from _f));
 select is(tests.run($q$insert into public.payments (restaurant_id, day_session_id, kind, amount, payment_method_id, method_name_snapshot, method_affects_drawer_snapshot, receipt_no) values (gen_random_uuid(), gen_random_uuid(), 'order_payment', 1, gen_random_uuid(), 'x', true, 'RCT-9999')$q$),
           '42501|permission denied for table payments|', 'no client INSERT on payments (RPC only)');
@@ -198,6 +198,22 @@ select tests.aal2((select a_admin from _f));
 select is(tests.run(format($q$select public.fn_reverse_payment(%L, 'late refund', 'rev-key-closed-01')$q$, tests.jv('r6') ->> 'payment_id')),
           'P0001|day_closed|payment business day is closed', 'a payment of a closed day cannot be reversed (frozen with its day)');
 select tests.clear_auth();
+
+-- ═════════ security audit follow-ups ═════════
+-- a PIN role granted payments.reverse still cannot reverse: aal2 on an email/password account is required
+insert into public.role_permissions (role_id, permission_id, restaurant_id)
+  select p.role_id, pm.id, p.restaurant_id from public.profiles p, public.permissions pm where p.id = (select a_cashier from _f) and pm.key = 'payments.reverse';
+select tests.aal2((select a_cashier from _f));
+select is(tests.run(format($q$select public.fn_reverse_payment(%L, 'pin delegate', 'rev-key-pin-0001')$q$, tests.jv('r2') ->> 'payment_id')),
+          'P0001|mfa_required|', 'a PIN session holding payments.reverse is refused (mfa_required)');
+select tests.clear_auth();
+select is((select count(*)::int from public.payments where kind = 'reversal' and reference is not null), 0, 'reversal rows never carry the reason (audit only)');
+select ok((select count(*) from public.audit_logs where event = 'payment.reversed' and new_data ? 'reason' and new_data ? 'reversal_receipt_no') >= 1,
+          'the reversal audit keeps the reason and both receipt numbers');
+select tests.aal2((select a_admin from _f));
+select lives_ok(format($q$select public.fn_get_receipt(%L)$q$, tests.jv('r2') ->> 'payment_id'), 'the admin reprints a cashier''s receipt');
+select tests.clear_auth();
+select ok(tests.ev((select a from _f), 'payment.receipt_viewed') >= 1, 'a reprint by someone other than the issuer is audited');
 
 select * from finish();
 rollback;

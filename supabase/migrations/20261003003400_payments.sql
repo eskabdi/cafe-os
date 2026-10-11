@@ -4,7 +4,7 @@
 --      Pays an order IN FULL with one tenant payment method (a DB row, never a name): amount = orders.total (server-side; the client
 --      never sends an amount), receipt number RCT-nnnn, method name / cash-drawer snapshots, orders.payment_status -> 'paid'. Cash
 --      (affects_cash_drawer) may pass the tendered amount: it must cover the total and the change is returned (not stored).
---  * fn_reverse_payment(payment, reason, idempotency_key)   payments.reverse + step-up
+--  * fn_reverse_payment(payment, reason, idempotency_key)   payments.reverse + aal2 (no PIN session) + TOTP of the last 12 h
 --      A confirmed order payment is never edited or deleted: a compensating 'reversal' row (same amount / method / order, its own
 --      receipt number) is appended and the order goes back to 'unpaid'. One reversal per payment (unique index, 0005).
 --  * fn_get_receipt(payment)   payments.view (any) or payments.create (own receipts only): the receipt document (restaurant identity, lines, VAT, totals,
@@ -20,7 +20,7 @@
 --  Clients keep SELECT only on payments (RLS payments_select: payments.view); these RPCs are the only writers.
 
 -- ── internal: the receipt document ──────────────────────────────────────────
-create or replace function public.fn_receipt_json(p_payment_id uuid)
+create or replace function public.fn_receipt_json(p_payment_id uuid, p_restaurant_id uuid)
 returns jsonb
 language sql stable security definer set search_path = ''
 as $$
@@ -28,6 +28,7 @@ as $$
     'payment_id', p.id, 'receipt_no', p.receipt_no, 'kind', p.kind, 'amount', p.amount, 'created_at', p.created_at,
     'method', p.method_name_snapshot, 'affects_cash_drawer', p.method_affects_drawer_snapshot, 'reference', p.reference,
     'reversed_payment_id', p.reversed_payment_id,
+    'reversed_receipt_no', (select o2.receipt_no from public.payments o2 where o2.id = p.reversed_payment_id and o2.restaurant_id = p.restaurant_id),
     'reversed', exists (select 1 from public.payments r where r.reversed_payment_id = p.id),
     'received_by', (select pr.short_name from public.profiles pr where pr.id = p.created_by and pr.restaurant_id = p.restaurant_id),
     'restaurant', (select jsonb_build_object('name', r.name, 'phone', r.phone, 'address', r.address, 'tin', r.tin, 'timezone', r.timezone)
@@ -42,9 +43,9 @@ as $$
                                    from public.order_items oi where oi.order_id = o.id and oi.restaurant_id = o.restaurant_id
                                      and oi.item_status <> 'cancelled'), '[]'::jsonb))
               from public.orders o where o.id = p.order_id and o.restaurant_id = p.restaurant_id))
-  from public.payments p where p.id = p_payment_id
+  from public.payments p where p.id = p_payment_id and p.restaurant_id = p_restaurant_id
 $$;
-revoke all on function public.fn_receipt_json(uuid) from public, anon, authenticated, service_role;
+revoke all on function public.fn_receipt_json(uuid, uuid) from public, anon, authenticated, service_role;
 
 -- ── confirm (pay in full) ───────────────────────────────────────────────────
 create or replace function public.fn_confirm_payment(
@@ -66,7 +67,8 @@ declare
   v_no text;
   v_res jsonb;
 begin
-  if not public.has_permission('payments.create') then perform public.fn_err('permission_denied'); end if;
+  -- the receipt carries the order lines: taking payments also needs order visibility (orders.view)
+  if not (public.has_permission('payments.create') and public.has_permission('orders.view')) then perform public.fn_err('permission_denied'); end if;
   perform public.fn_check_idempotency_key(p_idempotency_key);
   if p_order_id is null then perform public.fn_err('invalid_input', 'order_id'); end if;
   if p_payment_method_id is null then perform public.fn_err('invalid_input', 'payment_method_id'); end if;
@@ -81,7 +83,7 @@ begin
   if v_replay is not null then
     if v_replay -> 'result' is null or jsonb_typeof(v_replay -> 'result') = 'null' then perform public.fn_err('invalid_state', 'idempotency_pending'); end if;
     -- the receipt is rebuilt (current 'reversed' flag); tendered / change come from the stored first answer
-    return public.fn_receipt_json((v_replay -> 'result' ->> 'payment_id')::uuid)
+    return public.fn_receipt_json((v_replay -> 'result' ->> 'payment_id')::uuid, v_rid)
            || jsonb_build_object('tendered', v_replay -> 'result' -> 'tendered', 'change', v_replay -> 'result' -> 'change', 'replayed', true);
   end if;
 
@@ -111,8 +113,9 @@ begin
   update public.orders set payment_status = 'paid' where id = v_o.id and restaurant_id = v_rid;
 
   perform public.fn_write_audit('payment.confirmed', jsonb_build_object('payment_id', v_pay, 'order_id', v_o.id, 'order_no', v_o.order_no,
-                                'receipt_no', v_no, 'amount', v_o.total, 'payment_method_id', v_m.id));
-  v_res := public.fn_receipt_json(v_pay)
+                                'receipt_no', v_no, 'amount', v_o.total, 'payment_method_id', v_m.id, 'method', v_m.name,
+                                'reference', v_ref, 'tendered', p_tendered));
+  v_res := public.fn_receipt_json(v_pay, v_rid)
            || jsonb_build_object('tendered', p_tendered, 'change', case when p_tendered is null then null else p_tendered - v_o.total end);
   perform public.fn_idempotency_complete(p_idempotency_key, 'payment.confirm', v_res);
   return v_res || jsonb_build_object('replayed', false);
@@ -139,7 +142,9 @@ declare
   v_res jsonb;
 begin
   if not public.has_permission('payments.reverse') then perform public.fn_err('permission_denied'); end if;
-  perform public.fn_require_step_up();
+  -- moving money back: an email/password account with an authenticator code of the last 12 h (never a PIN session; 0026 / 0032)
+  perform public.fn_require_aal2();
+  perform public.fn_require_recent_totp();
   perform public.fn_check_idempotency_key(p_idempotency_key);
   if p_payment_id is null then perform public.fn_err('invalid_input', 'payment_id'); end if;
   if char_length(v_reason) not between 3 and 300 or v_reason ~ '[[:cntrl:]]' then perform public.fn_err('invalid_input', 'reason'); end if;
@@ -148,7 +153,7 @@ begin
   v_replay := public.fn_idempotency_begin(p_idempotency_key, 'payment.reverse', v_hash);
   if v_replay is not null then
     if v_replay -> 'result' is null or jsonb_typeof(v_replay -> 'result') = 'null' then perform public.fn_err('invalid_state', 'idempotency_pending'); end if;
-    return public.fn_receipt_json((v_replay -> 'result' ->> 'payment_id')::uuid) || jsonb_build_object('replayed', true);
+    return public.fn_receipt_json((v_replay -> 'result' ->> 'payment_id')::uuid, v_rid) || jsonb_build_object('replayed', true);
   end if;
 
   select d.id into v_day from public.day_sessions d where d.restaurant_id = v_rid and d.status = 'open' for share;
@@ -174,13 +179,14 @@ begin
   insert into public.payments (restaurant_id, day_session_id, order_id, kind, amount, payment_method_id, method_name_snapshot,
                                method_affects_drawer_snapshot, reference, receipt_no, reversed_payment_id, created_by)
   values (v_rid, v_day, v_p.order_id, 'reversal', v_p.amount, v_p.payment_method_id, v_p.method_name_snapshot,
-          v_p.method_affects_drawer_snapshot, left(v_reason, 120) /* full reason in the audit row */, v_no, v_p.id, (select auth.uid()))
+          v_p.method_affects_drawer_snapshot, null /* the reason is kept in the audit row only, never printed */, v_no, v_p.id, (select auth.uid()))
   returning id into v_rev;
   update public.orders set payment_status = 'unpaid' where id = v_o.id and restaurant_id = v_rid;
 
-  perform public.fn_write_audit('payment.reversed', jsonb_build_object('payment_id', v_p.id, 'reversal_id', v_rev, 'order_id', v_o.id,
+  perform public.fn_write_audit('payment.reversed', jsonb_build_object('payment_id', v_p.id, 'receipt_no', v_p.receipt_no,
+                                'reversal_id', v_rev, 'reversal_receipt_no', v_no, 'order_id', v_o.id, 'order_no', v_o.order_no,
                                 'amount', v_p.amount, 'reason', v_reason));
-  v_res := public.fn_receipt_json(v_rev);
+  v_res := public.fn_receipt_json(v_rev, v_rid);
   perform public.fn_idempotency_complete(p_idempotency_key, 'payment.reverse', v_res);
   return v_res || jsonb_build_object('replayed', false);
 end;
@@ -189,10 +195,11 @@ $$;
 -- ── read a receipt ──────────────────────────────────────────────────────────
 create or replace function public.fn_get_receipt(p_payment_id uuid)
 returns jsonb
-language plpgsql stable security definer set search_path = ''
+language plpgsql security definer set search_path = ''
 as $$
 declare
   v_rid uuid := public.fn_tenant_status_guard(false);
+  v_by uuid;
 begin
   if not (public.has_permission('payments.view') or public.has_permission('payments.create')) then
     perform public.fn_err('permission_denied');
@@ -202,7 +209,12 @@ begin
                                          and (public.has_permission('payments.view') or p.created_by = (select auth.uid()))) then
     perform public.fn_err('not_found');
   end if;
-  return public.fn_receipt_json(p_payment_id);
+  -- a reprint by someone other than the issuer is audited (receipt reprints are a classic point-of-sale fraud vector)
+  select p.created_by into v_by from public.payments p where p.id = p_payment_id and p.restaurant_id = v_rid;
+  if v_by is distinct from (select auth.uid()) then
+    perform public.fn_write_audit('payment.receipt_viewed', jsonb_build_object('payment_id', p_payment_id));
+  end if;
+  return public.fn_receipt_json(p_payment_id, v_rid);
 end;
 $$;
 

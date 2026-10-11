@@ -200,7 +200,8 @@ async function setup(
         reversals.push(req.postDataJSON() as Record<string, unknown>)
         return r.fulfill(
           json(200, {
-            ...receipt('Cash Drawer', 'wrong table', null),
+            ...receipt('Cash Drawer', null, null),
+            reversed_receipt_no: 'RCT-0007',
             payment_id: REV,
             receipt_no: 'RCT-0008',
             kind: 'reversal',
@@ -325,7 +326,10 @@ test('reversal: a reason is required, the server gets the payment id and reason 
   await expect(submit).toBeDisabled()
   await dialog.getByLabel('Reason').fill('wrong table')
   await submit.click()
-  await expect(page.getByRole('article', { name: 'Receipt RCT-0008' })).toContainText('Payment reversal')
+  const rev = page.getByRole('article', { name: 'Receipt RCT-0008' })
+  await expect(rev).toContainText('Payment reversal')
+  await expect(rev).toContainText('RCT-0007')
+  await expect(rev).not.toContainText('wrong table') // the reason stays in the audit trail, never on paper
   expect(paid.reversals).toHaveLength(1)
   const body = paid.reversals[0] as Record<string, unknown>
   expect(Object.keys(body).sort()).toEqual(['p_idempotency_key', 'p_payment_id', 'p_reason'])
