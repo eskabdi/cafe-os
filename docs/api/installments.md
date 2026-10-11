@@ -17,11 +17,18 @@ Rules:
   date (`restaurants.timezone`). The UI preview (`src/lib/domain/installments.ts`) mirrors the rule; the server is authoritative.
 - **Down payment**: `0 ≤ down < total`; a positive down needs an active method row (reference rule of the row applies).
 - **Status is computed, never stored**: `settled` (all paid) > `overdue` (an unpaid installment due before the tenant's today) > `active`.
-- **Guards**: double payment (order lock + payment_status check; same key → same receipt; `p_installment_no` must be the next one →
+- **Guards**: double payment (voucher lock + lowest unpaid installment; at issue: order lock + payment_status check; same key → same receipt; `p_installment_no` must be the next one →
   `invalid_installment_no|<next>`), overpayment (`voucher_already_settled`), invalid amount (amounts come from the schedule only),
   cross-tenant (`not_found`), an order with a live payment (`order_not_payable|paid`), closed-day orders (`day_closed`).
 - Installment payments are not reversible here: a settled installment of a closed day is frozen by the day guard (0019).
-- Lock order: key → open day (FOR SHARE) → order / voucher (FOR UPDATE) → installment → payment method (FOR SHARE) → counter.
+- Lock order: generate — key → open day (FOR SHARE) → order (FOR UPDATE) → payment method (FOR SHARE) → counters; collect — key → open
+  day (FOR SHARE) → voucher (FOR UPDATE) → next installment (FOR UPDATE) → payment method → counter (the voucher lock serialises
+  collections; the order row is not touched).
+- Both commands require the order to be visible to the caller (same rule as RLS `orders_select`); otherwise `not_found`.
+- A settled voucher leaves its order at `payment_status = 'installment'` (a closed-day order is frozen); "fully paid" is the voucher's
+  computed `settled` status, which reports use.
+- `fn_get_receipt` also lets a `vouchers.manage` holder reprint the voucher payments they took.
+- Customer names follow First + Middle + Last (form hint; not enforced, since a guest may give fewer names).
 
 ```http
 POST /rest/v1/rpc/fn_confirm_installment

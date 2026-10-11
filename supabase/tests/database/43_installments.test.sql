@@ -2,12 +2,13 @@
 -- (next installment only, server amount, double payment / overpayment / settled / invalid number), computed status, fn_get_voucher /
 -- fn_list_vouchers, receipts with the voucher block, cross-tenant / IDOR, audit. Gate: the installment lifecycle.
 begin;
-select plan(49);
+select plan(55);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
        tests.user_id('selam', 'central-cafe') a_admin, tests.user_id('yonas', 'central-cafe') a_waiter,
-       tests.user_id('hanna', 'central-cafe') a_cashier, tests.user_id('owner', 'second-cafe') b_admin;
+       tests.user_id('hanna', 'central-cafe') a_cashier, tests.user_id('owner', 'second-cafe') b_admin,
+       tests.user_id('meron', 'central-cafe') a_waiter2;
 grant all on _f to public;
 create temp table _n (k text primary key, v text);
 grant all on _n to public;
@@ -143,9 +144,48 @@ select is(tests.run(format($q$select public.fn_generate_voucher(%L, 'X Y', null,
 select is((select count(*)::int from public.vouchers), 0, 'RLS: no foreign vouchers visible');
 select tests.clear_auth();
 
+-- ═════════ review: order visibility (a role without orders.view_all) ═════════
+select tests.authenticate_as((select a_waiter2 from _f));
+insert into _n select 'om', public.fn_submit_order(tests.cart(array['Macchiato:1']), 'inst-order-meron1') ->> 'id';
+insert into _n select 'om2', public.fn_submit_order(tests.cart(array['Macchiato:1']), 'inst-order-meron2') ->> 'id';
+select tests.clear_auth();
+select tests.authenticate_as((select a_cashier from _f));
+insert into _n select 'vm', public.fn_generate_voucher(tests.nv('om2'), 'Meron Guest Customer', null, 0, null, null, 2, 7, 'inst-key-gen-00020')::text;
+select tests.clear_auth();
+insert into public.role_permissions (role_id, permission_id, restaurant_id)
+  select p.role_id, pm.id, p.restaurant_id from public.profiles p, public.permissions pm where p.id = (select a_waiter from _f) and pm.key = 'vouchers.manage';
+select tests.authenticate_as((select a_waiter from _f));
+select is(tests.oracle($q$select public.fn_generate_voucher({id}, 'X Y Z', null, 0, null, null, 2, 7, 'inst-key-vis-0001')$q$, tests.nv('om')),
+          'P0001|not_found|', 'a voucher on an order the caller cannot see: not_found (same as an unknown id)');
+select is(tests.run(format($q$select public.fn_confirm_installment(%L, %L, null, 'inst-key-vis-0002')$q$, (tests.jv('vm') -> 'voucher' ->> 'id'), tests.nv('cash'))),
+          'P0001|not_found|', 'collecting on a voucher whose order the caller cannot see: not_found');
+select tests.clear_auth();
+
+-- ═════════ review: collection after the voucher's business day closed (0019 allowlist path, through the RPC) ═════════
+select tests.authenticate_as((select a_cashier from _f));
+insert into _n select 'v3', public.fn_generate_voucher(tests.nv('o3'), 'Tigist Haile Bekele', null, 0, null, null, 2, 7, 'inst-key-gen-00010')::text;
+select tests.clear_auth();
+update public.day_sessions set status = 'closed', closed_at = now(), closed_by = (select a_admin from _f), order_count = 0, gross_collected = 0, cash_collected = 0,
+       cash_expenses = 0, expenses_total = 0, expected_cash = 0, counted_cash = 0, cash_variance = 0, net_profit = 0, inventory_variance = 0,
+       station_snapshot = '[]', expense_snapshot = '[]', payment_snapshot = '[]'
+where restaurant_id = (select a from _f) and status = 'open';
+insert into public.day_sessions (restaurant_id, day_no, opened_by) select a, 99, a_admin from _f;
+select tests.authenticate_as((select a_cashier from _f));
+insert into _n select 'c3', public.fn_confirm_installment((tests.jv('v3') -> 'voucher' ->> 'id')::uuid, tests.nv('cash'), null, 'inst-key-col-0100')::text;
+select is((select d.day_no from public.payments p join public.day_sessions d on d.id = p.day_session_id where p.id = (tests.jv('c3') ->> 'payment_id')::uuid), 99,
+          'an installment of a closed-day voucher is collected into the NEW day');
+select is(tests.run(format($q$select public.fn_generate_voucher(%L, 'X Y Z', null, 0, null, null, 2, 7, 'inst-key-gen-00011')$q$, tests.nv('om'))),
+          'P0001|day_closed|order business day is closed', 'no voucher for an order of a closed day');
+select tests.clear_auth();
+select is(tests.run(format($q$update public.installments set paid = false, paid_at = null, payment_id = null where voucher_id = %L and no = 1$q$, tests.jv('v3') -> 'voucher' ->> 'id')),
+          'P0001|day_closed|', 'a collected installment of a closed-day voucher cannot be un-paid (frozen)');
+select is((tests.jv('c3') -> 'voucher' ->> 'outstanding')::numeric,
+          (select sum(amount) from public.installments where voucher_id = (tests.jv('v3') -> 'voucher' ->> 'id')::uuid and no = 2),
+          'receipt balance = the installments after this one');
+
 -- ═════════ audit ═════════
-select is(tests.ev((select a from _f), 'voucher.issued'), 2, 'audit: voucher.issued x2 (the replay wrote none)');
-select is(tests.ev((select a from _f), 'installment.collected'), 3, 'audit: installment.collected x3');
+select is(tests.ev((select a from _f), 'voucher.issued'), 4, 'audit: voucher.issued x4 (the replay wrote none)');
+select is(tests.ev((select a from _f), 'installment.collected'), 4, 'audit: installment.collected x4');
 
 select * from finish();
 rollback;

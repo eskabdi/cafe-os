@@ -16,7 +16,8 @@
 --
 --  Status is COMPUTED, never stored: settled (every installment paid) > overdue (an unpaid installment due before the tenant's local
 --  today) > active. Lock order: key -> day (FOR SHARE) -> order (FOR UPDATE) -> voucher (FOR UPDATE) -> payment method (FOR SHARE) ->
---  counter. Installment payments are not reversible here (a settled installment of a closed day is frozen by the day guard).
+--  counter (generate); key -> day (FOR SHARE) -> voucher (FOR UPDATE) -> next installment (FOR UPDATE) -> method -> counter (collect; the
+--  voucher lock serialises collections, the order row is not touched). Installment payments are not reversible here (a settled installment of a closed day is frozen by the day guard).
 
 -- ── internal: tenant local date ─────────────────────────────────────────────
 create or replace function public.fn_tenant_today(p_rid uuid)
@@ -36,7 +37,7 @@ as $$
   i as (select x.* from public.installments x join v on x.voucher_id = v.id and x.restaurant_id = v.restaurant_id),
   agg as (select coalesce(sum(amount) filter (where paid), 0) paid_amt, coalesce(sum(amount) filter (where not paid), 0) open_amt,
                  count(*) filter (where paid) paid_n, count(*) n,
-                 bool_or(not paid and due_date < public.fn_tenant_today((select restaurant_id from v))) overdue
+                 bool_or(not paid and due_date < (select public.fn_tenant_today(v.restaurant_id) from v)) overdue
           from i)
   select jsonb_build_object(
     'id', v.id, 'voucher_no', v.voucher_no, 'order_id', v.order_id,
@@ -81,10 +82,12 @@ as $$
       select jsonb_build_object('voucher_no', v.voucher_no, 'customer_name', v.customer_name, 'installment_no', p.installment_no,
                                 'installment_count', v.installment_count, 'total', v.total,
                                 -- the balance right after THIS payment (later payments excluded), so a reprint shows the same figures
+                                -- collection is strictly in order, so the balance after installment n is the total minus the down
+                                -- payment and installments 1..n (the same figure on every reprint)
                                 'outstanding', v.total - v.down_payment
-                                  - coalesce((select sum(x.amount) from public.installments x join public.payments q on q.id = x.payment_id
-                                              where x.voucher_id = v.id and x.restaurant_id = v.restaurant_id and x.paid
-                                                and (q.created_at, q.id) <= (p.created_at, p.id)), 0))
+                                  - coalesce((select sum(x.amount) from public.installments x
+                                              where x.voucher_id = v.id and x.restaurant_id = v.restaurant_id
+                                                and x.no <= coalesce(p.installment_no, 0)), 0))
       from public.vouchers v where v.id = p.voucher_id and v.restaurant_id = p.restaurant_id) end)
   from public.payments p where p.id = p_payment_id and p.restaurant_id = p_restaurant_id
 $$;
@@ -131,19 +134,25 @@ begin
   if v_ref is not null and (char_length(v_ref) > 120 or v_ref ~ '[[:cntrl:]]') then perform public.fn_err('invalid_input', 'reference'); end if;
   if v_down > 0 and p_down_method_id is null then perform public.fn_err('invalid_input', 'down_method_id'); end if;
 
-  v_hash := encode(extensions.digest(convert_to(format('%s|%s|%s|%s|%s|%s|%s|%s|%s', (select auth.uid()), p_order_id, v_name, coalesce(v_phone, ''), v_down,
+  v_hash := encode(extensions.digest(convert_to(format('%s|%s|%s|%s|%s|%s|%s|%s|%s', (select auth.uid()), p_order_id, v_name, coalesce(v_phone, ''), round(v_down, 2),
                      coalesce(p_down_method_id::text, ''), coalesce(v_ref, ''), p_installment_count, p_interval_days), 'UTF8'), 'sha256'), 'hex');
   v_replay := public.fn_idempotency_begin(p_idempotency_key, 'voucher.generate', v_hash);
   if v_replay is not null then
     if v_replay -> 'result' is null or jsonb_typeof(v_replay -> 'result') = 'null' then perform public.fn_err('invalid_state', 'idempotency_pending'); end if;
-    return (v_replay -> 'result') || jsonb_build_object('replayed', true);
+    -- rebuilt: the voucher's current status / balance and the down receipt's current state
+    return jsonb_build_object(
+      'voucher', public.fn_voucher_json((v_replay -> 'result' -> 'voucher' ->> 'id')::uuid),
+      'down_receipt', case when v_replay -> 'result' -> 'down_receipt' ->> 'payment_id' is null then null
+                           else public.fn_receipt_json((v_replay -> 'result' -> 'down_receipt' ->> 'payment_id')::uuid, v_rid) end,
+      'replayed', true);
   end if;
 
   select d.id into v_day from public.day_sessions d where d.restaurant_id = v_rid and d.status = 'open' for share;
   if v_day is null then perform public.fn_err('day_closed', 'no open business day'); end if;
 
   select * into v_o from public.orders o where o.id = p_order_id and o.restaurant_id = v_rid for update;
-  if not found then perform public.fn_err('not_found'); end if;
+  -- the same visibility as RLS orders_select (and fn_confirm_payment): an order the caller cannot read is 'not_found'
+  if not found or not public.fn_order_visible(v_o.created_by, v_o.station_ids) then perform public.fn_err('not_found'); end if;
   if v_o.day_session_id is distinct from v_day then perform public.fn_err('day_closed', 'order business day is closed'); end if;
   if v_o.status = 'cancelled' then perform public.fn_err('order_not_payable', 'cancelled'); end if;
   if v_o.payment_status <> 'unpaid' then perform public.fn_err('order_not_payable', v_o.payment_status); end if;
@@ -234,18 +243,23 @@ begin
   end if;
 
   v_hash := encode(extensions.digest(convert_to(format('%s|%s|%s|%s|%s|%s', (select auth.uid()), p_voucher_id, p_payment_method_id, coalesce(v_ref, ''),
-                     coalesce(p_installment_no::text, ''), coalesce(p_tendered::text, '')), 'UTF8'), 'sha256'), 'hex');
+                     coalesce(p_installment_no::text, ''), coalesce(round(p_tendered, 2)::text, '')), 'UTF8'), 'sha256'), 'hex');
   v_replay := public.fn_idempotency_begin(p_idempotency_key, 'installment.confirm', v_hash);
   if v_replay is not null then
     if v_replay -> 'result' is null or jsonb_typeof(v_replay -> 'result') = 'null' then perform public.fn_err('invalid_state', 'idempotency_pending'); end if;
-    return (v_replay -> 'result') || jsonb_build_object('replayed', true);
+    return public.fn_receipt_json((v_replay -> 'result' ->> 'payment_id')::uuid, v_rid)
+           || jsonb_build_object('tendered', v_replay -> 'result' -> 'tendered', 'change', v_replay -> 'result' -> 'change',
+                                 'voucher_status', public.fn_voucher_json(p_voucher_id) ->> 'status', 'replayed', true);
   end if;
 
   select d.id into v_day from public.day_sessions d where d.restaurant_id = v_rid and d.status = 'open' for share;
   if v_day is null then perform public.fn_err('day_closed', 'no open business day'); end if;
 
   select * into v_v from public.vouchers v where v.id = p_voucher_id and v.restaurant_id = v_rid for update;
-  if not found then perform public.fn_err('not_found'); end if;
+  if not found or not exists (select 1 from public.orders o where o.id = v_v.order_id and o.restaurant_id = v_rid
+                              and public.fn_order_visible(o.created_by, o.station_ids)) then
+    perform public.fn_err('not_found');
+  end if;
   select * into v_i from public.installments x where x.voucher_id = v_v.id and x.restaurant_id = v_rid and not x.paid
   order by x.no limit 1 for update;
   if not found then perform public.fn_err('voucher_already_settled'); end if;
@@ -299,17 +313,35 @@ language plpgsql stable security definer set search_path = ''
 as $$
 declare
   v_rid uuid := public.fn_tenant_status_guard(false);
+  v_today date;
 begin
   if not public.has_permission('vouchers.view') then perform public.fn_err('permission_denied'); end if;
   if p_status is not null and p_status not in ('active', 'overdue', 'settled') then perform public.fn_err('invalid_input', 'status'); end if;
   if p_limit is null or p_limit not between 1 and 500 then perform public.fn_err('invalid_input', 'limit'); end if;
+  v_today := public.fn_tenant_today(v_rid);
+  -- set-based: one aggregate per voucher, the status filter applied BEFORE the limit (no voucher is missed however old)
   return coalesce((
-    select jsonb_agg(t.j order by t.created_at desc)
-    from (select s.j, s.created_at
-          from (select public.fn_voucher_json(v.id) - 'installments' j, v.created_at
-                from public.vouchers v where v.restaurant_id = v_rid order by v.created_at desc limit 2000) s
-          where p_status is null or s.j ->> 'status' = p_status
-          order by s.created_at desc limit p_limit) t), '[]'::jsonb);
+    select jsonb_agg(x.j order by x.created_at desc)
+    from (
+      select v.created_at, jsonb_build_object(
+               'id', v.id, 'voucher_no', v.voucher_no, 'order_id', v.order_id, 'order_no', o.order_no,
+               'customer_name', v.customer_name, 'customer_phone', v.customer_phone, 'total', v.total, 'down_payment', v.down_payment,
+               'installment_count', v.installment_count, 'interval_days', v.interval_days, 'created_at', v.created_at,
+               'paid_installments', a.paid_n, 'paid_amount', v.down_payment + a.paid_amt, 'outstanding', a.open_amt,
+               'status', st.status, 'next_due', nx.next_due) j
+      from public.vouchers v
+      join public.orders o on o.id = v.order_id and o.restaurant_id = v.restaurant_id
+      cross join lateral (select count(*) filter (where i.paid)::int paid_n, count(*)::int n,
+                                 coalesce(sum(i.amount) filter (where i.paid), 0) paid_amt,
+                                 coalesce(sum(i.amount) filter (where not i.paid), 0) open_amt,
+                                 bool_or(not i.paid and i.due_date < v_today) overdue
+                          from public.installments i where i.voucher_id = v.id and i.restaurant_id = v.restaurant_id) a
+      cross join lateral (select case when a.paid_n = a.n then 'settled' when coalesce(a.overdue, false) then 'overdue' else 'active' end status) st
+      cross join lateral (select (select jsonb_build_object('no', i.no, 'due_date', i.due_date, 'amount', i.amount) from public.installments i
+                                  where i.voucher_id = v.id and i.restaurant_id = v.restaurant_id and not i.paid order by i.no limit 1) next_due) nx
+      where v.restaurant_id = v_rid and (p_status is null or st.status = p_status)
+      order by v.created_at desc
+      limit p_limit) x), '[]'::jsonb);
 end;
 $$;
 
@@ -319,3 +351,32 @@ revoke all on function public.fn_generate_voucher(uuid, text, text, numeric, uui
 grant execute on function public.fn_generate_voucher(uuid, text, text, numeric, uuid, text, integer, integer, text),
   public.fn_confirm_installment(uuid, uuid, text, text, integer, numeric), public.fn_get_voucher(uuid),
   public.fn_list_vouchers(text, integer) to authenticated;
+
+-- ── receipts: a voucher collector may reprint the voucher payments they took (review L5) ─────────────────────────────────────
+create or replace function public.fn_get_receipt(p_payment_id uuid)
+returns jsonb
+language plpgsql security definer set search_path = ''
+as $$
+declare
+  v_rid uuid := public.fn_tenant_status_guard(false);
+  v_by uuid;
+begin
+  if not (public.has_permission('payments.view') or public.has_permission('payments.create') or public.has_permission('vouchers.manage')) then
+    perform public.fn_err('permission_denied');
+  end if;
+  -- payments.view: any receipt of the tenant; payments.create: the receipts the caller issued; vouchers.manage: the voucher payments
+  -- (down / installment) the caller issued
+  if p_payment_id is null or not exists (
+       select 1 from public.payments p where p.id = p_payment_id and p.restaurant_id = v_rid
+         and (public.has_permission('payments.view')
+              or (public.has_permission('payments.create') and p.created_by = (select auth.uid()))
+              or (public.has_permission('vouchers.manage') and p.voucher_id is not null and p.created_by = (select auth.uid())))) then
+    perform public.fn_err('not_found');
+  end if;
+  select p.created_by into v_by from public.payments p where p.id = p_payment_id and p.restaurant_id = v_rid;
+  if v_by is distinct from (select auth.uid()) then
+    perform public.fn_write_audit('payment.receipt_viewed', jsonb_build_object('payment_id', p_payment_id));
+  end if;
+  return public.fn_receipt_json(p_payment_id, v_rid);
+end;
+$$;

@@ -139,14 +139,7 @@ export function InstallmentsPage() {
                     {v.order_no} · {v.paid_installments}/{v.installment_count} paid · outstanding{' '}
                     {formatEtb(v.outstanding)}
                   </span>
-                  <span
-                    role="progressbar"
-                    aria-label={`${v.voucher_no} paid`}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={pct}
-                    className="block h-2 overflow-hidden rounded-full bg-muted"
-                  >
+                  <span aria-hidden="true" className="block h-2 overflow-hidden rounded-full bg-muted">
                     <span className="block h-full bg-primary" style={{ width: `${pct}%` }} />
                   </span>
                   {v.next_due && (
@@ -312,8 +305,15 @@ function VoucherDialog({
     onError: (e) => {
       const { code, detail } = errorCode(e)
       setError(installmentErrorMessage(e))
+      if (code === 'invalid_installment_no' || code === 'voucher_already_settled') {
+        // definitive: nothing was collected; the schedule moved on, so start a fresh attempt on the refreshed next installment
+        setUnsure(false)
+        last.current = null
+        key.current = newKey()
+        void v.refetch()
+        return
+      }
       setUnsure(!code || !DEFINITIVE_PAYMENT_ERRORS.has(code) || detail === 'idempotency_pending')
-      if (code === 'invalid_installment_no' || code === 'voucher_already_settled') void v.refetch()
     },
   })
 
@@ -659,16 +659,18 @@ function NewVoucherDialog({
             </FormField>
             {(downValue ?? 0) > 0 && methods.data && (
               <>
-                <p className="text-sm font-medium text-ink">Down payment method</p>
-                <MethodPicker
-                  name="down-method"
-                  methods={methods.data}
-                  value={downMethodId}
-                  onChange={(m) => {
-                    setDownMethodId(m.id)
-                    touch()
-                  }}
-                />
+                <fieldset>
+                  <legend className="mb-2 text-sm font-medium text-ink">Down payment method</legend>
+                  <MethodPicker
+                    name="down-method"
+                    methods={methods.data}
+                    value={downMethodId}
+                    onChange={(m) => {
+                      setDownMethodId(m.id)
+                      touch()
+                    }}
+                  />
+                </fieldset>
                 {downMethod?.requires_reference && (
                   <FormField id="v-down-ref" label="Reference">
                     {(a11y) => (
