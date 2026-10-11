@@ -3256,7 +3256,7 @@ export type Database = {
         Returns: Json
       }
       fn_receipt_json: {
-        Args: { p_payment_id: string }
+        Args: { p_payment_id: string; p_restaurant_id: string }
         Returns: Json
       }
       fn_receive_stock: {
