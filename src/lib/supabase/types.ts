@@ -2721,6 +2721,17 @@ export type Database = {
         Args: { p_profile_id: string }
         Returns: Json
       }
+      fn_confirm_installment: {
+        Args: {
+          p_voucher_id: string
+          p_payment_method_id: string
+          p_reference: string
+          p_idempotency_key: string
+          p_installment_no?: number
+          p_tendered?: number
+        }
+        Returns: Json
+      }
       fn_confirm_payment: {
         Args: {
           p_order_id: string
@@ -2819,6 +2830,20 @@ export type Database = {
         Args: { p_rid: string; p_email: string }
         Returns: number
       }
+      fn_generate_voucher: {
+        Args: {
+          p_order_id: string
+          p_customer_name: string
+          p_customer_phone: string
+          p_down_payment: number
+          p_down_method_id: string
+          p_down_reference: string
+          p_installment_count: number
+          p_interval_days: number
+          p_idempotency_key: string
+        }
+        Returns: Json
+      }
       fn_get_my_invitation: {
         Args: Record<PropertyKey, never>
         Returns: Json
@@ -2849,6 +2874,10 @@ export type Database = {
       }
       fn_get_subscription_usage: {
         Args: Record<PropertyKey, never>
+        Returns: Json
+      }
+      fn_get_voucher: {
+        Args: { p_voucher_id: string }
         Returns: Json
       }
       fn_idempotency_begin: {
@@ -2971,6 +3000,10 @@ export type Database = {
       }
       fn_list_users: {
         Args: { p_include_inactive?: boolean }
+        Returns: Json
+      }
+      fn_list_vouchers: {
+        Args: { p_status?: string; p_limit?: number }
         Returns: Json
       }
       fn_mark_notification_read: {
@@ -3495,6 +3528,10 @@ export type Database = {
         Args: { p_write?: boolean }
         Returns: string
       }
+      fn_tenant_today: {
+        Args: { p_rid: string }
+        Returns: string
+      }
       fn_tenant_usage: {
         Args: { p_rid: string }
         Returns: Json
@@ -3565,6 +3602,10 @@ export type Database = {
       }
       fn_verify_pin: {
         Args: { p_profile_id: string; p_pin_digest: string }
+        Returns: Json
+      }
+      fn_voucher_json: {
+        Args: { p_voucher_id: string; p_restaurant_id: string }
         Returns: Json
       }
       fn_write_admin_audit: {

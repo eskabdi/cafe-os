@@ -128,3 +128,11 @@ export function formatEthiopianTime(iso: string, timeZone = 'Africa/Addis_Ababa'
   const p = localParts(at, timeZone)
   return ethiopianClock(p.hour, p.minute)
 }
+
+/** "13 መስከረም 2019" for a calendar date "YYYY-MM-DD" (a due date: no time zone shift). */
+export function formatEthiopianDate(isoDate: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate)
+  if (!m) return ''
+  const e = toEthiopianDate(Number(m[1]), Number(m[2]), Number(m[3]))
+  return `${e.day} ${ETHIOPIAN_MONTHS[e.month - 1] ?? ''} ${e.year}`
+}

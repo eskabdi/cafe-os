@@ -67,6 +67,7 @@ export const MODULE_NAV: readonly ModuleNavItem[] = [
     group: 'operations',
     icon: ReceiptText,
     summary: 'Installment vouchers and collections.',
+    implemented: true,
   },
   {
     id: 'menu',

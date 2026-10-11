@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   ethiopianClock,
+  formatEthiopianDate,
   formatEthiopianDateTime,
   formatEthiopianTime,
   formatInternationalDateTime,
@@ -34,5 +35,18 @@ describe('Ethiopian clock', () => {
     expect(formatInternationalDateTime('2026-09-23T16:05:00Z')).toBe('2026-09-23 19:05')
     expect(formatEthiopianDateTime('2026-09-23T16:05:00Z', 'Not/AZone')).toBe('13 መስከረም 2019, 1:05 ማታ')
     expect(formatEthiopianDateTime('nope')).toBe('')
+  })
+})
+
+describe('formatEthiopianDate (calendar dates, no time zone shift)', () => {
+  it('formats a due date with Arabic numerals', () => {
+    expect(formatEthiopianDate('2026-09-11')).toBe('1 መስከረም 2019')
+    expect(formatEthiopianDate('2026-09-10')).toBe('5 ጳጉሜ 2018')
+    expect(formatEthiopianDate('2023-09-11')).toBe('6 ጳጉሜ 2015')
+  })
+  it('refuses anything that is not YYYY-MM-DD', () => {
+    expect(formatEthiopianDate('2026-9-1')).toBe('')
+    expect(formatEthiopianDate('')).toBe('')
+    expect(formatEthiopianDate('2026-09-11T00:00:00Z')).toBe('')
   })
 })

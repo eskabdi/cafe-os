@@ -178,3 +178,17 @@ flowchart LR
     RPC -->|receipt JSON| RCPT["ReceiptView (React text) -> print"]
 ```
 
+## Level 1: installments (Phase 7)
+```mermaid
+flowchart LR
+    UI["Installments SPA /r/<slug>/installments"] -->|fn_generate_voucher(order, customer, down, method, n, interval, key)| GEN["definer RPC: tenant from JWT, vouchers.manage, open day"]
+    GEN -->|schedule from orders.total| V[("vouchers / installments")]
+    GEN -->|down payment| PAY[("payments")]
+    GEN -->|payment_status = installment| ORD[("orders")]
+    UI -->|fn_confirm_installment(voucher, method, ref, no, key)| COL["next installment only, scheduled amount"]
+    COL --> PAY
+    COL -->|paid, payment_id| V
+    V -.->|Realtime (RLS vouchers.view)| UI
+    UI -->|fn_list_vouchers / fn_get_voucher| V
+```
+
