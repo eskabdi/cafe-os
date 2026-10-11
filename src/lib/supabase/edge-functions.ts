@@ -145,7 +145,7 @@ export interface ResetTenantAdminMfaInput {
 const mfaResetSchema = z.object({
   profile_id: uuid,
   factors_removed: z.number().int().nonnegative(),
-  sessions_revoked: z.number().int().nonnegative(),
+  sessions_revoked: z.number().int().nonnegative().nullable(),
   devices_revoked: z.number().int().nonnegative(),
 })
 export type TenantAdminMfaReset = z.infer<typeof mfaResetSchema>
