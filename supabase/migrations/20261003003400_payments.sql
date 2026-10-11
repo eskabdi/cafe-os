@@ -91,7 +91,8 @@ begin
   if v_day is null then perform public.fn_err('day_closed', 'no open business day'); end if;
 
   select * into v_o from public.orders o where o.id = p_order_id and o.restaurant_id = v_rid for update;
-  if not found then perform public.fn_err('not_found'); end if;
+  -- the same visibility as RLS orders_select: an order the caller cannot read is 'not_found', never paid or printed
+  if not found or not public.fn_order_visible(v_o.created_by, v_o.station_ids) then perform public.fn_err('not_found'); end if;
   if v_o.day_session_id is distinct from v_day then perform public.fn_err('day_closed', 'order business day is closed'); end if;
   if v_o.status = 'cancelled' then perform public.fn_err('order_not_payable', 'cancelled'); end if;
   if v_o.payment_status <> 'unpaid' then perform public.fn_err('order_not_payable', v_o.payment_status); end if;
