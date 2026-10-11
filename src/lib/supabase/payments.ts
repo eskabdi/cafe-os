@@ -117,6 +117,18 @@ export const receiptSchema = z.object({
   reference: z.string().nullable(),
   reversed_payment_id: uuid.nullable(),
   reversed_receipt_no: z.string().nullable().optional(),
+  // down / installment payments (Phase 7): the voucher and the balance right after this payment
+  voucher: z
+    .object({
+      voucher_no: z.string(),
+      customer_name: z.string(),
+      installment_no: z.number().int().nullable(),
+      installment_count: z.number().int(),
+      total: numericValue,
+      outstanding: numericValue,
+    })
+    .nullable()
+    .optional(),
   reversed: z.boolean(),
   received_by: z.string().nullable(),
   restaurant: z

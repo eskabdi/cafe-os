@@ -33,6 +33,9 @@ const AcceptInvitationPage = lazy(() =>
 )
 const MenuPage = lazy(() => import('@/features/menu').then((m) => ({ default: m.MenuPage })))
 const PosPage = lazy(() => import('@/features/pos/PosPage').then((m) => ({ default: m.PosPage })))
+const InstallmentsPage = lazy(() =>
+  import('@/features/installments/InstallmentsPage').then((m) => ({ default: m.InstallmentsPage })),
+)
 const CashierPage = lazy(() =>
   import('@/features/cashier/CashierPage').then((m) => ({ default: m.CashierPage })),
 )
@@ -196,6 +199,15 @@ export const routes: RouteObject[] = [
                         element: (
                           <RequireNavPermission permission="payments.create">
                             <CashierPage />
+                          </RequireNavPermission>
+                        ),
+                      },
+                      // Phase 7 Installments (vouchers.view, same code as the nav entry and fn_list_vouchers)
+                      {
+                        path: 'installments',
+                        element: (
+                          <RequireNavPermission permission="vouchers.view">
+                            <InstallmentsPage />
                           </RequireNavPermission>
                         ),
                       },

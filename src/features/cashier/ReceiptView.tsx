@@ -52,6 +52,25 @@ export function ReceiptView({ receipt }: { receipt: Receipt }) {
           {formatInternationalDateTime(receipt.created_at, tz)}
         </dd>
       </dl>
+      {receipt.voucher && (
+        <>
+          <hr className="my-2 border-dashed border-line" />
+          <dl className="grid grid-cols-[1fr_auto] gap-x-3">
+            <dt>Voucher</dt>
+            <dd className="text-right">{receipt.voucher.voucher_no}</dd>
+            <dt>Customer</dt>
+            <dd className="break-words text-right">{receipt.voucher.customer_name}</dd>
+            <dt>{receipt.voucher.installment_no ? 'Installment' : 'Down payment'}</dt>
+            <dd className="text-right">
+              {receipt.voucher.installment_no
+                ? `${receipt.voucher.installment_no} / ${receipt.voucher.installment_count}`
+                : `${receipt.voucher.installment_count} installments`}
+            </dd>
+            <dt className="font-semibold">Balance due</dt>
+            <dd className="text-right font-semibold">{formatEtb(receipt.voucher.outstanding)}</dd>
+          </dl>
+        </>
+      )}
       {o && !isReversal && (
         <>
           <hr className="my-2 border-dashed border-line" />
