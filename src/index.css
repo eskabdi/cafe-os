@@ -39,3 +39,42 @@
     @apply bg-background font-sans text-foreground antialiased;
   }
 }
+
+/* Amharic text: Tayitu primary, Jiret secondary (font files served from public/fonts/, supplied by the owner). */
+@font-face {
+  font-family: 'Tayitu';
+  src: url('/fonts/Tayitu.ttf') format('truetype');
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Jiret';
+  src: url('/fonts/Jiret.ttf') format('truetype');
+  font-display: swap;
+}
+@layer utilities {
+  .font-amharic {
+    font-family: 'Tayitu', 'Jiret', 'Noto Sans Ethiopic', 'Nyala', sans-serif;
+  }
+}
+
+/* Receipt printing: only the receipt is printed, on a narrow (80 mm) roll or a page. */
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+  .receipt-print,
+  .receipt-print * {
+    visibility: visible !important;
+  }
+  .receipt-print {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 80mm;
+    padding: 0;
+    box-shadow: none;
+    border: 0;
+  }
+  .no-print {
+    display: none !important;
+  }
+}

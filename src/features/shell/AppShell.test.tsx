@@ -254,13 +254,13 @@ describe('dynamic station navigation', () => {
 
 describe('route guards', () => {
   it('a permitted placeholder module renders an accessible coming-soon page', async () => {
-    renderAt('/r/demo-cafe/cashier', auth(ctx(['payments.create'])))
-    expect(await screen.findByRole('heading', { level: 1, name: 'Cashier' })).toBeInTheDocument()
+    renderAt('/r/demo-cafe/installments', auth(ctx(['vouchers.view'])))
+    expect(await screen.findByRole('heading', { level: 1, name: 'Installments' })).toBeInTheDocument()
     expect(screen.getByText('Coming soon')).toBeInTheDocument()
   })
 
   it('a module without the permission renders 403', async () => {
-    renderAt('/r/demo-cafe/cashier', auth(ctx(['orders.create'])))
+    renderAt('/r/demo-cafe/installments', auth(ctx(['orders.create'])))
     expect(await screen.findByRole('heading', { name: 'Not authorised' })).toBeInTheDocument()
     expect(screen.queryByText('Coming soon')).toBeNull()
   })

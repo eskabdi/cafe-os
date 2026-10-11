@@ -57,6 +57,7 @@ export const MODULE_NAV: readonly ModuleNavItem[] = [
     group: 'operations',
     icon: Wallet,
     summary: 'Confirm payments and issue receipts.',
+    implemented: true,
   },
   {
     id: 'installments',

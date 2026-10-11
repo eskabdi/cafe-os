@@ -33,12 +33,21 @@ const AcceptInvitationPage = lazy(() =>
 )
 const MenuPage = lazy(() => import('@/features/menu').then((m) => ({ default: m.MenuPage })))
 const PosPage = lazy(() => import('@/features/pos/PosPage').then((m) => ({ default: m.PosPage })))
+const CashierPage = lazy(() =>
+  import('@/features/cashier/CashierPage').then((m) => ({ default: m.CashierPage })),
+)
 const InventoryPage = lazy(() => import('@/features/inventory').then((m) => ({ default: m.InventoryPage })))
 const RestaurantSettingsPage = lazy(() =>
-  import('@/features/tenant-admin/RestaurantSettingsPage').then((m) => ({ default: m.RestaurantSettingsPage })),
+  import('@/features/tenant-admin/RestaurantSettingsPage').then((m) => ({
+    default: m.RestaurantSettingsPage,
+  })),
 )
-const UsersPage = lazy(() => import('@/features/tenant-admin/UsersPage').then((m) => ({ default: m.UsersPage })))
-const RolesPage = lazy(() => import('@/features/tenant-admin/RolesPage').then((m) => ({ default: m.RolesPage })))
+const UsersPage = lazy(() =>
+  import('@/features/tenant-admin/UsersPage').then((m) => ({ default: m.UsersPage })),
+)
+const RolesPage = lazy(() =>
+  import('@/features/tenant-admin/RolesPage').then((m) => ({ default: m.RolesPage })),
+)
 const SubscriptionPage = lazy(() =>
   import('@/features/tenant-admin/SubscriptionPage').then((m) => ({ default: m.SubscriptionPage })),
 )
@@ -178,6 +187,15 @@ export const routes: RouteObject[] = [
                         element: (
                           <RequireNavPermission permission="orders.create">
                             <PosPage />
+                          </RequireNavPermission>
+                        ),
+                      },
+                      // Phase 6 Cashier (payments.create, same code as the nav entry and fn_confirm_payment)
+                      {
+                        path: 'cashier',
+                        element: (
+                          <RequireNavPermission permission="payments.create">
+                            <CashierPage />
                           </RequireNavPermission>
                         ),
                       },

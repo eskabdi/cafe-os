@@ -53,3 +53,4 @@ Do these BEFORE a hosted project takes real users. Items marked (manual) cannot 
       join auth.mfa_factors f on f.user_id = p.id and f.status = 'verified' and f.factor_type = 'totp'
       where p.restaurant_id = r.id and p.is_active);
     ```
+- Amharic fonts: put `Tayitu.ttf` and `Jiret.ttf` in `public/fonts/` (owner-supplied; `src/index.css` `.font-amharic`, CSP `font-src 'self'`).
