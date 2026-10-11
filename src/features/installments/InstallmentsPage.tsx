@@ -733,6 +733,8 @@ function NewVoucherDialog({
 
 function installmentErrorMessage(err: unknown): string {
   const { code, detail } = errorCode(err)
+  if (code === 'plan_feature_unavailable')
+    return 'Your subscription plan does not include installment vouchers. Ask the platform administrator to change the plan.'
   if (code === 'voucher_already_settled')
     return 'This voucher is already settled; nothing is left to collect.'
   if (code === 'invalid_installment_no')

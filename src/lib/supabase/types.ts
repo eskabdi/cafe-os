@@ -3605,7 +3605,7 @@ export type Database = {
         Returns: Json
       }
       fn_voucher_json: {
-        Args: { p_voucher_id: string }
+        Args: { p_voucher_id: string; p_restaurant_id: string }
         Returns: Json
       }
       fn_write_admin_audit: {

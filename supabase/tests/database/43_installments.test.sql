@@ -10,6 +10,8 @@ select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
        tests.user_id('hanna', 'central-cafe') a_cashier, tests.user_id('owner', 'second-cafe') b_admin,
        tests.user_id('meron', 'central-cafe') a_waiter2;
 grant all on _f to public;
+-- second-cafe runs on Starter (no installments); the cross-tenant probes need it entitled so they reach the tenant check (47 covers the plan gate)
+update public.subscriptions set plan_id = (select id from public.plans where name = 'Growth') where restaurant_id = (select b from _f);
 create temp table _n (k text primary key, v text);
 grant all on _n to public;
 create function tests.nv(p_k text) returns uuid language sql stable as $$ select v::uuid from _n where k = p_k $$;
@@ -49,7 +51,7 @@ select tests.clear_auth();
 select is((select count(*)::int from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prosecdef and p.proconfig @> array['search_path=""']
            and p.proname in ('fn_tenant_today','fn_voucher_json','fn_generate_voucher','fn_confirm_installment','fn_get_voucher','fn_list_vouchers')), 6,
           'all six: security definer, empty search_path');
-select ok(not has_function_privilege('authenticated', 'public.fn_voucher_json(uuid)', 'execute')
+select ok(not has_function_privilege('authenticated', 'public.fn_voucher_json(uuid, uuid)', 'execute')
           and not has_function_privilege('authenticated', 'public.fn_tenant_today(uuid)', 'execute'), 'the builders are internal');
 select tests.authenticate_as((select a_admin from _f));
 select is(tests.run($q$insert into public.vouchers (restaurant_id, voucher_no, order_id, customer_name, total, installment_count, interval_days) values (gen_random_uuid(), 'VCH-9999', gen_random_uuid(), 'x', 1, 1, 7)$q$),

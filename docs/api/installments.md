@@ -2,7 +2,7 @@
 
 All endpoints are **Private** (signed-in tenant user) PostgREST RPCs: `POST /rest/v1/rpc/<name>`. The tenant and the actor come from the JWT,
 never from a parameter. Clients hold only SELECT on `vouchers` / `installments` (RLS: `vouchers.view`); these RPCs are the only writers.
-`fn_voucher_json`, `fn_tenant_today` and `fn_receipt_json` are **Internal** (no client EXECUTE).
+`fn_voucher_json(voucher_id, restaurant_id)` (tenant-filtered), `fn_tenant_today` and `fn_receipt_json` are **Internal** (no client EXECUTE).
 
 | endpoint | permission | effect |
 |---|---|---|
@@ -20,6 +20,8 @@ Rules:
 - **Guards**: double payment (voucher lock + lowest unpaid installment; at issue: order lock + payment_status check; same key → same receipt; `p_installment_no` must be the next one →
   `invalid_installment_no|<next>`), overpayment (`voucher_already_settled`), invalid amount (amounts come from the schedule only),
   cross-tenant (`not_found`), an order with a live payment (`order_not_payable|paid`), closed-day orders (`day_closed`).
+- **Plan entitlement**: `fn_generate_voucher` needs `plans.features.installments = true` on the tenant's subscription (absent = not
+  entitled) → `plan_feature_unavailable|installments`. Collection of vouchers issued before a downgrade stays allowed (no stranded debt).
 - Installment payments are not reversible here: a settled installment of a closed day is frozen by the day guard (0019).
 - Lock order: generate — key → open day (FOR SHARE) → order (FOR UPDATE) → payment method (FOR SHARE) → counters; collect — key → open
   day (FOR SHARE) → voucher (FOR UPDATE) → next installment (FOR UPDATE) → payment method → counter (the voucher lock serialises

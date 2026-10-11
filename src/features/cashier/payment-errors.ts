@@ -66,6 +66,7 @@ export function paymentErrorMessage(err: unknown): string {
 export const DEFINITIVE_PAYMENT_ERRORS = new Set([
   'day_closed',
   'order_not_payable',
+  'plan_feature_unavailable',
   'insufficient_tendered',
   'idempotency_conflict',
   'invalid_input',

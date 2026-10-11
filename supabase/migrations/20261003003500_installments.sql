@@ -29,11 +29,11 @@ $$;
 revoke all on function public.fn_tenant_today(uuid) from public, anon, authenticated, service_role;
 
 -- ── internal: the voucher document ──────────────────────────────────────────
-create or replace function public.fn_voucher_json(p_voucher_id uuid)
+create or replace function public.fn_voucher_json(p_voucher_id uuid, p_restaurant_id uuid)
 returns jsonb
 language sql stable security definer set search_path = ''
 as $$
-  with v as (select * from public.vouchers where id = p_voucher_id),
+  with v as (select * from public.vouchers where id = p_voucher_id and restaurant_id = p_restaurant_id),
   i as (select x.* from public.installments x join v on x.voucher_id = v.id and x.restaurant_id = v.restaurant_id),
   agg as (select coalesce(sum(amount) filter (where paid), 0) paid_amt, coalesce(sum(amount) filter (where not paid), 0) open_amt,
                  count(*) filter (where paid) paid_n, count(*) n,
@@ -52,7 +52,7 @@ as $$
                                                                   'paid_at', x.paid_at, 'payment_id', x.payment_id) order by x.no) from i x), '[]'::jsonb))
   from v, agg
 $$;
-revoke all on function public.fn_voucher_json(uuid) from public, anon, authenticated, service_role;
+revoke all on function public.fn_voucher_json(uuid, uuid) from public, anon, authenticated, service_role;
 
 -- ── receipt document: + voucher block ───────────────────────────────────────
 create or replace function public.fn_receipt_json(p_payment_id uuid, p_restaurant_id uuid)
@@ -126,6 +126,12 @@ declare
 begin
   -- receipts carry the order lines: vouchers.manage also needs order visibility (same rule as fn_confirm_payment)
   if not (public.has_permission('vouchers.manage') and public.has_permission('orders.view')) then perform public.fn_err('permission_denied'); end if;
+  -- plan entitlement: issuing needs plans.features.installments = true (absent = not entitled). Collection of vouchers issued before a
+  -- downgrade stays allowed, so a customer's debt is never stranded.
+  if not exists (select 1 from public.subscriptions s join public.plans pl on pl.id = s.plan_id
+                 where s.restaurant_id = v_rid and coalesce((pl.features ->> 'installments')::boolean, false)) then
+    perform public.fn_err('plan_feature_unavailable', 'installments');
+  end if;
   perform public.fn_check_idempotency_key(p_idempotency_key);
   if p_order_id is null then perform public.fn_err('invalid_input', 'order_id'); end if;
   if char_length(v_name) not between 1 and 80 or v_name ~ '[[:cntrl:]]' then perform public.fn_err('invalid_input', 'customer_name'); end if;
@@ -143,7 +149,7 @@ begin
     if v_replay -> 'result' is null or jsonb_typeof(v_replay -> 'result') = 'null' then perform public.fn_err('invalid_state', 'idempotency_pending'); end if;
     -- rebuilt: the voucher's current status / balance and the down receipt's current state
     return jsonb_build_object(
-      'voucher', public.fn_voucher_json((v_replay -> 'result' -> 'voucher' ->> 'id')::uuid),
+      'voucher', public.fn_voucher_json((v_replay -> 'result' -> 'voucher' ->> 'id')::uuid, v_rid),
       'down_receipt', case when v_replay -> 'result' -> 'down_receipt' ->> 'payment_id' is null then null
                            else public.fn_receipt_json((v_replay -> 'result' -> 'down_receipt' ->> 'payment_id')::uuid, v_rid) end,
       'replayed', true);
@@ -205,7 +211,7 @@ begin
   perform public.fn_write_audit('voucher.issued', jsonb_build_object('voucher_id', v_vid, 'voucher_no', v_vno, 'order_id', v_o.id,
                                 'total', v_o.total, 'down_payment', v_down, 'installment_count', p_installment_count,
                                 'interval_days', p_interval_days, 'down_payment_id', v_pay));
-  v_res := jsonb_build_object('voucher', public.fn_voucher_json(v_vid),
+  v_res := jsonb_build_object('voucher', public.fn_voucher_json(v_vid, v_rid),
                               'down_receipt', case when v_pay is null then null else public.fn_receipt_json(v_pay, v_rid) end);
   perform public.fn_idempotency_complete(p_idempotency_key, 'voucher.generate', v_res);
   return v_res || jsonb_build_object('replayed', false);
@@ -251,7 +257,7 @@ begin
     if v_replay -> 'result' is null or jsonb_typeof(v_replay -> 'result') = 'null' then perform public.fn_err('invalid_state', 'idempotency_pending'); end if;
     return public.fn_receipt_json((v_replay -> 'result' ->> 'payment_id')::uuid, v_rid)
            || jsonb_build_object('tendered', v_replay -> 'result' -> 'tendered', 'change', v_replay -> 'result' -> 'change',
-                                 'voucher_status', public.fn_voucher_json(p_voucher_id) ->> 'status', 'replayed', true);
+                                 'voucher_status', public.fn_voucher_json((select p.voucher_id from public.payments p where p.id = (v_replay -> 'result' ->> 'payment_id')::uuid and p.restaurant_id = v_rid), v_rid) ->> 'status', 'replayed', true);
   end if;
 
   select d.id into v_day from public.day_sessions d where d.restaurant_id = v_rid and d.status = 'open' for share;
@@ -286,7 +292,7 @@ begin
                                 'installment_no', v_i.no, 'amount', v_i.amount, 'payment_id', v_pay, 'payment_method_id', v_m.id));
   v_res := public.fn_receipt_json(v_pay, v_rid)
            || jsonb_build_object('tendered', p_tendered, 'change', case when p_tendered is null then null else p_tendered - v_i.amount end,
-                                 'voucher_status', public.fn_voucher_json(v_v.id) ->> 'status');
+                                 'voucher_status', public.fn_voucher_json(v_v.id, v_rid) ->> 'status');
   perform public.fn_idempotency_complete(p_idempotency_key, 'installment.confirm', v_res);
   return v_res || jsonb_build_object('replayed', false);
 end;
@@ -304,7 +310,7 @@ begin
   if p_voucher_id is null or not exists (select 1 from public.vouchers v where v.id = p_voucher_id and v.restaurant_id = v_rid) then
     perform public.fn_err('not_found');
   end if;
-  return public.fn_voucher_json(p_voucher_id);
+  return public.fn_voucher_json(p_voucher_id, v_rid);
 end;
 $$;
 
