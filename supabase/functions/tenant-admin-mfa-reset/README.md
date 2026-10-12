@@ -67,8 +67,8 @@ that no tenant-admin or platform gate accepts.
 
 ## Environment
 
-`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY`, `ALLOWED_ORIGINS`, and **`RECOVERY_REDIRECT_URL`**: absolute
-`https://` URL (or `http://localhost` / `127.0.0.1` / `*.localhost` for local), no credentials, no fragment (same rule as
+`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY`, `ALLOWED_ORIGINS`, and **`RECOVERY_REDIRECT_URL`**:
+`https://<app origin>/reset-password` (the app's set-new-password page). Absolute `https://` URL (or `http://localhost` / `127.0.0.1` / `*.localhost` for local), no credentials, no fragment (same rule as
 `INVITE_REDIRECT_URL`); it must also be in GoTrue's redirect allow-list. Missing or unsafe -> the function is disabled (every call
 503, fail closed).
 
@@ -78,5 +78,14 @@ Status: **not executed against a real Supabase stack** (no Deno here). Logic: `t
 SQL: `supabase/tests/database/48_plan_features_mfa_reset.test.sql`; portal: `src/features/platform/components/TenantAdminsCard.test.tsx`,
 `tests/e2e/platform-tenant-admins.spec.ts` (mocked backend).
 
-Known gap: the Tenant Portal has no set-new-password page for the recovery link yet (`RECOVERY_REDIRECT_URL` must point at one
-before this function is deployed).
+## Landing page
+
+`/reset-password` (`src/features/password-reset/ResetPasswordPage.tsx`, public route). It accepts only a `type=recovery` link; the
+recovery session arrives in the URL fragment (the Supabase client has `detectSessionInUrl: false`, so the page reads it once, removes
+it from the address bar and calls `auth.setSession`, which GoTrue validates). An expired / used link (GoTrue `error_code`, or a
+session GoTrue rejects) asks the person to have the platform administrator reset again; any other link type is refused. The new
+password follows the invitation policy (`src/lib/domain/password.ts`: 12..72 characters, letters and a digit; GoTrue's own policy
+is authoritative), is set with `auth.updateUser({ password })` and is never logged or stored. The page then signs the account out
+everywhere (`signOut({ scope: 'global' })`, falling back to a local sign-out) and sends the Tenant Admin to
+`/r/<slug>/admin-login` (slug from the server-derived session context) with the notice "Password changed. Sign in, then set up your
+authenticator again." Tests: `src/features/password-reset/*.test.ts(x)`, `tests/e2e/reset-password.spec.ts` (mocked backend).

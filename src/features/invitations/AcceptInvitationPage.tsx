@@ -5,15 +5,18 @@ import { Button } from '@/components/ui/button'
 import { FormError, FormField } from '@/components/ui/form-field'
 import { Input } from '@/components/ui/input'
 import { useAuth } from '@/features/auth'
+import { MIN_PASSWORD, passwordProblem } from '@/lib/domain/password'
 import { formatDateTime } from '@/lib/domain/portal'
 import { supabase } from '@/lib/supabase/client'
 import { portalErrorMessage } from '@/lib/supabase/portal-errors'
 import { acceptTenantAdminInvitation, getMyInvitation } from '@/lib/supabase/tenant-admin'
 
+// the policy is shared with the set-new-password page (/reset-password)
+export { MIN_PASSWORD, passwordProblem }
+
 const TOKEN_HASH_RE = /^[A-Za-z0-9_-]{16,256}$/
 const LINK_TYPES = ['invite', 'magiclink', 'email'] as const
 type LinkType = (typeof LINK_TYPES)[number]
-export const MIN_PASSWORD = 12
 
 /** Reads ?token_hash=&type= once and removes them from the address bar (the token must not stay in history). */
 function takeLinkParams(): { tokenHash: string; type: LinkType } | null {
@@ -23,14 +26,6 @@ function takeLinkParams(): { tokenHash: string; type: LinkType } | null {
   if (params.has('token_hash')) window.history.replaceState(null, '', window.location.pathname)
   if (!TOKEN_HASH_RE.test(tokenHash) || !(LINK_TYPES as readonly string[]).includes(type)) return null
   return { tokenHash, type: type as LinkType }
-}
-
-export function passwordProblem(pw: string, confirm: string): string | null {
-  if (pw.length < MIN_PASSWORD) return `Use at least ${MIN_PASSWORD} characters.`
-  if (pw.length > 72) return 'Use at most 72 characters.'
-  if (!/[a-zA-Z]/.test(pw) || !/[0-9]/.test(pw)) return 'Use letters and at least one digit.'
-  if (pw !== confirm) return 'The two passwords differ.'
-  return null
 }
 
 /**

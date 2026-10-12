@@ -31,6 +31,9 @@ const PlatformRoutes = lazy(() => import('@/features/platform/PlatformRoutes'))
 const AcceptInvitationPage = lazy(() =>
   import('@/features/invitations/AcceptInvitationPage').then((m) => ({ default: m.AcceptInvitationPage })),
 )
+const ResetPasswordPage = lazy(() =>
+  import('@/features/password-reset/ResetPasswordPage').then((m) => ({ default: m.ResetPasswordPage })),
+)
 const MenuPage = lazy(() => import('@/features/menu').then((m) => ({ default: m.MenuPage })))
 const PosPage = lazy(() => import('@/features/pos/PosPage').then((m) => ({ default: m.PosPage })))
 const InstallmentsPage = lazy(() =>
@@ -104,6 +107,9 @@ export const routes: RouteObject[] = [
       { index: true, element: <HomePage /> },
       // Tenant Admin invitation link (one-time token hash in the query, removed on arrival)
       { path: 'invite', element: <AcceptInvitationPage /> },
+      // Password-recovery link after a Super Admin authenticator reset (tenant-admin-mfa-reset, RECOVERY_REDIRECT_URL);
+      // the recovery session arrives in the URL fragment and is removed on arrival
+      { path: 'reset-password', element: <ResetPasswordPage /> },
       // Shared floor terminal on a tenant subdomain (<slug>.cafeos.et/terminal). Slug comes from the host.
       { path: 'terminal', element: <TerminalPage /> },
       {

@@ -53,11 +53,12 @@ Do these BEFORE a hosted project takes real users. Items marked (manual) cannot 
       join auth.mfa_factors f on f.user_id = p.id and f.status = 'verified' and f.factor_type = 'totp'
       where p.restaurant_id = r.id and p.is_active);
     ```
-18. **Tenant Admin MFA reset (0036):** set the Edge Function secret `RECOVERY_REDIRECT_URL` on `tenant-admin-mfa-reset`: absolute `https://` URL of the
-    Tenant Portal's set-new-password page (http only for localhost; no credentials, no fragment; same rule as `INVITE_REDIRECT_URL`) and add it to the Auth
-    redirect allow-list (Authentication > URL Configuration; `additional_redirect_urls` locally). Missing or unsafe = the function is disabled (every call 503).
-    The Tenant Portal has NO set-new-password page yet: build it (handle the recovery link, `updateUser({ password })`, then MFA enrolment) before
-    enabling this function, otherwise a reset Tenant Admin cannot sign in. Hosted Supabase: check whether the database role may `delete from auth.sessions`
+18. **Tenant Admin MFA reset (0036):** set the Edge Function secret `RECOVERY_REDIRECT_URL` on `tenant-admin-mfa-reset` to
+    `https://<app origin>/reset-password` (the set-new-password page, `src/features/password-reset`; http only for localhost; no credentials, no fragment;
+    same rule as `INVITE_REDIRECT_URL`) and add the same URL to the Auth redirect allow-list (Authentication > URL Configuration; `additional_redirect_urls`
+    locally). Missing or unsafe = the function is disabled (every call 503). The page accepts only a `type=recovery` link (implicit flow, session in the
+    URL fragment, removed on arrival), sets the new password (`updateUser`), signs the account out everywhere (`signOut({ scope: 'global' })`) and sends
+    the Tenant Admin to `/r/<slug>/admin-login`, where they sign in and set up the authenticator again. Hosted Supabase: check whether the database role may `delete from auth.sessions`
     (if not, `sessions_revoked` is null and old sessions are shut out only by the post-reset session rule in `fn_mfa_session_ok`). Deploy the migration
     and the function together (the old function calls `fn_platform_complete_mfa_reset(profile, actor, reason)`, which no longer exists).
 - Amharic fonts: put `Tayitu.ttf` and `Jiret.ttf` in `public/fonts/` (owner-supplied; `src/index.css` `.font-amharic`, CSP `font-src 'self'`).
