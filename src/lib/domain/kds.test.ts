@@ -2,16 +2,40 @@ import { describe, expect, it } from 'vitest'
 import { ageBand, groupTickets, minutesSince, nextAction, type KdsLine } from './kds'
 
 const line = (o: Partial<KdsLine>): KdsLine => ({
-  id: 'l1', orderId: 'o1', orderNo: 'ORD-0001', tableLabel: null, orderType: 'dine-in', orderCreatedAt: '2026-10-10T08:00:00Z', orderStatus: 'submitted',
-  lineNo: 1, name: 'Item', qty: 1, note: null, status: 'pending', ...o,
+  id: 'l1',
+  orderId: 'o1',
+  orderNo: 'ORD-0001',
+  tableLabel: null,
+  orderType: 'dine-in',
+  orderCreatedAt: '2026-10-10T08:00:00Z',
+  orderStatus: 'submitted',
+  orderCreatedBy: null,
+  lineNo: 1,
+  name: 'Item',
+  qty: 1,
+  note: null,
+  status: 'pending',
+  ...o,
 })
 
 describe('KDS tickets', () => {
   it('groups lines per order, oldest first, lines in cart order', () => {
     const t = groupTickets([
-      line({ id: 'b2', orderId: 'o2', orderNo: 'ORD-0002', orderCreatedAt: '2026-10-10T08:05:00Z', lineNo: 2 }),
+      line({
+        id: 'b2',
+        orderId: 'o2',
+        orderNo: 'ORD-0002',
+        orderCreatedAt: '2026-10-10T08:05:00Z',
+        lineNo: 2,
+      }),
       line({ id: 'a1', orderId: 'o1', lineNo: 1 }),
-      line({ id: 'b1', orderId: 'o2', orderNo: 'ORD-0002', orderCreatedAt: '2026-10-10T08:05:00Z', lineNo: 1 }),
+      line({
+        id: 'b1',
+        orderId: 'o2',
+        orderNo: 'ORD-0002',
+        orderCreatedAt: '2026-10-10T08:05:00Z',
+        lineNo: 1,
+      }),
     ])
     expect(t.map((x) => x.orderNo)).toEqual(['ORD-0001', 'ORD-0002'])
     expect(t[1]?.lines.map((l) => l.id)).toEqual(['b1', 'b2'])

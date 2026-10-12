@@ -224,7 +224,7 @@ select is((select jsonb_agg((x ->> 'day_no')::int) from jsonb_array_elements(pub
 select ok((public.fn_dashboard() -> 'money' ->> 'gross_collected')::numeric = 414.00, 'dashboard with reports.view and payments.view: money figures of the open day');
 select tests.clear_auth();
 
--- dashboard 'recent' honours the order-visibility rule: a waiter (no orders.view_all) sees only own orders; counts stay floor-wide
+-- dashboard 'recent' honours the order-visibility rule: a waiter (no orders.view_all) sees only own orders; since 0042 the status counts use the same rule
 select tests.authenticate_as((select a_waiter2 from _f));
 insert into _n select 'o4', public.fn_submit_order(tests.cart(array['Macchiato:1']), 'rep-order-0004') ->> 'id';
 select tests.clear_auth();
@@ -232,7 +232,7 @@ select tests.authenticate_as((select a_waiter from _f));
 select is((select count(*)::int from jsonb_array_elements(public.fn_dashboard() -> 'recent') x where (x ->> 'id')::uuid = tests.nv('o4')), 0,
           'dashboard recent: a waiter does not see another waiter''s order');
 select is((select count(*)::int from jsonb_array_elements(public.fn_dashboard() -> 'recent') x), 3, 'dashboard recent: the waiter''s own three orders');
-select is((select sum(v::int)::int from jsonb_each_text(public.fn_dashboard() -> 'orders_by_status') e(k, v)), 4, 'dashboard status counts are floor-wide (o1..o4, incl. the other waiter''s)');
+select is((select sum(v::int)::int from jsonb_each_text(public.fn_dashboard() -> 'orders_by_status') e(k, v)), 3, 'dashboard status counts are scoped like recent (0042): own o1..o3 only, not the other waiter''s o4');
 select tests.clear_auth();
 select tests.authenticate_as((select a_kitchen from _f));
 select is(tests.run('select public.fn_dashboard()'), 'P0001|permission_denied|', 'a station role without dashboard.view has no dashboard');

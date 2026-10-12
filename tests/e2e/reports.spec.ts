@@ -145,17 +145,60 @@ const periodReport = (from: string, to: string, permissions: string[]) => {
   }
 }
 
+const GRILL = '66666666-6666-4666-8666-666666666666'
+
+/** fn_my_dashboard: the caller's own figures; sections are null without the permission / station access, like the server. */
+const myDashboard = (from: string, to: string, permissions: string[], stationIds: string[]) => ({
+  timezone: 'Africa/Addis_Ababa',
+  period: { from, to },
+  day_count: 1,
+  own_orders: permissions.includes('orders.create')
+    ? {
+        order_count: 3,
+        sales_total: '724.50',
+        avg_order_value: '241.50',
+        unpaid_total: '161.00',
+        open_count: 1,
+        served_count: 2,
+        cancelled_count: 1,
+        served_rate: 50,
+        avg_serve_minutes: 12.5,
+        by_hour: hours(9, 3, 724.5),
+      }
+    : null,
+  stations: stationIds.length
+    ? [
+        {
+          station_id: GRILL,
+          name: 'Grill',
+          color: '#16a34a',
+          queue: 4,
+          in_progress: 2,
+          ready: 1,
+          completed: 9,
+          avg_prep_minutes: 7.5,
+          avg_wait_minutes: 1.5,
+        },
+      ]
+    : null,
+})
+
 interface Mock {
   periodBodies: Array<Record<string, unknown>>
   exportBodies: Array<Record<string, unknown>>
   /** order of the RPCs that matter for the export flow */
   events: string[]
   dashboardCalls: number
+  myBodies: Array<Record<string, unknown>>
   socket?: { ws: WebSocketRoute; topic: string; joinRef: string }
 }
 
-async function setup(page: Page, permissions: string[], opts: { timezone?: string } = {}): Promise<Mock> {
-  const m: Mock = { periodBodies: [], exportBodies: [], events: [], dashboardCalls: 0 }
+async function setup(
+  page: Page,
+  permissions: string[],
+  opts: { timezone?: string; stationIds?: string[]; systemKey?: string } = {},
+): Promise<Mock> {
+  const m: Mock = { periodBodies: [], exportBodies: [], events: [], dashboardCalls: 0, myBodies: [] }
   const money = permissions.includes('reports.view')
   const user = {
     id: 'u-1',
@@ -189,9 +232,14 @@ async function setup(page: Page, permissions: string[], opts: { timezone?: strin
   const context = {
     user: { id: 'u-1', first_name: 'Hana', short_name: 'Hana Girma', username: 'hana' },
     restaurant: { id: RID, name: 'Demo Cafe', slug: 'demo-cafe', status: 'active' },
-    role: { id: '88888888-8888-4888-8888-888888888888', name: 'Runner', system_key: null, is_active: true },
+    role: {
+      id: '88888888-8888-4888-8888-888888888888',
+      name: 'Runner',
+      system_key: opts.systemKey ?? null,
+      is_active: true,
+    },
     permissions,
-    station_ids: [],
+    station_ids: opts.stationIds ?? [],
     pin_change_status: 'none',
     pin_length: 4,
     open_day: { id: DAY, day_no: 12, opened_at: '2026-10-10T05:00:00Z' },
@@ -239,6 +287,11 @@ async function setup(page: Page, permissions: string[], opts: { timezone?: strin
         const body = dashboard()
         m.dashboardCalls += 1
         return r.fulfill(json(200, body))
+      }
+      if (name === 'fn_my_dashboard') {
+        const body = (req.postDataJSON() ?? {}) as { p_from: string; p_to: string }
+        m.myBodies.push(body)
+        return r.fulfill(json(200, myDashboard(body.p_from, body.p_to, permissions, opts.stationIds ?? [])))
       }
       if (name === 'fn_report_period') {
         if (!money)
@@ -323,23 +376,64 @@ function pushOrderChange(m: Mock) {
   )
 }
 
-test('a waiter (dashboard.view without reports.view) sees the floor but no money, and has no Reports', async ({
+test('a waiter (orders.create, no reports.view / orders.view_all) gets the personal dashboard, and has no Reports', async ({
   page,
 }) => {
-  await setup(page, WAITER)
+  const m = await setup(page, WAITER)
   await page.goto('/r/demo-cafe/dashboard')
   await expect(page.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeVisible()
-  await expect(page.getByText('Live orders')).toBeVisible()
-  await expect(page.getByRole('list', { name: 'Recent orders' }).getByText('ORD-0050')).toBeVisible()
-  await expect(page.getByTestId('money-kpis')).toHaveCount(0)
-  await expect(page.getByText(/ETB/)).toHaveCount(0)
-  await expect(page.getByText('Low stock')).toHaveCount(0)
+  const kpis = page.getByTestId('my-waiter-kpis')
+  await expect(kpis.getByText('ETB 724.50')).toBeVisible()
+  await expect(kpis.getByText('ETB 241.50')).toBeVisible()
+  await expect(kpis.getByText('50.0% of orders taken')).toBeVisible()
+  await expect(kpis.getByText('12.5 min')).toBeVisible()
+  await expect(
+    page.getByRole('table', { name: 'My orders by hour' }).getByRole('cell', { name: '3:00 ጠዋት' }),
+  ).toBeAttached()
+  // no floor-wide figure, no station section; the client sends only a date range (no tenant / user id)
+  await expect(page.getByText('Live orders')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'My stations' })).toHaveCount(0)
+  expect(m.dashboardCalls).toBe(0)
+  expect(Object.keys(m.myBodies[0] ?? {}).sort()).toEqual(['p_from', 'p_to'])
+  // the period picker re-queries
+  await page.getByRole('button', { name: 'Weekly' }).click()
+  await expect.poll(() => m.myBodies.length).toBeGreaterThan(1)
   const nav = page.getByRole('navigation', { name: 'Main' }).first()
   await expect(nav.getByRole('link', { name: 'Dashboard' })).toBeVisible()
   await expect(nav.getByRole('link', { name: 'Reports' })).toHaveCount(0)
   // typing the address does not help: the route guard (UX) refuses, and the server would answer permission_denied
   await page.goto('/r/demo-cafe/reports')
   await expect(page.getByText('Not authorised')).toBeVisible()
+})
+
+test('station staff (station access, no orders.create) get their station figures, names and colours from the data', async ({
+  page,
+}) => {
+  await setup(page, ['dashboard.view', 'orders.view'], { stationIds: [GRILL] })
+  await page.goto('/r/demo-cafe/dashboard')
+  const st = page.getByTestId('my-station')
+  await expect(st.getByRole('heading', { name: 'Grill' })).toBeVisible()
+  await expect(st).toHaveAttribute('data-station-id', GRILL)
+  await expect(st.getByText('Queue').locator('xpath=following-sibling::p[1]')).toHaveText('4')
+  await expect(st.getByText('7.5 min')).toBeVisible()
+  await expect(page.getByTestId('my-waiter-kpis')).toHaveCount(0)
+  await expect(page.getByText('Live orders')).toHaveCount(0)
+  await expectNoSeriousA11yViolations(page, 'Personal dashboard')
+})
+
+test('a tenant admin keeps the main dashboard unchanged (fn_dashboard, never fn_my_dashboard)', async ({
+  page,
+}) => {
+  const m = await setup(page, [...MANAGER, 'orders.create', 'orders.cancel_any'], {
+    stationIds: [GRILL],
+    systemKey: 'tenant_admin',
+  })
+  await page.goto('/r/demo-cafe/dashboard')
+  await expect(page.getByText('Live orders')).toBeVisible()
+  await expect(page.getByTestId('money-kpis').getByText('ETB 414.00').first()).toBeVisible()
+  await expect(page.getByRole('list', { name: 'Recent orders' }).getByText('ORD-0050')).toBeVisible()
+  await expect(page.getByTestId('my-waiter-kpis')).toHaveCount(0)
+  expect(m.myBodies).toHaveLength(0)
 })
 
 test('a manager sees money on the dashboard, refreshed live over Realtime', async ({ page }) => {

@@ -29,7 +29,7 @@ describe('client surface', () => {
   it('uses fn_report_period only: the day-number fn_report client (fetchReport / reportSchema / reportsKeys.report) is gone', () => {
     expect(reports).not.toHaveProperty('fetchReport')
     expect(reports).not.toHaveProperty('reportSchema')
-    expect(Object.keys(reports.reportsKeys)).toEqual(['dashboard'])
+    expect(Object.keys(reports.reportsKeys)).toEqual(['dashboard', 'mine'])
   })
 })
 

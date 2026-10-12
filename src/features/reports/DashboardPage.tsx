@@ -2,10 +2,16 @@ import { useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@/features/auth'
 import { ErrorState, PageSkeleton } from '@/features/shell/states'
+import { dashboardVariant } from '@/lib/domain/dashboard'
 import { formatEtb } from '@/lib/domain/decimal'
-import { formatEthiopianDateTime, formatEthiopianTime, formatInternationalDateTime } from '@/lib/domain/ethiopian-time'
+import {
+  formatEthiopianDateTime,
+  formatEthiopianTime,
+  formatInternationalDateTime,
+} from '@/lib/domain/ethiopian-time'
 import { fetchDashboard, reportsKeys, subscribeToActivity, type Dashboard } from '@/lib/supabase/reports'
 import { HourlyChart, KpiTile, RankedBars } from './charts'
+import { MyDashboard } from './MyDashboard'
 
 // The order lifecycle is a fixed platform state machine (orders.status check constraint), not a tenant domain.
 const STATUS_LABEL: Readonly<Record<string, string>> = {
@@ -27,7 +33,10 @@ function useLiveDashboard(rid: string) {
     let t: ReturnType<typeof setTimeout> | undefined
     const off = subscribeToActivity(rid, () => {
       clearTimeout(t)
-      t = setTimeout(() => void qc.invalidateQueries({ queryKey: reportsKeys.dashboard(rid) }), REFRESH_DEBOUNCE_MS)
+      t = setTimeout(
+        () => void qc.invalidateQueries({ queryKey: reportsKeys.dashboard(rid) }),
+        REFRESH_DEBOUNCE_MS,
+      )
     })
     return () => {
       clearTimeout(t)
@@ -52,11 +61,17 @@ function RecentActivity({ d }: { d: Dashboard }) {
               <span className="min-w-0">
                 <span className="font-medium text-ink">{o.order_no}</span>
                 {o.table_label && <span className="ml-2 text-muted-foreground">{o.table_label}</span>}
-                <span className="ml-2 font-amharic text-xs text-muted-foreground">{formatEthiopianTime(o.created_at, d.timezone)}</span>
+                <span className="ml-2 font-amharic text-xs text-muted-foreground">
+                  {formatEthiopianTime(o.created_at, d.timezone)}
+                </span>
               </span>
               <span className="shrink-0 text-right">
-                <span className={o.status === 'cancelled' ? 'text-status-cancelled' : 'text-ink'}>{STATUS_LABEL[o.status] ?? o.status}</span>
-                {o.total != null && <span className="ml-2 tabular-nums text-muted-foreground">{formatEtb(o.total)}</span>}
+                <span className={o.status === 'cancelled' ? 'text-status-cancelled' : 'text-ink'}>
+                  {STATUS_LABEL[o.status] ?? o.status}
+                </span>
+                {o.total != null && (
+                  <span className="ml-2 tabular-nums text-muted-foreground">{formatEtb(o.total)}</span>
+                )}
               </span>
             </li>
           ))}
@@ -67,17 +82,32 @@ function RecentActivity({ d }: { d: Dashboard }) {
 }
 
 /**
- * Dashboard (Phase 8): the open business day, live over Realtime (orders / payments) with query invalidation, no polling.
+ * Picks the dashboard by permission / station access (src/lib/domain/dashboard.ts), never by a role or station name: the
+ * personal waiter and / or station dashboard, or the main floor dashboard (unchanged) for everyone else.
+ */
+export function DashboardPage() {
+  const { context, can } = useAuth()
+  const v = dashboardVariant(can, context?.station_ids ?? [])
+  return v.kind === 'personal' ? (
+    <MyDashboard ownOrders={v.ownOrders} ownStations={v.ownStations} />
+  ) : (
+    <MainDashboard />
+  )
+}
+
+/**
+ * Main dashboard (Phase 8): the open business day, live over Realtime (orders / payments) with query invalidation, no polling.
  * Floor figures for everyone with dashboard.view; money figures only when the server includes them (reports.view). No figure is
  * computed here.
  */
-export function DashboardPage() {
+function MainDashboard() {
   const { context } = useAuth()
   const rid = context?.restaurant?.id ?? ''
   const q = useLiveDashboard(rid)
 
   if (q.isPending) return <PageSkeleton label="Loading the dashboard" />
-  if (q.isError) return <ErrorState title="The dashboard could not be loaded" onRetry={() => void q.refetch()} />
+  if (q.isError)
+    return <ErrorState title="The dashboard could not be loaded" onRetry={() => void q.refetch()} />
   const d = q.data
   const by = d.orders_by_status
   const live = (by.submitted ?? 0) + (by.preparing ?? 0) + (by.ready ?? 0)
@@ -101,13 +131,25 @@ export function DashboardPage() {
         <KpiTile label="Served" value={String(by.served ?? 0)} />
         <KpiTile label="Cancelled" value={String(by.cancelled ?? 0)} />
         {d.low_stock_count != null && (
-          <KpiTile label="Low stock" value={String(d.low_stock_count)} hint="ingredients at or below their minimum" />
+          <KpiTile
+            label="Low stock"
+            value={String(d.low_stock_count)}
+            hint="ingredients at or below their minimum"
+          />
         )}
       </div>
       {d.money && (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4" data-testid="money-kpis">
-          <KpiTile label="Collected" value={formatEtb(d.money.gross_collected)} hint={d.money.cash_collected === null ? undefined : `cash ${formatEtb(d.money.cash_collected)}`} />
-          <KpiTile label="Sales" value={formatEtb(d.money.sales_total)} hint={`${d.money.order_count} orders`} />
+          <KpiTile
+            label="Collected"
+            value={formatEtb(d.money.gross_collected)}
+            hint={d.money.cash_collected === null ? undefined : `cash ${formatEtb(d.money.cash_collected)}`}
+          />
+          <KpiTile
+            label="Sales"
+            value={formatEtb(d.money.sales_total)}
+            hint={`${d.money.order_count} orders`}
+          />
           <KpiTile label="Average order" value={formatEtb(d.money.avg_order_value)} />
           <KpiTile label="Unpaid" value={formatEtb(d.money.unpaid_total)} />
         </div>
@@ -118,7 +160,12 @@ export function DashboardPage() {
           {d.by_payment_method && (
             <RankedBars
               title="Collected by payment method"
-              rows={d.by_payment_method.map((m) => ({ key: m.payment_method_id, label: m.name, value: m.amount, detail: `×${m.count}` }))}
+              rows={d.by_payment_method.map((m) => ({
+                key: m.payment_method_id,
+                label: m.name,
+                value: m.amount,
+                detail: `×${m.count}`,
+              }))}
               valueLabel={formatEtb}
             />
           )}

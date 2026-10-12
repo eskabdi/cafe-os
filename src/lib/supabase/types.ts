@@ -3179,6 +3179,10 @@ export type Database = {
         Args: Record<PropertyKey, never>
         Returns: boolean
       }
+      fn_my_dashboard: {
+        Args: { p_from: string; p_to: string }
+        Returns: Json
+      }
       fn_next_number: {
         Args: {
           p_restaurant_id: string
