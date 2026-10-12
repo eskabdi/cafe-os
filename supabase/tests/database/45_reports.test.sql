@@ -13,7 +13,7 @@
 -- Business days (tenant tz Africa/Addis_Ababa, base = local today - 20): seed day 1 opened now (base + 20), day 98 opened at local
 -- 00:30 of base + 3 (UTC: still base + 2), day 99 opened at local 08:00 of base + 7.
 begin;
-select plan(98);
+select plan(122);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,

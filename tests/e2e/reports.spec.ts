@@ -67,14 +67,38 @@ const report = (from: number | null, to: number | null) => ({
   },
 })
 
+/** fn_report_period: staff figures are withheld without reports.staff (restricted + null section), like the server. */
+const periodReport = (from: string, to: string, permissions: string[]) => {
+  const base = report(9, 11)
+  const staff = permissions.includes('reports.staff')
+  return {
+    ...base,
+    period: { from, to },
+    kpis: { ...KPIS, subtotal_total: '360.00', vat_total: '54.00' },
+    by_day: [
+      { day_session_id: DAY, day_no: 11, date: from, orders: 2, sales: '414.00', collected: '414.00', expenses: '50.00' },
+    ],
+    by_item: [{ menu_item_id: CAT, name: '=1+1 Tiramisu', qty: 3, amount: '360.00' }],
+    by_waiter: staff ? base.by_waiter : null,
+    cancellations: { count: 0, amount: '0.00', items: [] },
+    reversals: { count: 0, amount: '0.00', items: [] },
+    installments: { issued_count: 0, issued_total: 0, down_total: 0, collected_total: 0, outstanding_total: 0, overdue_count: 0 },
+    restricted: staff ? [] : ['staff'],
+  }
+}
+
 interface Mock {
   reportBodies: Array<Record<string, unknown>>
+  periodBodies: Array<Record<string, unknown>>
+  exportBodies: Array<Record<string, unknown>>
+  /** order of the RPCs that matter for the export flow */
+  events: string[]
   dashboardCalls: number
   socket?: { ws: WebSocketRoute; topic: string; joinRef: string }
 }
 
 async function setup(page: Page, permissions: string[]): Promise<Mock> {
-  const m: Mock = { reportBodies: [], dashboardCalls: 0 }
+  const m: Mock = { reportBodies: [], periodBodies: [], exportBodies: [], events: [], dashboardCalls: 0 }
   const money = permissions.includes('reports.view')
   const user = {
     id: 'u-1',
@@ -150,6 +174,22 @@ async function setup(page: Page, permissions: string[]): Promise<Mock> {
         m.dashboardCalls += 1
         return r.fulfill(json(200, body))
       }
+      if (name === 'fn_report_period') {
+        if (!money) return r.fulfill(json(400, { code: 'P0001', message: 'permission_denied', details: null, hint: null }))
+        const body = (req.postDataJSON() ?? {}) as { p_from: string; p_to: string }
+        m.periodBodies.push(body)
+        m.events.push('report')
+        return r.fulfill(json(200, periodReport(body.p_from, body.p_to, permissions)))
+      }
+      if (name === 'fn_log_report_export') {
+        const body = (req.postDataJSON() ?? {}) as Record<string, unknown>
+        m.exportBodies.push(body)
+        m.events.push('log')
+        if (!permissions.includes('reports.export')) {
+          return r.fulfill(json(400, { code: 'P0001', message: 'permission_denied', details: null, hint: null }))
+        }
+        return r.fulfill(json(200, { ok: true, exported_at: '2026-10-10T16:05:00Z' }))
+      }
       if (name === 'fn_report') {
         if (!money) return r.fulfill(json(400, { code: 'P0001', message: 'permission_denied', details: null, hint: null }))
         const body = (req.postDataJSON() ?? {}) as { p_from_day_no?: number | null; p_to_day_no?: number | null }
@@ -160,6 +200,9 @@ async function setup(page: Page, permissions: string[]): Promise<Mock> {
     }
     return r.fulfill(json(200, []))
   })
+  await page.route('**/functions/v1/tenant-logo**', (r) =>
+    r.request().method() === 'OPTIONS' ? r.fulfill({ status: 204, headers: CORS }) : r.fulfill(json(200, { url: null })),
+  )
   await page.routeWebSocket(/\/realtime\/v1\/websocket/, (ws) => {
     ws.onMessage((raw) => {
       const [joinRef, ref, topic, event, payload] = JSON.parse(String(raw)) as [
@@ -244,47 +287,117 @@ test('a manager sees money on the dashboard, refreshed live over Realtime', asyn
   await expect(live).not.toHaveText(String(before))
 })
 
-test('a manager report renders the KPIs and a table for every chart, with names from the data', async ({ page }) => {
+const EXPORTER = [...MANAGER, 'reports.export', 'reports.staff']
+
+test('a manager report: period label, report types with their own tables, names from the data, no tenant id sent', async ({ page }) => {
   const m = await setup(page, MANAGER)
   await page.goto('/r/demo-cafe/reports')
   await expect(page.getByRole('heading', { level: 1, name: 'Reports' })).toBeVisible()
   const kpis = page.getByTestId('report-kpis')
   await expect(kpis.getByText('ETB 364.00')).toBeVisible()
-  await expect(kpis.getByText('ETB 50.00')).toBeVisible()
-  await expect(page.getByTestId('report-days')).toContainText('Business day 12 (open)')
-  expect(m.reportBodies[0]).toEqual({ p_from_day_no: null, p_to_day_no: null })
-  for (const [table, row] of [
-    ['Orders by hour', '09:00'],
-    ['Collected by payment method', 'Amole'],
-    ['Sales by category (before VAT)', 'Desserts'],
-    ['Sales by staff', 'Yonas Tesfaye'],
-    ['Expenses by category', 'Purchases'],
-  ] as const) {
-    await expect(page.getByRole('table', { name: table }).getByRole('rowheader', { name: row })).toBeAttached()
-  }
-  await expect(page.getByRole('list', { name: 'Low stock now' }).getByText('Milk')).toBeVisible()
-  // the request never carries a tenant id
-  for (const body of m.reportBodies) expect(Object.keys(body).sort()).toEqual(['p_from_day_no', 'p_to_day_no'])
+  const first = m.periodBodies[0] as { p_from: string; p_to: string }
+  expect(first.p_from).toBe(first.p_to) // daily by default
+  await expect(page.getByTestId('period-label')).toContainText(first.p_from)
+
+  const tabs = page.getByRole('tablist', { name: 'Report type' })
+  await expect(tabs.getByRole('tab')).toHaveCount(10)
+  await tabs.getByRole('tab', { name: 'Payments by method' }).click()
+  await expect(page.getByRole('table', { name: 'Collected by payment method' }).getByRole('rowheader', { name: 'Amole' })).toBeVisible()
+  await tabs.getByRole('tab', { name: 'Item & category sales' }).click()
+  await expect(page.getByRole('table', { name: 'Sales by item' }).getByRole('rowheader', { name: '=1+1 Tiramisu' })).toBeVisible()
+  await expect(page.getByRole('table', { name: 'Sales by category (before VAT)' }).getByRole('rowheader', { name: 'Desserts' })).toBeVisible()
+  // keyboard: arrows move between tabs
+  await tabs.getByRole('tab', { name: 'Item & category sales' }).focus()
+  await page.keyboard.press('ArrowRight')
+  await expect(tabs.getByRole('tab', { name: 'Installments & vouchers' })).toHaveAttribute('aria-selected', 'true')
+  await tabs.getByRole('tab', { name: 'Hourly traffic' }).click()
+  await expect(page.getByRole('table', { name: 'Orders by hour' }).getByRole('rowheader', { name: '09:00' })).toBeVisible()
+
+  for (const body of m.periodBodies) expect(Object.keys(body).sort()).toEqual(['p_from', 'p_to'])
 })
 
-test('the day-range picker validates locally and sends only the day numbers', async ({ page }) => {
+test('periods: weekly Monday–Sunday, Ethiopian months with Pagume, prev / next, and a validated custom range', async ({ page }) => {
   const m = await setup(page, MANAGER)
   await page.goto('/r/demo-cafe/reports')
   await expect(page.getByTestId('report-kpis')).toBeVisible()
-  const sent = m.reportBodies.length
 
-  await page.getByLabel('From day').fill('9')
-  await page.getByLabel('To day').fill('3')
+  await page.getByRole('button', { name: 'Weekly' }).click()
+  await page.getByLabel('A date in the week').fill('2026-10-14')
+  await expect.poll(() => m.periodBodies.at(-1)).toEqual({ p_from: '2026-10-12', p_to: '2026-10-18' })
+  await expect(page.getByTestId('period-label')).toContainText('2 ጥቅምት 2019 – 8 ጥቅምት 2019')
+  await expect(page.getByRole('table', { name: 'Sales trend' })).toBeAttached()
+
+  await page.getByRole('button', { name: 'Monthly' }).click()
+  await page.getByLabel('Ethiopian year').fill('2018')
+  await page.getByLabel('Ethiopian month').selectOption('13')
+  await expect.poll(() => m.periodBodies.at(-1)).toEqual({ p_from: '2026-09-06', p_to: '2026-09-10' })
+  await expect(page.getByTestId('period-label')).toContainText('ጳጉሜ 2018')
+  await page.getByRole('button', { name: 'Next period' }).click()
+  await expect.poll(() => m.periodBodies.at(-1)).toEqual({ p_from: '2026-09-11', p_to: '2026-10-10' })
+  await page.getByRole('button', { name: 'Previous period' }).click()
+  await page.getByRole('button', { name: 'Previous period' }).click()
+  await expect.poll(() => m.periodBodies.at(-1)).toEqual({ p_from: '2026-08-07', p_to: '2026-09-05' })
+
+  await page.getByRole('button', { name: 'Custom' }).click()
+  const sent = m.periodBodies.length
+  await page.getByLabel('From', { exact: true }).fill('2025-01-01')
+  await page.getByLabel('To', { exact: true }).fill('2026-10-01')
   await page.getByRole('button', { name: 'Show' }).click()
-  await expect(page.getByRole('alert')).toHaveText('The last day must not be before the first day.')
-  expect(m.reportBodies.length).toBe(sent)
-
-  await page.getByLabel('To day').fill('11')
+  await expect(page.getByRole('alert')).toHaveText('A report covers at most 366 days.')
+  await page.getByLabel('From', { exact: true }).fill('2026-09-01')
   await page.getByRole('button', { name: 'Show' }).click()
-  await expect(page.getByTestId('report-days')).toContainText('Business days 9–11 (3 days)')
-  expect(m.reportBodies.at(-1)).toEqual({ p_from_day_no: 9, p_to_day_no: 11 })
+  await expect.poll(() => m.periodBodies.at(-1)).toEqual({ p_from: '2026-09-01', p_to: '2026-10-01' })
+  expect(m.periodBodies.length).toBe(sent + 1)
+})
 
-  await page.getByRole('button', { name: 'Current day' }).click()
-  await expect(page.getByTestId('report-days')).toContainText('Business day 12 (open)')
-  await expect(page.getByLabel('From day')).toHaveValue('')
+test('without reports.export there is no Print / CSV / PDF, and withheld sections show the neutral notice', async ({ page }) => {
+  const m = await setup(page, MANAGER)
+  await page.goto('/r/demo-cafe/reports')
+  await expect(page.getByTestId('report-kpis')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Export CSV' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Export PDF' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Print' })).toHaveCount(0)
+  await page.getByRole('tab', { name: 'Waiter performance' }).click()
+  await expect(page.getByTestId('restricted-notice')).toHaveText('Not available with your permissions')
+  await expect(page.getByText('Yonas Tesfaye')).toHaveCount(0)
+  expect(m.exportBodies).toHaveLength(0)
+})
+
+test('CSV export: audited first, then a BOM-prefixed, injection-safe file named after the slug, report and period', async ({ page }) => {
+  const m = await setup(page, EXPORTER)
+  await page.goto('/r/demo-cafe/reports')
+  await expect(page.getByTestId('report-kpis')).toBeVisible()
+  await page.getByRole('button', { name: 'Weekly' }).click()
+  await page.getByLabel('A date in the week').fill('2026-10-14')
+  await expect.poll(() => m.periodBodies.at(-1)).toEqual({ p_from: '2026-10-12', p_to: '2026-10-18' })
+  await page.getByRole('tab', { name: 'Item & category sales' }).click()
+  await expect(page.getByRole('table', { name: 'Sales by item' })).toBeVisible()
+
+  const before = m.events.length
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export CSV' }).click()])
+  expect(m.events.slice(before)).toEqual(['log'])
+  expect(m.exportBodies.at(-1)).toEqual({ p_report: 'items', p_from: '2026-10-12', p_to: '2026-10-18', p_format: 'csv' })
+  expect(download.suggestedFilename()).toBe('demo-cafe-items-2026-10-12_2026-10-18.csv')
+  const path = await download.path()
+  const fs = await import('node:fs')
+  const bytes = fs.readFileSync(path)
+  expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf])
+  const text = bytes.toString('utf8')
+  expect(text).toContain('Report,Item & category sales\r\n')
+  expect(text).toContain('Period (Gregorian),2026-10-12,2026-10-18')
+  expect(text).toContain("'=1+1 Tiramisu,3,360")
+  expect(text).toContain('Desserts,3,360')
+})
+
+test('Waiter performance with reports.staff shows the names; PDF export is audited before the lazy PDF chunk runs', async ({ page }) => {
+  const m = await setup(page, EXPORTER)
+  await page.goto('/r/demo-cafe/reports')
+  await expect(page.getByTestId('report-kpis')).toBeVisible()
+  await page.getByRole('tab', { name: 'Waiter performance' }).click()
+  await expect(page.getByRole('table', { name: 'Sales by staff' }).getByRole('rowheader', { name: 'Yonas Tesfaye' })).toBeVisible()
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export PDF' }).click()])
+  expect(m.exportBodies.at(-1)).toMatchObject({ p_report: 'staff', p_format: 'pdf' })
+  expect(download.suggestedFilename()).toMatch(/^demo-cafe-staff-\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}\.pdf$/)
+  const fs = await import('node:fs')
+  expect(fs.readFileSync(await download.path()).subarray(0, 5).toString('latin1')).toBe('%PDF-')
 })

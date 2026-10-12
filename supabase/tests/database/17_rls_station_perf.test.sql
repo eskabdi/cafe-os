@@ -25,8 +25,10 @@ alter table public.order_items disable trigger user;
 insert into public.orders (restaurant_id, day_session_id, order_no, created_by, subtotal, vat_rate_snapshot, vat_amount, total)
 select (select a from _f), (select day1 from _f), 'ORD-' || lpad(g::text, 6, '0'), (select waiter from _f), 100, 15, 15, 115
 from generate_series(1, 20000) g;
-insert into public.order_items (restaurant_id, order_id, menu_item_id, name_snapshot, price_snapshot, qty, station_id, station_name_snapshot)
-select o.restaurant_id, o.id, mi.id, mi.name, mi.price, 1, mi.station_id, 'x'
+-- (triggers are off, so the trigger-filled category snapshot of 0037 is supplied here)
+insert into public.order_items (restaurant_id, order_id, menu_item_id, name_snapshot, price_snapshot, qty, station_id, station_name_snapshot,
+                                category_id_snapshot, category_name_snapshot)
+select o.restaurant_id, o.id, mi.id, mi.name, mi.price, 1, mi.station_id, 'x', mi.category_id, 'x'
 from (select o.*, row_number() over (order by o.order_no) rn from public.orders o where o.restaurant_id = (select a from _f)) o
 join lateral (select m.* from public.menu_items m
               where m.id = case when o.rn % 2 = 0 then (select k[1 + (o.rn % 10)::int] from _m) else (select b[1 + (o.rn % 5)::int] from _m) end) mi on true;
