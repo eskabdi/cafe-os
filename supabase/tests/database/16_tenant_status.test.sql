@@ -52,7 +52,7 @@ select is((select (public.fn_get_session_context() ->> 'tenant_writable')::boole
 select is((select public.fn_get_session_context() -> 'restaurant' ->> 'status'), 'past_due', 'past_due: status is shown to the tenant');
 select is(tests.run(format($q$insert into public.stations (restaurant_id, name) values (%L, 'Late')$q$, (select b from _f))), '42501|new row violates row-level security policy for table "stations"|', 'past_due: INSERT refused by RLS');
 select is(tests.run($q$update public.stations set name = 'Late'$q$), 'ok:0', 'past_due: UPDATE changes nothing');
-select is(tests.run($q$delete from public.stations$q$), 'ok:0', 'past_due: DELETE changes nothing');
+select is(tests.run($q$delete from public.stations$q$), '42501|permission denied for table stations|', 'past_due: DELETE refused (no client DELETE; fn_delete_config_row is read-only-guarded)');
 select is(tests.run($q$select public.fn_update_restaurant_profile('{"name": "Late"}')$q$), 'P0001|tenant_read_only|', 'past_due: settings cannot be edited');
 select is(tests.run(format($q$select public.fn_update_user(%L, '{"first_name": "Late"}')$q$, (select b_waiter from _f))), 'P0001|tenant_read_only|', 'past_due: staff cannot be edited');
 select is(tests.run(format($q$select public.fn_update_role_permissions(%L, array['orders.view'], '{}')$q$, (select b_waiter_role from _f))), 'P0001|tenant_read_only|', 'past_due: fn_update_role_permissions refused');

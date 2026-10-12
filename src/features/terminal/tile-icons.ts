@@ -65,3 +65,6 @@ export function iconForSlug(slug: string | null | undefined, fallback: LucideIco
 export function tileIconFor(slug: string | null | undefined): LucideIcon {
   return iconForSlug(slug, GENERIC_TILE_ICON)
 }
+
+/** The allowlisted icon slugs, for icon pickers on dynamic rows (stations, categories, payment methods, ...). */
+export const ICON_SLUGS: readonly string[] = Object.keys(TILE_ICONS)

@@ -16,6 +16,7 @@ import { SecurityPage, SessionTimersPage } from '@/features/settings'
 import { RequireNavPermission, RequireStationAccess, placeholderModuleRoutes } from '@/features/shell'
 import { TenantShell } from '@/features/tenant/TenantShell'
 import { TerminalPage, TerminalsPage, terminalPath } from '@/features/terminal'
+import { CONFIG_DOMAINS, DOMAIN_SPECS } from '@/lib/supabase/config'
 import { getKioskToken } from '@/lib/utils/kiosk-token'
 import { HomePage } from './HomePage'
 import { NotFoundPage } from './NotFoundPage'
@@ -64,6 +65,9 @@ const UsersPage = lazy(() =>
 )
 const RolesPage = lazy(() =>
   import('@/features/tenant-admin/RolesPage').then((m) => ({ default: m.RolesPage })),
+)
+const ConfigDomainPage = lazy(() =>
+  import('@/features/config').then((m) => ({ default: m.ConfigDomainPage })),
 )
 const SubscriptionPage = lazy(() =>
   import('@/features/tenant-admin/SubscriptionPage').then((m) => ({ default: m.SubscriptionPage })),
@@ -201,6 +205,15 @@ export const routes: RouteObject[] = [
                           </RequireNavPermission>
                         ),
                       },
+                      // Phase 10 dynamic configuration: one generic page per domain, guarded by the same code as its nav entry and RLS
+                      ...CONFIG_DOMAINS.map((d) => ({
+                        path: DOMAIN_SPECS[d].segment,
+                        element: (
+                          <RequireNavPermission permission={DOMAIN_SPECS[d].permission}>
+                            <ConfigDomainPage key={d} domain={d} />
+                          </RequireNavPermission>
+                        ),
+                      })),
                       // Phase 4 Waiter POS (orders.create, same code as the nav entry and fn_submit_order)
                       {
                         path: 'pos',

@@ -75,23 +75,25 @@ insert into public.expenses (restaurant_id, expense_category_id, payment_method_
   select a, exp_rent, pm_cash, 1000, 'rent' from _f;
 update _ctx set kitchen_ing = (select id from public.ingredients where restaurant_id = (select a from _f) and name = 'Onion');
 
--- ═════════ deleting a row that has dependents fails with a dependency error (client path and service path) ═════════
+-- ═════════ deleting a row that has dependents fails with a dependency error (client RPC path and service path) ═════════
+-- 0039: clients hold no DELETE privilege on the configuration tables; fn_delete_config_row is the only client delete path and answers
+-- in_use with the blocking references (the RESTRICT FKs themselves are proven on the service path below).
 select tests.authenticate_as((select admin from _f));
-select matches(tests.run(format($q$delete from public.stations where id = %L$q$, (select st_kitchen from _f))),
-               '^23503\|update or delete on table "stations" violates foreign key constraint', 'station with menu items / ingredients / order items cannot be deleted');
-select matches(tests.run(format($q$delete from public.categories where id = %L$q$, (select cat_lunch from _f))),
-               '^23503\|update or delete on table "categories" violates foreign key constraint', 'category with menu items cannot be deleted');
-select matches(tests.run(format($q$delete from public.payment_methods where id = %L$q$, (select pm_cash from _f))),
-               '^23503\|update or delete on table "payment_methods" violates foreign key constraint', 'payment method with payments / expenses cannot be deleted');
-select matches(tests.run(format($q$delete from public.table_areas where id = %L$q$, (select area_main from _f))),
-               '^23503\|update or delete on table "table_areas" violates foreign key constraint', 'table area with tables cannot be deleted');
-select matches(tests.run(format($q$delete from public.expense_categories where id = %L$q$, (select exp_rent from _f))),
-               '^23503\|update or delete on table "expense_categories" violates foreign key constraint', 'expense category with expenses cannot be deleted');
+select matches(tests.run(format($q$select public.fn_delete_config_row('stations', %L)$q$, (select st_kitchen from _f))),
+               '^P0001\|in_use\|.*menu_items:', 'station with menu items / ingredients / order items cannot be deleted');
+select matches(tests.run(format($q$select public.fn_delete_config_row('categories', %L)$q$, (select cat_lunch from _f))),
+               '^P0001\|in_use\|.*menu_items:', 'category with menu items cannot be deleted');
+select matches(tests.run(format($q$select public.fn_delete_config_row('payment_methods', %L)$q$, (select pm_cash from _f))),
+               '^P0001\|in_use\|.*payments:', 'payment method with payments / expenses cannot be deleted');
+select matches(tests.run(format($q$select public.fn_delete_config_row('table_areas', %L)$q$, (select area_main from _f))),
+               '^P0001\|in_use\|tables:', 'table area with tables cannot be deleted');
+select matches(tests.run(format($q$select public.fn_delete_config_row('expense_categories', %L)$q$, (select exp_rent from _f))),
+               '^P0001\|in_use\|expenses:', 'expense category with expenses cannot be deleted');
 select matches(tests.run(format($q$select public.fn_delete_role(%L)$q$, (select cashier_role from _f))),
                '^P0001\|role_in_use\|users:', 'role with users cannot be deleted (structured error)');
 select matches(tests.run(format($q$select public.fn_delete_role(%L)$q$, (select kitchen_role from _f))),
                '^P0001\|role_in_use\|users:', 'role with users + matrix rows cannot be deleted');
-select is(tests.run(format($q$delete from public.stations where id = %L$q$, (select st_kitchen from _f))) , tests.run(format($q$delete from public.stations where id = %L$q$, (select st_kitchen from _f))), 'the dependency error is stable (idempotent)');
+select is(tests.run(format($q$delete from public.stations where id = %L$q$, (select st_kitchen from _f))), '42501|permission denied for table stations|', 'a direct client DELETE is refused outright (RPC-only delete)');
 -- soft deactivation is the supported path
 select is(tests.run(format($q$update public.stations set is_active = false where id = %L$q$, (select st_bar from _f))), 'ok:1', 'station with dependents can be deactivated');
 select is(tests.run(format($q$update public.categories set is_active = false where id = %L$q$, (select cat_lunch from _f))), 'ok:1', 'category with dependents can be deactivated');
@@ -204,7 +206,7 @@ select is(tests.run(format($q$select public.fn_create_role('{"name": "Spare"}')$
 select is(tests.run(format($q$select public.fn_update_role_permissions((select id from public.roles where name = 'Spare' and restaurant_id = %L), array['orders.view'], array[%L]::uuid[])$q$, (select a from _f), (select grill from _ctx))), 'ok:1', 'with matrix and station rows');
 select is(tests.run(format($q$select public.fn_delete_role((select id from public.roles where name = 'Spare' and restaurant_id = %L))$q$, (select a from _f))), 'ok:1', 'an unused role (matrix and station rows included) can be deleted');
 select is((select count(*)::int from public.roles where name = 'Spare'), 0, 'its matrix and station rows went with it (FKs would block otherwise)');
-select matches(tests.run(format($q$delete from public.stations where id = %L$q$, (select grill from _ctx))), '^23503\|update or delete on table "stations" violates foreign key constraint', 'the new station is protected as soon as it has dependents');
+select matches(tests.run(format($q$select public.fn_delete_config_row('stations', %L)$q$, (select grill from _ctx))), '^P0001\|in_use\|', 'the new station is protected as soon as it has dependents');
 select tests.clear_auth();
 
 -- ═════════ names are scoped per tenant: B can use the very same names ═════════

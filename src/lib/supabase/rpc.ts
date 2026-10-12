@@ -21,6 +21,8 @@ type RpcResult = PromiseLike<{ data: unknown; error: { message: string; details?
 const MACHINE_CODE = /^[a-z_]{3,48}$/
 /** A counted dependency detail such as role_in_use's `active_users:3` (identifier + integer, nothing else). */
 const COUNTED_DETAIL = /^[a-z_]{3,32}:[0-9]{1,9}$/
+/** A short list of counted dependencies such as in_use's `ingredients:1,menu_items:3` (identifier + integer pairs only). */
+export const COUNTED_LIST_DETAIL = /^[a-z_]{3,32}:[0-9]{1,9}(?:,[a-z_]{3,32}:[0-9]{1,9}){1,9}$/
 /** A short list of identifiers such as plan_limit_reached's `staff,menu_items` (metric names only). */
 const IDENT_LIST_DETAIL = /^[a-z_]{2,32}(?:,[a-z_]{2,32}){1,9}$/
 
@@ -34,6 +36,7 @@ export async function callRpc(fn: string, args?: Record<string, unknown>): Promi
     const detail =
       typeof error.details === 'string' && (MACHINE_CODE.test(error.details) ||
         COUNTED_DETAIL.test(error.details) ||
+        COUNTED_LIST_DETAIL.test(error.details) ||
         IDENT_LIST_DETAIL.test(error.details))
         ? error.details
         : undefined
