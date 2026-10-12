@@ -1,10 +1,15 @@
 import { expect, test, type Page } from '@playwright/test'
+import { expectNoSeriousA11yViolations } from './a11y'
 
 // Generic station display (Phase 5) against mocked Supabase. "Grill" exists only as a data row: no code knows the name.
 const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url')
 const exp = Math.floor(Date.now() / 1000) + 3600
 const jwt = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ sub: 'u-1', aud: 'authenticated', role: 'authenticated', aal: 'aal1', exp })}.sig`
-const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' }
+const CORS = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-headers': '*',
+  'access-control-allow-methods': '*',
+}
 const RID = '99999999-9999-4999-8999-999999999999'
 const GRILL = '11111111-1111-4111-8111-111111111111'
 const O1 = '22222222-2222-4222-8222-222222222222'
@@ -13,8 +18,23 @@ const DAY = '44444444-4444-4444-8444-444444444444'
 
 async function setup(page: Page) {
   const calls: Array<Record<string, unknown>> = []
-  const user = { id: 'u-1', aud: 'authenticated', role: 'authenticated', email: 'k.staff.cafeos.invalid', app_metadata: { staff: true }, user_metadata: {}, created_at: '2026-01-01T00:00:00Z' }
-  const session = { access_token: jwt, refresh_token: 'r', expires_at: exp, expires_in: 3600, token_type: 'bearer', user }
+  const user = {
+    id: 'u-1',
+    aud: 'authenticated',
+    role: 'authenticated',
+    email: 'k.staff.cafeos.invalid',
+    app_metadata: { staff: true },
+    user_metadata: {},
+    created_at: '2026-01-01T00:00:00Z',
+  }
+  const session = {
+    access_token: jwt,
+    refresh_token: 'r',
+    expires_at: exp,
+    expires_in: 3600,
+    token_type: 'bearer',
+    user,
+  }
   await page.addInitScript(
     ([s]) => {
       localStorage.setItem('sb-127-auth-token', s as string)
@@ -22,7 +42,11 @@ async function setup(page: Page) {
     },
     [JSON.stringify(session)],
   )
-  const json = (status: number, body: unknown) => ({ status, headers: { ...CORS, 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  const json = (status: number, body: unknown) => ({
+    status,
+    headers: { ...CORS, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
   const context = {
     user: { id: 'u-1', first_name: 'Abebe', short_name: 'Abebe', username: 'abebe' },
     restaurant: { id: RID, name: 'Demo Cafe', slug: 'demo-cafe', status: 'active' },
@@ -37,12 +61,46 @@ async function setup(page: Page) {
   const old = new Date(Date.now() - 25 * 60_000).toISOString()
   let status1 = 'pending'
   const rows = () => [
-    { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1', order_id: O1, line_no: 1, name_snapshot: 'Mixed Grill', qty: 2, note: 'well done', item_status: status1,
-      orders: { order_no: 'ORD-0007', table_label_snapshot: 'T3', order_type: 'dine-in', status: 'submitted', created_at: old, day_session_id: DAY } },
-    { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2', order_id: O2, line_no: 1, name_snapshot: 'Kitfo', qty: 1, note: null, item_status: 'pending',
-      orders: { order_no: 'ORD-0008', table_label_snapshot: null, order_type: 'takeaway', status: 'submitted', created_at: now, day_session_id: DAY } },
+    {
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1',
+      order_id: O1,
+      line_no: 1,
+      name_snapshot: 'Mixed Grill',
+      qty: 2,
+      note: 'well done',
+      item_status: status1,
+      orders: {
+        order_no: 'ORD-0007',
+        table_label_snapshot: 'T3',
+        order_type: 'dine-in',
+        status: 'submitted',
+        created_at: old,
+        day_session_id: DAY,
+      },
+    },
+    {
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2',
+      order_id: O2,
+      line_no: 1,
+      name_snapshot: 'Kitfo',
+      qty: 1,
+      note: null,
+      item_status: 'pending',
+      orders: {
+        order_no: 'ORD-0008',
+        table_label_snapshot: null,
+        order_type: 'takeaway',
+        status: 'submitted',
+        created_at: now,
+        day_session_id: DAY,
+      },
+    },
   ]
-  await page.route('**/auth/v1/**', (r) => (r.request().method() === 'OPTIONS' ? r.fulfill({ status: 204, headers: CORS }) : r.fulfill(json(200, user))))
+  await page.route('**/auth/v1/**', (r) =>
+    r.request().method() === 'OPTIONS'
+      ? r.fulfill({ status: 204, headers: CORS })
+      : r.fulfill(json(200, user)),
+  )
   await page.route('**/rest/v1/**', (r) => {
     const req = r.request()
     if (req.method() === 'OPTIONS') return r.fulfill({ status: 204, headers: CORS })
@@ -60,14 +118,29 @@ async function setup(page: Page) {
       }
       return r.fulfill(json(200, null))
     }
-    if (name === 'stations') return r.fulfill(json(200, [{ id: GRILL, name: 'Grill', description: null, color: '#ea580c', icon: null, sort_order: 1, is_active: true }]))
+    if (name === 'stations')
+      return r.fulfill(
+        json(200, [
+          {
+            id: GRILL,
+            name: 'Grill',
+            description: null,
+            color: '#ea580c',
+            icon: null,
+            sort_order: 1,
+            is_active: true,
+          },
+        ]),
+      )
     if (name === 'order_items') return r.fulfill(json(200, rows()))
     return r.fulfill(json(200, []))
   })
   return calls
 }
 
-test('a station created as data shows its tickets, oldest first, and drives start / ready', async ({ page }) => {
+test('a station created as data shows its tickets, oldest first, and drives start / ready', async ({
+  page,
+}) => {
   const calls = await setup(page)
   await page.goto(`/r/demo-cafe/stations/${GRILL}`)
   await expect(page.getByRole('heading', { level: 1, name: 'Grill' })).toBeVisible()
@@ -83,4 +156,11 @@ test('a station created as data shows its tickets, oldest first, and drives star
   expect(calls.every((c) => c.p_station_id === GRILL && c.p_order_id === O1)).toBe(true)
   // no cancel without orders.cancel
   await expect(page.getByRole('button', { name: 'Cancel' })).toHaveCount(0)
+})
+
+test('a11y: KDS has no serious or critical axe violations', async ({ page }) => {
+  await setup(page)
+  await page.goto(`/r/demo-cafe/stations/${GRILL}`)
+  await expect(page.getByTestId('kds-ticket').first()).toBeVisible()
+  await expectNoSeriousA11yViolations(page, 'KDS')
 })

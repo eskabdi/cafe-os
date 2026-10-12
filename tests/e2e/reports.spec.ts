@@ -1,4 +1,5 @@
 import { expect, test, type Page, type WebSocketRoute } from '@playwright/test'
+import { expectNoSeriousA11yViolations } from './a11y'
 
 // Dashboard and Reports (Phase 8) against mocked Supabase. Every figure comes from fn_dashboard / fn_report; the client sends only a
 // day range (never a tenant id). Payment-method, category, staff and expense-category names are runtime data only.
@@ -591,4 +592,11 @@ test('a cashier-like role (expenses, inventory, staff withheld) sees notices, an
   ])
   expect(m.exportBodies.at(-1)).toMatchObject({ p_report: 'payments', p_format: 'csv' })
   expect(download.suggestedFilename()).toMatch(/^demo-cafe-payments-/)
+})
+
+test('a11y: Reports has no serious or critical axe violations', async ({ page }) => {
+  await setup(page, MANAGER)
+  await page.goto('/r/demo-cafe/reports')
+  await expect(page.getByTestId('report-kpis').getByText('ETB 364.00').first()).toBeVisible()
+  await expectNoSeriousA11yViolations(page, 'Reports')
 })

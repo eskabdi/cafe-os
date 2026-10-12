@@ -16,7 +16,10 @@ const linkClass = ({ isActive }: { isActive: boolean }) =>
   cn(
     'flex min-h-[44px] items-center gap-3 rounded-md px-3 text-sm font-medium transition-colors',
     focusRing,
-    isActive ? 'bg-primary/10 text-primary' : 'text-ink hover:bg-accent',
+    // active: brand tint + inset brand bar, but ink text: a tenant primary on its own 10% tint is not guaranteed 4.5:1 (axe, Phase 11)
+    isActive
+      ? 'bg-primary/10 font-semibold text-ink shadow-[inset_3px_0_0_0_hsl(var(--primary))]'
+      : 'text-ink hover:bg-accent',
   )
 
 /** The platform sidebar, generated from PLATFORM_NAV only. */

@@ -7,6 +7,22 @@ export default defineConfig({
   plugins: [react()],
   resolve: { alias: { '@': path.resolve(__dirname, 'src') } },
   server: { port: 5173, strictPort: true },
+  build: {
+    rollupOptions: {
+      output: {
+        // Phase 11 performance: the always-loaded vendor code gets its own long-cached chunks, so an app deploy does not
+        // make every terminal re-download React / Supabase. Only eagerly-needed packages are named here: the lazy
+        // chunks (charts, report PDF, KDS) keep their own vendors.
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined
+          if (/node_modules\/(react|react-dom|scheduler|react-router|react-router-dom)\//.test(id))
+            return 'vendor-react'
+          if (/node_modules\/(@supabase\/[^/]+|iceberg-js)\//.test(id)) return 'vendor-supabase'
+          return undefined
+        },
+      },
+    },
+  },
   test: {
     globals: true,
     environment: 'jsdom',

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { expectNoSeriousA11yViolations } from './a11y'
 
 // Phase 10 settings: the generic configuration page and the database's dependency guards, against mocked Supabase (page.route).
 // The guard answers (in_use + counted detail) are the server's; the page must explain the blocking dependency, offer
@@ -219,4 +220,13 @@ test('without config.manage the settings pages are not authorised and not in the
   await page.goto('/r/demo-cafe/settings/stations')
   await expect(page.getByRole('heading', { name: 'Not authorised' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Payment methods' })).toHaveCount(0)
+})
+
+test('a11y: Settings (stations) has no serious or critical axe violations', async ({ page }) => {
+  await setup(page)
+  await page.goto('/r/demo-cafe/settings/stations')
+  await expect(
+    page.getByRole('list', { name: 'All stations' }).getByTestId('config-row').first(),
+  ).toBeVisible()
+  await expectNoSeriousA11yViolations(page, 'Settings (stations)')
 })
