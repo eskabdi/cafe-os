@@ -132,8 +132,9 @@ select tests.clear_auth();
 
 -- isolation: B sees none of A's figures
 select tests.authenticate_as((select b_admin from _f));
-select ok((public.fn_report(1, 99) -> 'kpis' ->> 'sales_total')::numeric <> 414.00 or (public.fn_report(1, 99) -> 'kpis' ->> 'sales_total') is null,
-          'tenant B''s report does not contain A''s sales');
+select is((select count(*)::int from jsonb_array_elements(public.fn_report(1, 99) -> 'days') x
+           where (x ->> 'id')::uuid in (select id from public.day_sessions where restaurant_id = (select a from _f))), 0,
+          'tenant B''s report covers none of A''s business days (day 99 of A is not in it)');
 select is((select count(*)::int from jsonb_array_elements(public.fn_report(1, 99) -> 'by_payment_method') x
            where (x ->> 'payment_method_id')::uuid in (select id from public.payment_methods where restaurant_id = (select a from _f))), 0,
           'no A payment method in B''s report');

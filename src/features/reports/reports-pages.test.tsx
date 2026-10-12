@@ -6,6 +6,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthContext, type AuthValue } from '@/features/auth/useAuth'
 import { DashboardPage } from './DashboardPage'
 import { ReportsPage } from './ReportsPage'
+import type * as ReportsApi from '@/lib/supabase/reports'
 
 const h = vi.hoisted(() => ({
   fetchDashboard: vi.fn(),
@@ -15,7 +16,7 @@ const h = vi.hoisted(() => ({
 }))
 vi.mock('@/lib/supabase/client', () => ({ supabase: {} }))
 vi.mock('@/lib/supabase/reports', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('@/lib/supabase/reports')>()
+  const orig = await importOriginal<typeof ReportsApi>()
   return { ...orig, fetchDashboard: h.fetchDashboard, fetchReport: h.fetchReport, subscribeToActivity: h.subscribeToActivity }
 })
 

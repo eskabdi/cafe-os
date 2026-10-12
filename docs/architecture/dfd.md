@@ -208,3 +208,15 @@ flowchart LR
     UI -->|fn_list_vouchers / fn_get_voucher| V
 ```
 
+## Level 1: dashboard and reports (Phase 8)
+```mermaid
+flowchart LR
+    DASH["Dashboard SPA /r/<slug>/dashboard"] -->|fn_dashboard()| D["definer RPC: tenant from JWT, dashboard.view; money only with reports.view"]
+    REP["Reports SPA /r/<slug>/reports"] -->|fn_report(from_day_no, to_day_no)| R["definer RPC: tenant from JWT, reports.view, range <= 367 days"]
+    D -->|open day only| R
+    R -->|read, tenant-filtered| SRC[("orders / order_items / payments / expenses / stock_movements / ingredients / vouchers / day_sessions")]
+    D -->|recent: fn_order_visible| ORD[("orders")]
+    ORD -.->|Realtime (RLS orders_select) -> invalidate| DASH
+    PAY[("payments")] -.->|Realtime INSERT (RLS payments.view) -> invalidate| DASH
+```
+

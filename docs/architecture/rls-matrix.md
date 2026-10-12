@@ -46,6 +46,15 @@ platform_admins 3, platform_invoices 4, profiles 2, qr_credentials 1, recipe_lin
 role_station_access 1, roles 4, stations 4, stock_movements 1, subscriptions 4, table_areas 4, table_sessions 1, tables 4, user_notifications 1, vouchers 1;
 profile_secrets, tenant_counters, idempotency_keys, tenant_admin_invitations, platform_backup_runs, mfa_resets: 0 (deny all).
 
+Read-only aggregation RPCs (0037, no new table, no policy change; SECURITY DEFINER, so they bypass the table policies above and enforce
+the equivalent rules themselves):
+
+| RPC | caller check | tenant scope | field-level rule |
+|---|---|---|---|
+| `fn_report(p_from_day_no, p_to_day_no)` | T + `reports.view` (past_due readable; suspended/cancelled `tenant_suspended`; platform admin `permission_denied`) | every subquery filtered by `fn_tenant_status_guard(false)` | all aggregates (money, expenses, inventory) under `reports.view`, as 0017 does for `day_sessions` money columns |
+| `fn_dashboard()` | T + `dashboard.view` | same | status counts floor-wide; `recent` only orders passing `fn_order_visible` (= `orders_select`); money keys and `recent[].total` only with `reports.view`; `low_stock_count` only with `inventory.view` or `reports.view` |
+| `fn_report_days(tenant, from, to)` | internal: no EXECUTE for anon / authenticated / service_role | caller-supplied tenant id, so never client-callable | n/a |
+
 ## Migration 0010 hardening (found by the adversarial suite, `supabase/tests/database/1*_*.test.sql`)
 - **Realtime**: `qr_credentials` was removed from `supabase_realtime`. postgres_changes streams whole rows (column privileges do not apply),
   which would have sent `token_hash` to subscribers. Accepted residual: `orders.public_token_hash` (sha256 of a random tracking token) is still
