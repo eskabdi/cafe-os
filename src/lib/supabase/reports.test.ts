@@ -40,7 +40,26 @@ describe('fetchReport', () => {
     const r = await fetchReport(3, 7)
     expect(h.callRpc).toHaveBeenCalledWith('fn_report', { p_from_day_no: 3, p_to_day_no: 7 })
     expect(r.kpis.gross_collected).toBe(12.5)
-    expect(r.by_payment_method[0]?.amount).toBe(12.5)
+    expect(r.by_payment_method?.[0]?.amount).toBe(12.5)
+  })
+
+  it('tolerates the sections withheld from a role without expenses / inventory / staff / payments permissions', async () => {
+    h.callRpc.mockResolvedValue({
+      timezone: 'Africa/Addis_Ababa',
+      days: [],
+      kpis: { ...kpis, gross_collected: null, cash_collected: null, expenses_total: null, net_position: null, vouchers_outstanding: null, vouchers_overdue: null },
+      by_payment_method: null,
+      by_category: [],
+      by_waiter: null,
+      by_expense_category: null,
+      by_hour: [],
+      inventory: null,
+    })
+    const r = await fetchReport(null, null)
+    expect(r.kpis.expenses_total).toBeNull()
+    expect(r.kpis.vouchers_overdue).toBeNull()
+    expect(r.by_waiter).toBeNull()
+    expect(r.inventory).toBeNull()
   })
 
   it('a malformed time zone falls back to Addis Ababa', async () => {
@@ -71,6 +90,20 @@ describe('fetchDashboard', () => {
     expect(h.callRpc).toHaveBeenCalledWith('fn_dashboard')
     expect(d.money).toBeUndefined()
     expect(d.low_stock_count).toBeNull()
+  })
+
+  it('accepts a money block whose section figures are withheld (null)', async () => {
+    h.callRpc.mockResolvedValue({
+      timezone: 'Africa/Addis_Ababa',
+      open_day: null,
+      orders_by_status: {},
+      recent: [],
+      low_stock_count: null,
+      money: { ...kpis, expenses_total: null, net_position: null, vouchers_outstanding: null, vouchers_overdue: null },
+    })
+    const d = await fetchDashboard()
+    expect(d.money?.expenses_total).toBeNull()
+    expect(d.money?.gross_collected).toBe(12.5)
   })
 })
 

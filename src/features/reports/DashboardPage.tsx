@@ -106,7 +106,7 @@ export function DashboardPage() {
       </div>
       {d.money && (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4" data-testid="money-kpis">
-          <KpiTile label="Collected" value={formatEtb(d.money.gross_collected)} hint={`cash ${formatEtb(d.money.cash_collected)}`} />
+          <KpiTile label="Collected" value={formatEtb(d.money.gross_collected)} hint={d.money.cash_collected === null ? undefined : `cash ${formatEtb(d.money.cash_collected)}`} />
           <KpiTile label="Sales" value={formatEtb(d.money.sales_total)} hint={`${d.money.order_count} orders`} />
           <KpiTile label="Average order" value={formatEtb(d.money.avg_order_value)} />
           <KpiTile label="Unpaid" value={formatEtb(d.money.unpaid_total)} />

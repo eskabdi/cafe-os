@@ -8,7 +8,7 @@ import { RpcError } from '@/lib/supabase/rpc'
 import { fetchTenantLogoUrl } from '@/lib/supabase/tenant-logo'
 import { ExportBar } from './ExportBar'
 import { PeriodPicker } from './PeriodPicker'
-import { buildReportView } from './report-model'
+import { buildReportView, canExportView } from './report-model'
 import type { ExportMeta } from './report-export'
 import { ReportPanel } from './ReportPanel'
 import { ReportPrintLayout } from './ReportPrintLayout'
@@ -64,7 +64,7 @@ export function ReportsPage() {
     <div className="space-y-4 p-4 lg:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <h1 className="text-2xl font-semibold text-ink">Reports</h1>
-        {canExport && view && meta && (
+        {canExport && view && meta && q.data && canExportView(type, q.data.restricted) && (
           <ExportBar busy={exporter.busy} error={exporter.error} note={exporter.note} onExport={(f) => void exporter.run(f, view, meta)} />
         )}
       </div>

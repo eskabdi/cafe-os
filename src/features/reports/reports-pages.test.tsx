@@ -209,6 +209,17 @@ const RESTRICTED_REPORT = {
   restricted: ['payments', 'staff', 'expenses', 'inventory', 'installments'],
 }
 
+/** A cashier-like role: payments yes; expenses, inventory and staff withheld by the server. */
+const CASHIER_REPORT = {
+  ...PERIOD_REPORT,
+  kpis: { ...PERIOD_REPORT.kpis, expenses_total: null, net_position: null },
+  by_day: PERIOD_REPORT.by_day.map((d) => ({ ...d, expenses: null })),
+  by_waiter: null,
+  by_expense_category: null,
+  inventory: null,
+  restricted: ['expenses', 'inventory', 'staff'],
+}
+
 const tab = (name: string) => screen.getByRole('tab', { name })
 
 describe('ReportsPage', () => {
@@ -412,5 +423,25 @@ describe('ReportsPage', () => {
     expect(printed).toContain('13 መስከረም 2019, 1:05 ማታ (2026-09-23 19:05)')
     expect(printed).toContain('ETB 364.00')
     await waitFor(() => expect(document.querySelector('.report-print')).toBeNull())
+  })
+
+  it('a cashier-like role: withheld sections show the notice and their export is hidden; allowed types still export', async () => {
+    const user = userEvent.setup()
+    h.fetchReportPeriod.mockResolvedValue(CASHIER_REPORT)
+    h.logReportExport.mockResolvedValue({ exported_at: '2026-09-23T16:05:00Z' })
+    renderWith(<ReportsPage />, ['reports.view', 'reports.export', 'payments.view'])
+    await screen.findByTestId('report-kpis')
+    expect(screen.getByRole('button', { name: 'Export CSV' })).toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: 'Expenses' })).toBeNull()
+    for (const name of ['Expenses', 'Inventory', 'Waiter performance']) {
+      await user.click(tab(name))
+      expect(screen.getAllByTestId('restricted-notice').length).toBeGreaterThan(0)
+      expect(screen.queryByRole('button', { name: 'Export CSV' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Print' })).toBeNull()
+    }
+    await user.click(tab('Payments by method'))
+    expect(within(screen.getByRole('table', { name: 'Collected by payment method' })).getByRole('rowheader', { name: 'Telebirr' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Export CSV' }))
+    await waitFor(() => expect(h.logReportExport).toHaveBeenCalledWith('payments', '2026-09-21', '2026-09-27', 'csv'))
   })
 })

@@ -17,13 +17,14 @@ const kpisSchema = z.object({
   items_sold: z.number().int(),
   sales_total: numericValue,
   avg_order_value: numericValue,
-  gross_collected: numericValue,
-  cash_collected: numericValue,
-  expenses_total: numericValue,
-  net_position: numericValue,
+  // null for a caller without the section permission (payments / expenses / vouchers): withheld by the server
+  gross_collected: numericValue.nullish().transform((v) => v ?? null),
+  cash_collected: numericValue.nullish().transform((v) => v ?? null),
+  expenses_total: numericValue.nullish().transform((v) => v ?? null),
+  net_position: numericValue.nullish().transform((v) => v ?? null),
   unpaid_total: numericValue,
-  vouchers_outstanding: numericValue,
-  vouchers_overdue: z.number().int(),
+  vouchers_outstanding: numericValue.nullish().transform((v) => v ?? null),
+  vouchers_overdue: z.number().int().nullish().transform((v) => v ?? null),
 })
 export type Kpis = z.infer<typeof kpisSchema>
 
@@ -39,15 +40,23 @@ export const reportSchema = z.object({
   timezone,
   days: z.array(z.object({ id: uuid, day_no: z.number().int(), status: z.string(), opened_at: z.string(), closed_at: z.string().nullable() })),
   kpis: kpisSchema,
-  by_payment_method: z.array(methodSchema),
+  by_payment_method: z.array(methodSchema).nullish().transform((v) => v ?? null),
   by_category: z.array(z.object({ category_id: uuid.nullable(), name: z.string().nullable(), qty: z.number().int(), amount: numericValue })),
-  by_waiter: z.array(z.object({ user_id: uuid.nullable(), name: z.string().nullable(), orders: z.number().int(), sales: numericValue })),
-  by_expense_category: z.array(z.object({ expense_category_id: uuid, name: z.string().nullable(), amount: numericValue, count: z.number().int() })),
+  by_waiter: z
+    .array(z.object({ user_id: uuid.nullable(), name: z.string().nullable(), orders: z.number().int(), sales: numericValue }))
+    .nullish()
+    .transform((v) => v ?? null),
+  by_expense_category: z
+    .array(z.object({ expense_category_id: uuid, name: z.string().nullable(), amount: numericValue, count: z.number().int() }))
+    .nullish()
+    .transform((v) => v ?? null),
   by_hour: z.array(hourSchema),
   inventory: z.object({
     low_stock: z.array(z.object({ ingredient_id: uuid, name: z.string(), unit: z.string(), stock: numericValue, min_level: numericValue })),
     consumption: z.array(z.object({ ingredient_id: uuid, name: z.string(), unit: z.string(), qty: numericValue })),
-  }),
+  })
+    .nullish()
+    .transform((v) => v ?? null),
 })
 export type Report = z.infer<typeof reportSchema>
 
@@ -100,7 +109,7 @@ export const periodReportSchema = z.object({
         date: z.string(),
         orders: z.number().int(),
         sales: numericValue,
-        collected: numericValue,
+        collected: money,
         expenses: money,
       }),
     ),

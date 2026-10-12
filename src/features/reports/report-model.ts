@@ -40,6 +40,23 @@ export interface ReportView {
   tables: ReportTable[]
 }
 
+/**
+ * The section permission a report type depends on. fn_log_report_export refuses the export when the caller lacks it, so the
+ * export buttons are hidden while that section is in `restricted` (UX only; the server decides).
+ */
+export const REPORT_SECTION: Partial<Record<ReportType, ReportSection>> = {
+  expenses: 'expenses',
+  inventory: 'inventory',
+  payments: 'payments',
+  staff: 'staff',
+  installments: 'installments',
+}
+
+export function canExportView(type: ReportType, restricted: readonly ReportSection[]): boolean {
+  const s = REPORT_SECTION[type]
+  return s === undefined || !restricted.includes(s)
+}
+
 export const RESTRICTED_NOTICE = 'Not available with your permissions'
 
 export const REPORT_TITLES: Record<ReportType, string> = {
