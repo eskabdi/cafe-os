@@ -1,4 +1,4 @@
-# Manual deployment to a hosted Supabase project + static host (docs/operations/production-cutover.md).
+# Manual deployment to a hosted Supabase project + Vercel (static site) (docs/operations/production-cutover.md).
 #
 # Never runs on push or pull_request: workflow_dispatch only. Each target is a GitHub Environment ("staging", "production")
 # holding its own secrets/variables. The "production" Environment MUST be configured (Settings > Environments) with
@@ -125,11 +125,24 @@ jobs:
           path: dist/
           retention-days: 30
 
-      - name: Upload static site (PLACEHOLDER, host-specific)
-        if: inputs.dry_run == false
+      - name: Generate Vercel config from the narrowed _headers (same security and cache headers, SPA rewrite)
         run: |
-          # Replace with your host's deploy command, using a host token stored as an Environment secret, e.g.
-          #   Cloudflare Pages: wrangler pages deploy dist --project-name <name> --branch <env>
-          #   Netlify:          netlify deploy --dir dist --prod
-          # The host MUST serve dist/_headers (or replicate those headers) and rewrite unknown paths to /index.html.
-          echo "No static host configured: dist/ is attached to this run as an artifact. Deploy it manually."
+          node scripts/ops/headers-to-vercel.mjs dist/_headers dist/vercel.json
+          grep -q "${SUPABASE_PROJECT_REF}.supabase.co" dist/vercel.json
+          if grep -q '\*\.supabase\.co' dist/vercel.json; then echo "wildcard Supabase origin left in dist/vercel.json"; exit 1; fi
+
+      # One Vercel project per Environment (VERCEL_PROJECT_ID differs), so each deploy is that project's production deployment.
+      # dist/ is deployed as a prebuilt static directory: Vercel runs no build, and dist/vercel.json is its config.
+      - name: Deploy static site to Vercel
+        if: inputs.dry_run == false
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+        run: |
+          for v in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+            if [ -z "${!v}" ]; then echo "missing in this Environment: $v"; exit 1; fi
+          done
+          url=$(npx --yes vercel@39.4.2 deploy dist --prod --yes --token "$VERCEL_TOKEN")
+          echo "deployed: $url"
+          echo "### Vercel deployment: $url" >> "$GITHUB_STEP_SUMMARY"

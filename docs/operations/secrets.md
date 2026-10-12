@@ -31,7 +31,8 @@ so **never prefix a secret with `VITE_`**. Values live in the password manager (
 | `SUPABASE_PROJECT_REF` | no | `deploy.yml` | GitHub Environment variable | repo readers | n/a | no |
 | `APP_URL` | no | `deploy.yml` (environment URL) | GitHub Environment variable | repo readers | n/a | no |
 | `BACKUP_AGE_RECIPIENT` | no (public key) | `logical-backup.sh` | backup host env | backup operators | with the key pair (the private key stays offline, 2 holders) | no |
-| Static-host deploy token (name per host) | **yes** | `deploy.yml` placeholder step | GitHub Environment secret | deploy job | 90 days | never |
+| `VERCEL_TOKEN` | **yes** | `deploy.yml` (Vercel deploy step) | GitHub Environment secret (one per Environment, dedicated deploy account) | deploy job after approval | 90 days | never |
+| `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` | no | `deploy.yml` | GitHub Environment variables | repo readers | n/a | no |
 | SMTP password | **yes** | Supabase Auth mailer | Supabase dashboard (Auth > SMTP) only | project owners | 180 days / provider policy | never |
 | Postgres GUCs `app.tenant_admin_mfa_required`, `app.allow_demo_seed` | no (flags) | migrations / seed guard | database settings | DB owner | n/a; **never set `app.allow_demo_seed` on a hosted DB** | no |
 | `CI`, `PW_CHROMIUM_PATH`, `PW_CHROMIUM_DIR` | no | Playwright / test tooling | CI runner / developer machine | n/a | n/a | no |

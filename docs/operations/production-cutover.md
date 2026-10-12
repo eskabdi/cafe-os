@@ -76,7 +76,12 @@ at `{{ .ConfirmationURL }}` (the `/reset-password` page accepts only `type=recov
 2. In each Environment add the secrets `SUPABASE_ACCESS_TOKEN` (a personal access token of a dedicated deploy account,
    scoped to the org) and `SUPABASE_DB_URL` (direct connection string), and the variables `SUPABASE_PROJECT_REF`,
    `VITE_SUPABASE_URL` (`https://<ref>.supabase.co`), `VITE_SUPABASE_ANON_KEY`, `APP_URL`.
-3. Replace the placeholder "Upload static site" step in `deploy.yml` with your host's command (section 7) and add its token as an Environment secret.
+3. Static host is **Vercel**. Create one Vercel project per Environment (e.g. `cafeos-staging`, `cafeos-production`), framework
+   preset "Other", **not connected to the Git repository** (or with Git deployments disabled): only `deploy.yml` deploys, because
+   only it narrows the CSP and generates `vercel.json`. In each GitHub Environment add the secret `VERCEL_TOKEN` (a token of a
+   dedicated deploy account, scoped to the Vercel team) and the variables `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` (Vercel project >
+   Settings > General). The workflow converts `dist/_headers` into `dist/vercel.json` (`scripts/ops/headers-to-vercel.mjs`: the same
+   security and cache headers plus the SPA rewrite to `/index.html`) and runs `vercel deploy dist --prod`.
 
 ## 4. Apply migrations (CI, manual approval)
 
@@ -157,9 +162,11 @@ Per [tenant-routing.md](../architecture/tenant-routing.md):
    domain, change it (and its unit test) before the build. Nested hosts such as `acme.staging.cafeos.et` parse as `unknown`,
    so staging needs its own apex added to that list (e.g. `cafeos-staging.et`, then `acme.cafeos-staging.et`); there is no
    build-time variable for it yet (a small follow-up: read an optional `VITE_BASE_DOMAINS`).
-1. DNS at your registrar/CDN: `platform.<app>` and a wildcard `*.<app>` (CNAME to the static host). No per-tenant records
-   (prevents dangling-record takeover). Apex `<app>` may host marketing or redirect.
-2. TLS: a wildcard certificate for `*.<app>` plus `platform.<app>`, issued with ACME DNS-01 at the edge, auto-renewing.
+1. DNS: Vercel serves a **wildcard domain only when the domain uses Vercel's nameservers**. Point the apex `<app>` nameservers to
+   Vercel, then in the production Vercel project add the domains `platform.<app>` and `*.<app>` (staging: its own apex, see 0).
+   No per-tenant records (prevents dangling-record takeover). Apex `<app>` may host marketing or redirect.
+2. TLS: Vercel issues and renews the wildcard and `platform.<app>` certificates itself (DNS-01, possible because Vercel hosts the
+   DNS). Still alert on expiry < 14 days.
    Alert on expiry < 14 days ([monitoring](monitoring.md)).
 3. HSTS is already in `_headers` with `includeSubDomains`; only add `preload` once every subdomain is HTTPS and stays so.
 4. Never set a cookie with `Domain=.<app>`.
