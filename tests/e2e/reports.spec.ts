@@ -414,13 +414,25 @@ test('a manager report: period label, report types with their own tables, names 
 test("'today' is the tenant-local date (restaurants.timezone), not the browser's or Addis Ababa's", async ({
   page,
 }) => {
-  // 20:00 UTC on 12 Oct = 23:00 in Addis Ababa (still the 12th) but 10:00 on 13 Oct in Pacific/Kiritimati (UTC+14)
-  await page.clock.setFixedTime(new Date('2026-10-12T20:00:00Z'))
-  const m = await setup(page, MANAGER, { timezone: 'Pacific/Kiritimati' })
+  // a zone whose calendar date differs from Addis Ababa's right now: UTC+14 is ahead from 13:00 Addis time on, UTC-11 is
+  // behind before 14:00, so one of them always differs (the real clock is kept: the mocked session token is time-bound)
+  const dateIn = (tz: string) =>
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date())
+  const addis = dateIn('Africa/Addis_Ababa')
+  const tz =
+    ['Pacific/Kiritimati', 'Pacific/Pago_Pago'].find((z) => dateIn(z) !== addis) ?? 'Pacific/Kiritimati'
+  const m = await setup(page, MANAGER, { timezone: tz })
   await page.goto('/r/demo-cafe/reports')
   await expect(page.getByTestId('report-kpis')).toBeVisible()
-  expect(m.periodBodies[0]).toEqual({ p_from: '2026-10-13', p_to: '2026-10-13' })
-  await expect(page.getByTestId('period-label')).toContainText('2026-10-13')
+  const expected = dateIn(tz)
+  expect(expected).not.toBe(addis)
+  expect(m.periodBodies[0]).toEqual({ p_from: expected, p_to: expected })
+  await expect(page.getByTestId('period-label')).toContainText(expected)
 })
 
 test('periods: weekly Monday–Sunday, Ethiopian months with Pagume, prev / next, and a validated custom range', async ({
