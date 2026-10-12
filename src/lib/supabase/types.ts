@@ -2851,6 +2851,10 @@ export type Database = {
         }
         Returns: Json
       }
+      fn_dashboard: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
       fn_decide_pin_change: {
         Args: { p_profile_id: string; p_approve: boolean }
         Returns: Json
@@ -3434,6 +3438,14 @@ export type Database = {
       fn_reject_pin_change: {
         Args: { p_profile_id: string }
         Returns: Json
+      }
+      fn_report: {
+        Args: { p_from_day_no?: number; p_to_day_no?: number }
+        Returns: Json
+      }
+      fn_report_days: {
+        Args: { p_rid: string; p_from: number; p_to: number }
+        Returns: string[]
       }
       fn_require_aal2: {
         Args: Record<PropertyKey, never>

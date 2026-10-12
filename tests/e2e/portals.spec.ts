@@ -90,7 +90,7 @@ test('a Super Admin opening a tenant address is sent to the Platform Admin Porta
   await expect(page).toHaveURL(/\/platform$/)
   const nav = page.getByRole('navigation', { name: 'Platform' }).first()
   await expect(nav.getByRole('link', { name: 'Tenants' })).toBeVisible()
-  for (const tenantOnly of ['POS', 'Cashier', 'Dashboard', 'Menu', 'Inventory']) {
+  for (const tenantOnly of ['POS', 'Cashier', 'Dashboard', 'Reports', 'Menu', 'Inventory']) {
     await expect(page.getByRole('link', { name: tenantOnly, exact: true })).toHaveCount(0)
   }
   await expect(page.getByTestId('platform-actor')).toHaveText('Super Admin')

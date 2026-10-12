@@ -42,6 +42,12 @@ const InstallmentsPage = lazy(() =>
 const CashierPage = lazy(() =>
   import('@/features/cashier/CashierPage').then((m) => ({ default: m.CashierPage })),
 )
+const DashboardPage = lazy(() =>
+  import('@/features/reports/DashboardPage').then((m) => ({ default: m.DashboardPage })),
+)
+const ReportsPage = lazy(() =>
+  import('@/features/reports/ReportsPage').then((m) => ({ default: m.ReportsPage })),
+)
 const InventoryPage = lazy(() => import('@/features/inventory').then((m) => ({ default: m.InventoryPage })))
 const RestaurantSettingsPage = lazy(() =>
   import('@/features/tenant-admin/RestaurantSettingsPage').then((m) => ({
@@ -217,6 +223,24 @@ export const routes: RouteObject[] = [
                           </RequireNavPermission>
                         ),
                       },
+                      // Phase 8 Dashboard and Reports (dashboard.view / reports.view, same codes as the nav entries and fn_dashboard /
+                      // fn_report; the dashboard's money figures are decided by the server, not by this guard)
+                      {
+                        path: 'dashboard',
+                        element: (
+                          <RequireNavPermission permission="dashboard.view">
+                            <DashboardPage />
+                          </RequireNavPermission>
+                        ),
+                      },
+                      {
+                        path: 'reports',
+                        element: (
+                          <RequireNavPermission permission="reports.view">
+                            <ReportsPage />
+                          </RequireNavPermission>
+                        ),
+                      },
                       // Phase 3 modules: same permission codes as their nav entries (menu.view / inventory.view).
                       {
                         path: 'menu',
@@ -234,7 +258,7 @@ export const routes: RouteObject[] = [
                           </RequireNavPermission>
                         ),
                       },
-                      // Generated from the nav catalogue: POS, Cashier, Day close, ... ("coming soon" placeholders).
+                      // Generated from the nav catalogue: modules without a page yet (Day close, ...) as "coming soon" placeholders.
                       ...placeholderModuleRoutes(),
                       // ONE generic board for every station row (by UUID); never a per-station route.
                       {
