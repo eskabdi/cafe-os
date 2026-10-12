@@ -96,7 +96,8 @@ export async function renderReportPdf(
   const x = logo ? margin + 52 : margin
   doc.setFont(font, 'normal')
   doc.setFontSize(16)
-  doc.text(meta.restaurantName, x, y + 14)
+  // an Amharic-only restaurant name would print as garbage in Helvetica: the slug (always Latin) stands in for it
+  doc.text(latin(meta.restaurantName) || meta.slug, x, y + 14)
   doc.setFontSize(13)
   doc.text(view.title, x, y + 32)
   y += 52

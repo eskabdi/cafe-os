@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@/features/auth'
 import { ErrorState, PageSkeleton } from '@/features/shell/states'
-import { periodLabel, periodRange, todayIn, type Period } from '@/lib/domain/reports-period'
+import { periodLabel, periodRange, type Period } from '@/lib/domain/reports-period'
+import { fetchTenantTimezone, paymentsKeys } from '@/lib/supabase/payments'
 import { fetchReportPeriod, periodReportKey, type ReportType } from '@/lib/supabase/reports'
 import { RpcError } from '@/lib/supabase/rpc'
 import { fetchTenantLogoUrl } from '@/lib/supabase/tenant-logo'
@@ -14,8 +15,7 @@ import { ReportPanel } from './ReportPanel'
 import { ReportPrintLayout } from './ReportPrintLayout'
 import { ReportTabs } from './ReportTabs'
 import { useReportExport } from './useReportExport'
-
-const TENANT_TZ = 'Africa/Addis_Ababa'
+import { useTenantToday } from './useTenantToday'
 
 /**
  * Reports: ten report types for a Daily / Weekly / Ethiopian-monthly / Custom period. Every figure comes from
@@ -26,8 +26,18 @@ export function ReportsPage() {
   const { context, can } = useAuth()
   const rid = context?.restaurant?.id ?? ''
   const slug = context?.restaurant?.slug ?? ''
-  const today = useMemo(() => todayIn(TENANT_TZ), [])
-  const [period, setPeriod] = useState<Period>({ kind: 'daily', date: today })
+  // "today" is the tenant-local date (restaurants.timezone), kept current across midnight (focus / visibility / minute timer)
+  const tz = useQuery({
+    queryKey: paymentsKeys.timezone(rid),
+    queryFn: fetchTenantTimezone,
+    enabled: Boolean(rid),
+    staleTime: 300_000,
+  })
+  const tzSettled = tz.isSuccess || tz.isError
+  const today = useTenantToday(tz.data ?? null)
+  // null = the default "today" (follows the date as it changes); a period the user picked stays as picked
+  const [picked, setPicked] = useState<Period | null>(null)
+  const period: Period = picked ?? { kind: 'daily', date: today }
   const [type, setType] = useState<ReportType>('summary')
   const range = periodRange(period)
   const canExport = can('reports.export')
@@ -36,7 +46,8 @@ export function ReportsPage() {
   const q = useQuery({
     queryKey: periodReportKey(rid, range.from, range.to),
     queryFn: () => fetchReportPeriod(range.from, range.to),
-    enabled: Boolean(rid),
+    // wait for the tenant zone so the first request is for the tenant's today, not the browser's
+    enabled: Boolean(rid) && tzSettled,
   })
   const logo = useQuery({
     queryKey: ['tenant-logo', slug],
@@ -73,7 +84,7 @@ export function ReportsPage() {
           />
         )}
       </div>
-      <PeriodPicker value={period} today={today} onChange={setPeriod} />
+      <PeriodPicker value={period} today={today} onChange={setPicked} />
       <ReportTabs value={type} onChange={setType} />
       {q.isPending ? (
         <PageSkeleton label="Loading the report" />

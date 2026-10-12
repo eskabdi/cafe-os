@@ -80,6 +80,34 @@ export function downloadBlob(blob: Blob, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
+/** The print dialog waits at most this long for the logo (then prints without it rather than hanging). */
+export const PRINT_LOGO_TIMEOUT_MS = 3000
+
+/**
+ * Resolves once the image is decoded, has failed, or after `timeoutMs`, whichever comes first; never rejects. Uses
+ * img.decode() where available, the load / error events otherwise. A null image (no logo) resolves at once.
+ */
+export async function waitForImage(img: HTMLImageElement | null, timeoutMs = PRINT_LOGO_TIMEOUT_MS): Promise<void> {
+  if (!img) return
+  if (img.complete && img.naturalWidth > 0) return
+  const settled: Promise<unknown> =
+    typeof img.decode === 'function'
+      ? img.decode().catch(() => undefined)
+      : new Promise<void>((resolve) => {
+          img.addEventListener('load', () => resolve(), { once: true })
+          img.addEventListener('error', () => resolve(), { once: true })
+        })
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, timeoutMs)
+  })
+  try {
+    await Promise.race([settled, timeout])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 /** Safe, fixed copy for a refused export (no server text is ever shown). */
 export function exportErrorMessage(e: unknown): string {
   const code = e instanceof RpcError ? e.code : ''
@@ -87,5 +115,7 @@ export function exportErrorMessage(e: unknown): string {
     return 'You do not have permission to export reports. Nothing was exported.'
   if (code === 'invalid_input') return 'This period cannot be exported. Nothing was exported.'
   if (code === 'tenant_suspended') return 'The restaurant is suspended. Nothing was exported.'
+  if (code === 'rate_limited')
+    return 'Too many exports in the last minute. Wait a minute and try again. Nothing was exported.'
   return 'The export could not be recorded, so nothing was exported. Try again.'
 }

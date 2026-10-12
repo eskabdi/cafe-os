@@ -145,7 +145,6 @@ const periodReport = (from: string, to: string, permissions: string[]) => {
 }
 
 interface Mock {
-  reportBodies: Array<Record<string, unknown>>
   periodBodies: Array<Record<string, unknown>>
   exportBodies: Array<Record<string, unknown>>
   /** order of the RPCs that matter for the export flow */
@@ -155,7 +154,7 @@ interface Mock {
 }
 
 async function setup(page: Page, permissions: string[]): Promise<Mock> {
-  const m: Mock = { reportBodies: [], periodBodies: [], exportBodies: [], events: [], dashboardCalls: 0 }
+  const m: Mock = { periodBodies: [], exportBodies: [], events: [], dashboardCalls: 0 }
   const money = permissions.includes('reports.view')
   const user = {
     id: 'u-1',
@@ -260,18 +259,6 @@ async function setup(page: Page, permissions: string[]): Promise<Mock> {
           )
         }
         return r.fulfill(json(200, { ok: true, exported_at: '2026-10-10T16:05:00Z' }))
-      }
-      if (name === 'fn_report') {
-        if (!money)
-          return r.fulfill(
-            json(400, { code: 'P0001', message: 'permission_denied', details: null, hint: null }),
-          )
-        const body = (req.postDataJSON() ?? {}) as {
-          p_from_day_no?: number | null
-          p_to_day_no?: number | null
-        }
-        m.reportBodies.push(body)
-        return r.fulfill(json(200, report(body.p_from_day_no ?? null, body.p_to_day_no ?? null)))
       }
       return r.fulfill(json(200, null))
     }
@@ -436,7 +423,16 @@ test('periods: weekly Monday–Sunday, Ethiopian months with Pagume, prev / next
   await expect(page.getByRole('table', { name: 'Sales trend' })).toBeAttached()
 
   await page.getByRole('button', { name: 'Monthly' }).click()
-  await page.getByLabel('Ethiopian year').fill('2018')
+  // the year is local text while typing: a partial / out-of-range year is never sent, a valid one commits on Enter / blur
+  const year = page.getByLabel('Ethiopian year')
+  const beforeYear = m.periodBodies.length
+  await year.fill('20')
+  await year.press('Enter')
+  await expect(page.getByRole('alert')).toHaveText('Enter a year from 1990 to 2100.')
+  expect(m.periodBodies.length).toBe(beforeYear)
+  await year.fill('2018')
+  await year.press('Enter')
+  await expect(page.getByRole('alert')).toHaveCount(0)
   await page.getByLabel('Ethiopian month').selectOption('13')
   await expect.poll(() => m.periodBodies.at(-1)).toEqual({ p_from: '2026-09-06', p_to: '2026-09-10' })
   await expect(page.getByTestId('period-label')).toContainText('ጳጉሜ 2018')

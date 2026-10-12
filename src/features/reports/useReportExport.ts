@@ -8,6 +8,7 @@ import {
   reportToCsv,
   type ExportMeta,
   type GeneratedAt,
+  waitForImage,
 } from './report-export'
 import type { ReportView } from './report-model'
 
@@ -27,11 +28,20 @@ export function useReportExport() {
   const [note, setNote] = useState<string | null>(null)
   const [printJob, setPrintJob] = useState<PrintJob | null>(null)
 
-  // the print layout is mounted first, then printed; window.print() blocks until the dialog closes
+  // the print layout is mounted first, then printed once its logo has loaded / failed (bounded wait), so the printout is
+  // never missing a logo that was merely still loading; window.print() blocks until the dialog closes
   useEffect(() => {
     if (!printJob) return
-    window.print()
-    setPrintJob(null)
+    let cancelled = false
+    const logo = document.querySelector<HTMLImageElement>('.report-print img.report-print-logo')
+    void waitForImage(logo).then(() => {
+      if (cancelled) return
+      window.print()
+      setPrintJob(null)
+    })
+    return () => {
+      cancelled = true
+    }
   }, [printJob])
 
   async function run(format: ExportFormat, view: ReportView, meta: ExportMeta): Promise<void> {

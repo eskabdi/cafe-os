@@ -4,7 +4,8 @@ const h = vi.hoisted(() => ({ callRpc: vi.fn() }))
 vi.mock('./client', () => ({ supabase: {} }))
 vi.mock('./rpc', () => ({ callRpc: h.callRpc }))
 
-const { fetchDashboard, fetchReport, fetchReportPeriod, logReportExport } = await import('./reports')
+const reports = await import('./reports')
+const { fetchDashboard, fetchReportPeriod, logReportExport } = reports
 
 const PM = '11111111-1111-4111-8111-111111111111'
 const kpis = {
@@ -24,62 +25,11 @@ const kpis = {
 
 beforeEach(() => h.callRpc.mockReset())
 
-describe('fetchReport', () => {
-  it('sends only the day range (no tenant id) and parses numeric strings', async () => {
-    h.callRpc.mockResolvedValue({
-      timezone: 'Africa/Addis_Ababa',
-      days: [],
-      kpis,
-      by_payment_method: [{ payment_method_id: PM, name: 'Amole', amount: '12.50', count: 1 }],
-      by_category: [],
-      by_waiter: [],
-      by_expense_category: [],
-      by_hour: [],
-      inventory: { low_stock: [], consumption: [] },
-    })
-    const r = await fetchReport(3, 7)
-    expect(h.callRpc).toHaveBeenCalledWith('fn_report', { p_from_day_no: 3, p_to_day_no: 7 })
-    expect(r.kpis.gross_collected).toBe(12.5)
-    expect(r.by_payment_method?.[0]?.amount).toBe(12.5)
-  })
-
-  it('tolerates the sections withheld from a role without expenses / inventory / staff / payments permissions', async () => {
-    h.callRpc.mockResolvedValue({
-      timezone: 'Africa/Addis_Ababa',
-      days: [],
-      kpis: { ...kpis, gross_collected: null, cash_collected: null, expenses_total: null, net_position: null, vouchers_outstanding: null, vouchers_overdue: null },
-      by_payment_method: null,
-      by_category: [],
-      by_waiter: null,
-      by_expense_category: null,
-      by_hour: [],
-      inventory: null,
-    })
-    const r = await fetchReport(null, null)
-    expect(r.kpis.expenses_total).toBeNull()
-    expect(r.kpis.vouchers_overdue).toBeNull()
-    expect(r.by_waiter).toBeNull()
-    expect(r.inventory).toBeNull()
-  })
-
-  it('a malformed time zone falls back to Addis Ababa', async () => {
-    h.callRpc.mockResolvedValue({
-      timezone: 'x; drop',
-      days: [],
-      kpis,
-      by_payment_method: [],
-      by_category: [],
-      by_waiter: [],
-      by_expense_category: [],
-      by_hour: [],
-      inventory: { low_stock: [], consumption: [] },
-    })
-    expect((await fetchReport(null, null)).timezone).toBe('Africa/Addis_Ababa')
-  })
-
-  it('rejects a payload that does not match the contract', async () => {
-    h.callRpc.mockResolvedValue({ kpis: {} })
-    await expect(fetchReport(null, null)).rejects.toThrow()
+describe('client surface', () => {
+  it('uses fn_report_period only: the day-number fn_report client (fetchReport / reportSchema / reportsKeys.report) is gone', () => {
+    expect(reports).not.toHaveProperty('fetchReport')
+    expect(reports).not.toHaveProperty('reportSchema')
+    expect(Object.keys(reports.reportsKeys)).toEqual(['dashboard'])
   })
 })
 
@@ -153,6 +103,11 @@ describe('fetchReportPeriod', () => {
     expect(r.inventory).toBeNull()
     expect(r.reversals).toBeNull()
     expect(r.restricted).toEqual(['expenses', 'staff', 'inventory', 'installments'])
+  })
+
+  it('a malformed time zone falls back to Addis Ababa', async () => {
+    h.callRpc.mockResolvedValue({ ...base, timezone: 'x; drop' })
+    expect((await fetchReportPeriod('2026-09-11', '2026-10-10')).timezone).toBe('Africa/Addis_Ababa')
   })
 
   it('rejects a malformed period', async () => {

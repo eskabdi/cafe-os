@@ -61,6 +61,19 @@ describe('renderReportPdf', () => {
     expect(head).toBe('%PDF-')
   })
 
+  it('without the Ethiopic font an Amharic restaurant name falls back to the slug; a Latin name is kept', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('offline')))
+    const text = async (restaurantName: string) =>
+      new TextDecoder('latin1').decode(
+        new Uint8Array(await (await renderReportPdf(view, { ...meta, restaurantName }, generated)).blob.arrayBuffer()),
+      )
+    const amharic = await text('ቡና ቤት')
+    expect(amharic).toContain('(demo-cafe) Tj')
+    const latin = await text('Demo Cafe')
+    expect(latin).toContain('(Demo Cafe) Tj')
+    expect(latin).not.toContain('(demo-cafe) Tj')
+  })
+
   it('a failed font request is a fallback too, never an error', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('offline')))
     await expect(renderReportPdf(view, meta, generated)).resolves.toMatchObject({ amharicFont: false })

@@ -4,10 +4,10 @@ import { callRpc } from './rpc'
 import { numericValue, uuid } from './schemas'
 
 // Dashboard and reports (Phase 8, migration 0037). Every figure is computed by the database; the client only renders it.
-// Both RPCs derive the tenant from the session (no restaurant id is sent); see docs/api/reports.md.
+// Every RPC derives the tenant from the session (no restaurant id is sent); see docs/api/reports.md. fn_report (by business-day
+// number) remains a granted compatibility API for other consumers; this client only uses fn_report_period.
 
 export const reportsKeys = {
-  report: (rid: string, from: number | null, to: number | null) => ['reports', rid, from ?? 'open', to ?? 'open'] as const,
   dashboard: (rid: string) => ['dashboard', rid] as const,
 }
 
@@ -35,34 +35,6 @@ const timezone = z
   .string()
   .regex(/^[A-Za-z_]+(?:\/[A-Za-z0-9_+-]+){0,2}$/)
   .catch('Africa/Addis_Ababa')
-
-export const reportSchema = z.object({
-  timezone,
-  days: z.array(z.object({ id: uuid, day_no: z.number().int(), status: z.string(), opened_at: z.string(), closed_at: z.string().nullable() })),
-  kpis: kpisSchema,
-  by_payment_method: z.array(methodSchema).nullish().transform((v) => v ?? null),
-  by_category: z.array(z.object({ category_id: uuid.nullable(), name: z.string().nullable(), qty: z.number().int(), amount: numericValue })),
-  by_waiter: z
-    .array(z.object({ user_id: uuid.nullable(), name: z.string().nullable(), orders: z.number().int(), sales: numericValue }))
-    .nullish()
-    .transform((v) => v ?? null),
-  by_expense_category: z
-    .array(z.object({ expense_category_id: uuid, name: z.string().nullable(), amount: numericValue, count: z.number().int() }))
-    .nullish()
-    .transform((v) => v ?? null),
-  by_hour: z.array(hourSchema),
-  inventory: z.object({
-    low_stock: z.array(z.object({ ingredient_id: uuid, name: z.string(), unit: z.string(), stock: numericValue, min_level: numericValue })),
-    consumption: z.array(z.object({ ingredient_id: uuid, name: z.string(), unit: z.string(), qty: numericValue })),
-  })
-    .nullish()
-    .transform((v) => v ?? null),
-})
-export type Report = z.infer<typeof reportSchema>
-
-export async function fetchReport(from: number | null, to: number | null): Promise<Report> {
-  return reportSchema.parse(await callRpc('fn_report', { p_from_day_no: from, p_to_day_no: to }))
-}
 
 // ── Period reports (fn_report_period) and export audit (fn_log_report_export) ─────────────────────────────────────────
 // Tolerant by design: the server withholds whole sections the caller may not see (listed in `restricted`) and returns them
