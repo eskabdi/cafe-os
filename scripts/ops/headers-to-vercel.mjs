@@ -8,7 +8,11 @@ import { readFileSync, writeFileSync } from 'node:fs'
 /** `/r/*` -> `/r/(.*)` (path-to-regexp); anything else outside [A-Za-z0-9/_.-] is refused rather than guessed. */
 export function toVercelSource(pattern) {
   if (!/^\/[A-Za-z0-9/_.*-]*$/.test(pattern)) throw new Error(`unsupported _headers path: ${pattern}`)
-  return pattern.replace(/\./g, '\\.').replace(/\*/g, '(.*)')
+  // Escape every path-to-regexp/regex metacharacter (backslash included) in the literal parts, then turn `*` into `(.*)`.
+  return pattern
+    .split('*')
+    .map((part) => part.replace(/[\\^$.|?+()[\]{}:]/g, '\\$&'))
+    .join('(.*)')
 }
 
 export function parseHeaders(text) {

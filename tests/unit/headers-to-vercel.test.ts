@@ -11,6 +11,7 @@ describe('headers-to-vercel', () => {
     expect(toVercelSource('/*')).toBe('/(.*)')
     expect(toVercelSource('/r/*')).toBe('/r/(.*)')
     expect(toVercelSource('/terminal')).toBe('/terminal')
+    expect(toVercelSource('/favicon.ico')).toBe('/favicon\\.ico')
     expect(() => toVercelSource('/a b')).toThrow()
   })
 
