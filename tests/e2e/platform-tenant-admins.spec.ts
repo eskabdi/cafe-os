@@ -25,7 +25,11 @@ interface Calls {
 
 async function setup(
   page: Page,
-  opts: { resetError?: { status: number; code: string }; sessionsUnconfirmed?: boolean } = {},
+  opts: {
+    resetError?: { status: number; code: string }
+    sessionsUnconfirmed?: boolean
+    awaitingRecovery?: boolean
+  } = {},
 ): Promise<Calls> {
   const calls: Calls = { reset: [], rpc: [] }
   let reset = false
@@ -94,8 +98,9 @@ async function setup(
         last_name: 'Tadesse',
         email: 'selam@example.com',
         is_active: true,
-        mfa_enrolled: !reset,
+        mfa_enrolled: !reset && !opts.awaitingRecovery,
         mfa_reset_pending: false,
+        recovery_resend_available: reset || !!opts.awaitingRecovery,
         trusted_devices: reset ? 0 : 2,
       },
       {
@@ -107,6 +112,7 @@ async function setup(
         is_active: true,
         mfa_enrolled: false,
         mfa_reset_pending: false,
+        recovery_resend_available: false,
         trusted_devices: 0,
       },
     ],
@@ -145,6 +151,8 @@ async function setup(
     calls.reset.push({ body, auth: req.headers()['authorization'] })
     if (calls.reset.length === 1) return r.fulfill(json(403, { error: 'step_up_required' }))
     if (opts.resetError) return r.fulfill(json(opts.resetError.status, { error: opts.resetError.code }))
+    if (body.action === 'resend_recovery')
+      return r.fulfill(json(200, { profile_id: ADMIN, action: 'resend_recovery', recovery_sent: true }))
     reset = true
     return r.fulfill(
       json(200, {
@@ -208,8 +216,12 @@ test('a Super Admin resets a Tenant Admin authenticator with a reason and a fres
   )
   await expect(dialog).toBeHidden()
   // the tenant query was invalidated: the refreshed posture shows no authenticator and no reset action
-  await expect(selam).toContainText('not enrolled')
+  await expect(selam).toContainText('reset, waiting for the new password')
   await expect(selam.getByRole('button', { name: /Reset authenticator/ })).toHaveCount(0)
+  // the way back if the recovery link is never used
+  await expect(
+    selam.getByRole('button', { name: 'Resend recovery email to Selam Bekele Tadesse' }),
+  ).toBeVisible()
 
   expect(calls.reset).toHaveLength(2)
   for (const c of calls.reset) {
@@ -237,9 +249,41 @@ test('an unconfirmed sign-out (hosted auth) is reported as a warning, not as "si
   await expect(page.getByText(/Authenticator reset for Selam Bekele/)).not.toContainText('signed out')
   await expect(
     page.getByText(
-      'Sign-out could not be confirmed; their old sessions can no longer pass the authenticator check.',
+      'Sign-out could not be confirmed. Their old sessions are blocked from every authenticator-protected action.',
     ),
   ).toBeVisible()
+})
+
+test('a Super Admin resends the recovery email of a reset Tenant Admin, with a reason and a fresh code', async ({
+  page,
+}) => {
+  const calls = await setup(page, { awaitingRecovery: true })
+  await page.goto(`/platform/tenants/${RID}`)
+  const selam = page
+    .getByRole('region', { name: 'Tenant Admins' })
+    .getByRole('listitem', { name: 'Selam Bekele Tadesse' })
+  await expect(selam).toContainText('reset, waiting for the new password')
+  await expect(selam.getByRole('button', { name: /Reset authenticator/ })).toHaveCount(0)
+  await selam.getByRole('button', { name: 'Resend recovery email to Selam Bekele Tadesse' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Resend recovery email: Selam Bekele' })
+  await expect(dialog).toContainText('e-mails a new link to their registered address')
+  await dialog
+    .getByLabel('Reason (recorded in the audit log)')
+    .fill('Link expired, identity confirmed by call')
+  await dialog.getByRole('button', { name: 'Resend recovery email' }).click()
+  const stepUp = page.getByRole('dialog', { name: 'Verify it is you' })
+  await stepUp.getByLabel('Authentication code').fill('123456')
+  await stepUp.getByRole('button', { name: 'Verify' }).click()
+  await expect(page.getByText('A new password-reset link was e-mailed to Selam Bekele.')).toBeVisible()
+  await expect(dialog).toBeHidden()
+  expect(calls.reset).toHaveLength(2)
+  for (const c of calls.reset)
+    expect(c.body).toEqual({
+      restaurant_id: RID,
+      profile_id: ADMIN,
+      reason: 'Link expired, identity confirmed by call',
+      action: 'resend_recovery',
+    })
 })
 
 test('a refused reset shows fixed copy and changes nothing', async ({ page }) => {

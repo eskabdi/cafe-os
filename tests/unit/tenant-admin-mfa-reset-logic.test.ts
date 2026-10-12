@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import {
   MAX_BODY_BYTES,
+  interpretClaim,
   interpretComplete,
   interpretPrepare,
+  interpretResend,
+  interpretSignOut,
   mapCompleteError,
   mapRpcError,
   parseMfaResetBody,
+  remainingFactors,
   rotationPassword,
   shapeFailure,
+  shapeResendSuccess,
   shapeSuccess,
 } from '../../supabase/functions/tenant-admin-mfa-reset/logic'
 
@@ -26,7 +31,23 @@ describe('parseMfaResetBody', () => {
       ),
     ).toEqual({
       ok: true,
-      value: { restaurant_id: RID, profile_id: PID, reason: 'lost phone' },
+      value: { restaurant_id: RID, profile_id: PID, reason: 'lost phone', action: 'reset' },
+    })
+  })
+  it('accepts an explicit action: reset or resend_recovery', () => {
+    expect(
+      parseMfaResetBody(
+        body({ restaurant_id: RID, profile_id: PID, reason: 'link expired', action: 'resend_recovery' }),
+      ),
+    ).toEqual({
+      ok: true,
+      value: { restaurant_id: RID, profile_id: PID, reason: 'link expired', action: 'resend_recovery' },
+    })
+    expect(
+      parseMfaResetBody(body({ restaurant_id: RID, profile_id: PID, reason: 'lost phone', action: 'reset' })),
+    ).toMatchObject({
+      ok: true,
+      value: { action: 'reset' },
     })
   })
   it('counts reason characters, not bytes or UTF-16 units (Amharic, 500 chars)', () => {
@@ -45,6 +66,12 @@ describe('parseMfaResetBody', () => {
     ['reason not a string', { restaurant_id: RID, profile_id: PID, reason: 42 }],
     ['bad profile id', { restaurant_id: RID, profile_id: 'x', reason: 'lost phone' }],
     ['bad restaurant id', { restaurant_id: 'central-cafe', profile_id: PID, reason: 'lost phone' }],
+    ['unknown action', { restaurant_id: RID, profile_id: PID, reason: 'lost phone', action: 'delete_user' }],
+    ['action not a string', { restaurant_id: RID, profile_id: PID, reason: 'lost phone', action: 1 }],
+    [
+      'action plus an extra key',
+      { restaurant_id: RID, profile_id: PID, reason: 'lost phone', action: 'reset', x: 1 },
+    ],
   ])('refuses %s', (_label, value) => {
     expect(parseMfaResetBody(body(value))).toEqual({ ok: false, error: 'invalid_request' })
   })
@@ -100,6 +127,84 @@ describe('interpretPrepare', () => {
   })
 })
 
+describe('interpretClaim', () => {
+  const claim = {
+    reset_id: RS,
+    profile_id: PID,
+    user_id: PID,
+    created_at: '2026-10-12T08:00:00.123456+00:00',
+    factor_ids: [F1],
+  }
+  it('accepts the claim of the prepared reset and parses the request time', () => {
+    expect(interpretClaim(claim, PID, RS)).toEqual({
+      createdAt: Date.parse(claim.created_at),
+      factorIds: [F1],
+    })
+  })
+  it.each([
+    ['another reset', { ...claim, reset_id: F2 }],
+    ['another profile', { ...claim, profile_id: F1, user_id: F1 }],
+    ['no request time', { ...claim, created_at: undefined }],
+    ['unparseable request time', { ...claim, created_at: 'yesterday' }],
+    ['bad factor id', { ...claim, factor_ids: ['x'] }],
+    ['null', null],
+  ])('fails closed on %s', (_label, data) => {
+    expect(interpretClaim(data, PID, RS)).toBeNull()
+  })
+})
+
+describe('interpretSignOut', () => {
+  it('accepts counts, a null session count, and refuses anything else', () => {
+    expect(interpretSignOut({ profile_id: PID, sessions_revoked: 2, devices_revoked: 1 }, PID)).toEqual({
+      sessionsRevoked: 2,
+      devicesRevoked: 1,
+    })
+    expect(interpretSignOut({ profile_id: PID, sessions_revoked: null, devices_revoked: 0 }, PID)).toEqual({
+      sessionsRevoked: null,
+      devicesRevoked: 0,
+    })
+    expect(interpretSignOut({ profile_id: F1, sessions_revoked: 0, devices_revoked: 0 }, PID)).toBeNull()
+    expect(interpretSignOut({ profile_id: PID, sessions_revoked: -1, devices_revoked: 0 }, PID)).toBeNull()
+    expect(interpretSignOut({ profile_id: PID, sessions_revoked: 0 }, PID)).toBeNull()
+    expect(interpretSignOut(null, PID)).toBeNull()
+  })
+})
+
+describe('remainingFactors', () => {
+  const t = Date.parse('2026-10-12T08:00:00Z')
+  it('lists EVERY factor still there and counts the ones enrolled since the reset was requested', () => {
+    expect(
+      remainingFactors(
+        {
+          factors: [
+            { id: F1.toUpperCase(), created_at: '2026-10-01T08:00:00Z', status: 'verified' },
+            { id: F2, created_at: '2026-10-12T08:01:00Z', status: 'unverified' },
+            { id: RS, status: 'verified' },
+          ],
+        },
+        t,
+      ),
+    ).toEqual({ ids: [F1, F2, RS], late: 2 })
+    expect(remainingFactors({ factors: [] }, t)).toEqual({ ids: [], late: 0 })
+  })
+  it.each([
+    ['no list', {}],
+    ['not an object', 'x'],
+    ['bad id', { factors: [{ id: 'x' }] }],
+    ['entry not an object', { factors: [null] }],
+  ])('fails closed on %s', (_label, data) => {
+    expect(remainingFactors(data, t)).toBeNull()
+  })
+})
+
+describe('interpretResend', () => {
+  it('accepts the requested profile only', () => {
+    expect(interpretResend({ profile_id: PID, user_id: PID }, PID)).toEqual({ userId: PID })
+    expect(interpretResend({ profile_id: PID, user_id: F1 }, PID)).toBeNull()
+    expect(interpretResend(null, PID)).toBeNull()
+  })
+})
+
 describe('interpretComplete', () => {
   it('accepts counts and a null session count (no privilege on auth.sessions)', () => {
     expect(interpretComplete({ profile_id: PID, sessions_revoked: 2, devices_revoked: 1 }, PID)).toEqual({
@@ -121,6 +226,10 @@ describe('interpretComplete', () => {
     expect(interpretComplete({ profile_id: PID, refused: 'not_found' }, PID)).toEqual({
       ok: false,
       kind: 'not_found',
+    })
+    expect(interpretComplete({ profile_id: PID, refused: 'tenant_suspended' }, PID)).toEqual({
+      ok: false,
+      kind: 'tenant_suspended',
     })
   })
   it.each([
@@ -158,6 +267,8 @@ describe('mapRpcError / shapeFailure', () => {
     expect(mapRpcError('not_authenticated')).toBe('forbidden')
     expect(mapRpcError('not_found')).toBe('not_found')
     expect(mapRpcError('invalid_state', 'no_factor')).toBe('no_factor')
+    expect(mapRpcError('invalid_state', 'recovery_not_available')).toBe('recovery_not_available')
+    expect(mapRpcError('tenant_suspended')).toBe('tenant_suspended')
     expect(mapRpcError('invalid_state', 'something_else')).toBe('server_error')
     expect(mapRpcError('invalid_input', 'reason')).toBe('invalid_request')
     expect(mapRpcError('relation "x" does not exist')).toBe('server_error')
@@ -168,6 +279,21 @@ describe('mapRpcError / shapeFailure', () => {
     expect(mapCompleteError('invalid_state', 'reset_superseded')).toBe('reset_expired')
     expect(mapCompleteError('invalid_state', 'reset_completed')).toBe('reset_expired')
     expect(mapCompleteError('invalid_state', 'factors_remain')).toBe('server_error')
+    expect(mapCompleteError('invalid_state', 'reset_not_claimed')).toBe('server_error')
+    expect(mapCompleteError('invalid_state', 'reset_in_progress')).toBe('reset_in_progress')
+    expect(mapCompleteError('tenant_suspended')).toBe('tenant_suspended')
+    expect(shapeFailure('reset_in_progress')).toMatchObject({
+      status: 409,
+      body: { error: 'reset_in_progress' },
+    })
+    expect(shapeFailure('tenant_suspended')).toMatchObject({
+      status: 409,
+      body: { error: 'tenant_suspended' },
+    })
+    expect(shapeFailure('recovery_not_available')).toMatchObject({
+      status: 409,
+      body: { error: 'recovery_not_available' },
+    })
     expect(mapCompleteError('permission_denied')).toBe('forbidden')
     expect(mapCompleteError('not_found')).toBe('not_found')
     expect(mapCompleteError('invalid_input', 'reset_id')).toBe('server_error')
@@ -209,5 +335,13 @@ describe('mapRpcError / shapeFailure', () => {
       password_rotated: true,
       recovery_sent: false,
     })
+  })
+  it('shapes the resend answer', () => {
+    expect(shapeResendSuccess(PID, true)).toEqual({
+      status: 200,
+      body: { profile_id: PID, action: 'resend_recovery', recovery_sent: true },
+      headers: { 'Cache-Control': 'no-store', 'Content-Type': 'application/json' },
+    })
+    expect(shapeResendSuccess(PID, false).body).toMatchObject({ recovery_sent: false })
   })
 })

@@ -64,9 +64,9 @@ insert into _c select 'detail', public.fn_platform_get_tenant((select a from _f)
 select is((select string_agg(e ->> 'profile_id', ',' order by e ->> 'profile_id') from _c, jsonb_array_elements(v) e where k = 'detail'),
           (select a_admin::text || ',' || a_admin2::text from _f), 'tenant_admins: exactly the two tenant_admin profiles (no staff)');
 select is((select string_agg(x, ',' order by x) from _c, jsonb_array_elements(v) e, jsonb_object_keys(e) x where k = 'detail' and e ->> 'profile_id' = (select a_admin::text from _f)),
-          'email,first_name,is_active,last_name,mfa_enrolled,mfa_reset_pending,middle_name,profile_id,trusted_devices', 'tenant_admins: identity + authenticator state keys only');
+          'email,first_name,is_active,last_name,mfa_enrolled,mfa_reset_pending,middle_name,profile_id,recovery_resend_available,trusted_devices', 'tenant_admins: identity + authenticator state keys only');
 select is((select e - 'profile_id' from _c, jsonb_array_elements(v) e where k = 'detail' and e ->> 'profile_id' = (select a_admin::text from _f)),
-          '{"email": "selam@centralcafe.example.com", "first_name": "Selam", "middle_name": "Abate", "last_name": "Girma", "is_active": true, "mfa_enrolled": true, "mfa_reset_pending": false, "trusted_devices": 2}'::jsonb,
+          '{"email": "selam@centralcafe.example.com", "first_name": "Selam", "middle_name": "Abate", "last_name": "Girma", "is_active": true, "mfa_enrolled": true, "mfa_reset_pending": false, "recovery_resend_available": false, "trusted_devices": 2}'::jsonb,
           'selam: e-mail, names, enrolled, 2 live devices (the revoked one is not counted)');
 select is((select (e ->> 'mfa_enrolled')::boolean from _c, jsonb_array_elements(v) e where k = 'detail' and e ->> 'profile_id' = (select a_admin2::text from _f)),
           false, 'dawit: not enrolled');
@@ -209,7 +209,8 @@ select tests.aal2((select su from _f));
 select is((select e - 'profile_id' - 'email' - 'first_name' - 'middle_name' - 'last_name' - 'is_active'
            from jsonb_array_elements(public.fn_platform_get_tenant((select a from _f)) -> 'tenant_admins') e
            where e ->> 'profile_id' = (select a_admin::text from _f)),
-          '{"mfa_enrolled": false, "mfa_reset_pending": false, "trusted_devices": 0}'::jsonb, 'the platform detail now shows selam unenrolled, nothing pending, no trusted device');
+          '{"mfa_enrolled": false, "mfa_reset_pending": false, "recovery_resend_available": true, "trusted_devices": 0}'::jsonb,
+          'the platform detail now shows selam unenrolled, nothing pending, no trusted device, the recovery e-mail can be resent');
 select is(tests.run(format($q$select public.fn_platform_prepare_mfa_reset(%L, %L, 'again')$q$, (select a from _f), (select a_admin from _f))),
           'P0001|invalid_state|no_factor', 'after a completed reset, nothing is left to reset (no_factor)');
 select tests.clear_auth();

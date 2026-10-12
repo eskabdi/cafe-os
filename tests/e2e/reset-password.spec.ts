@@ -8,7 +8,8 @@ const UID = '11111111-1111-4111-8111-111111111111'
 const RID = '99999999-9999-4999-8999-999999999999'
 const JWT = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ sub: UID, aud: 'authenticated', role: 'authenticated', aal: 'aal1', exp })}.sig`
 const LINK = `/reset-password#access_token=${JWT}&expires_at=${exp}&expires_in=3600&refresh_token=recovery-refresh-1&token_type=bearer&type=recovery`
-const NEW_PASSWORD = 'Fresh start 2026 cafe'
+// matches supabase/config.toml lower_upper_letters_digits_symbols (lower, upper, digit, symbol; 12..72)
+const NEW_PASSWORD = 'Fresh-start-2026-Cafe'
 const CORS = {
   'access-control-allow-origin': '*',
   'access-control-allow-headers': '*',
@@ -41,7 +42,8 @@ async function setup(page: Page): Promise<Calls> {
 
   await page.route('**/auth/v1/user', (r) => {
     if (preflight(r)) return
-    if (r.request().method() === 'PUT') calls.updates.push(r.request().postDataJSON() as Record<string, unknown>)
+    if (r.request().method() === 'PUT')
+      calls.updates.push(r.request().postDataJSON() as Record<string, unknown>)
     return r.fulfill(json(200, user))
   })
   await page.route('**/auth/v1/logout*', (r) => {
@@ -49,7 +51,10 @@ async function setup(page: Page): Promise<Calls> {
     calls.logouts.push(new URL(r.request().url()).searchParams.get('scope') ?? '')
     return r.fulfill({ status: 204, headers: CORS })
   })
-  await page.route('**/auth/v1/token*', (r) => preflight(r) || r.fulfill(json(400, { error: 'invalid_grant' })))
+  await page.route(
+    '**/auth/v1/token*',
+    (r) => preflight(r) || r.fulfill(json(400, { error: 'invalid_grant' })),
+  )
   await page.route('**/functions/v1/**', (r) => preflight(r) || r.fulfill(json(404, { error: 'not_found' })))
   await page.route('**/rest/v1/**', (r) => {
     if (preflight(r)) return
@@ -64,13 +69,16 @@ async function setup(page: Page): Promise<Calls> {
           station_ids: [],
         }),
       )
-    if (fn === 'fn_resolve_tenant_slug') return r.fulfill(json(200, { id: RID, name: 'Demo Cafe', slug: 'demo-cafe' }))
+    if (fn === 'fn_resolve_tenant_slug')
+      return r.fulfill(json(200, { id: RID, name: 'Demo Cafe', slug: 'demo-cafe' }))
     return r.fulfill(json(200, null))
   })
   return calls
 }
 
-test('a Tenant Admin sets a new password from the recovery link and is sent to admin sign-in', async ({ page }) => {
+test('a Tenant Admin sets a new password from the recovery link and is sent to admin sign-in', async ({
+  page,
+}) => {
   const calls = await setup(page)
   await page.goto(LINK)
 
@@ -82,6 +90,11 @@ test('a Tenant Admin sets a new password from the recovery link and is sent to a
   await page.getByLabel('Repeat the new password').fill('short1')
   await page.getByRole('button', { name: 'Save new password' }).click()
   await expect(page.getByRole('alert')).toContainText('at least 12')
+  // GoTrue's policy: a symbol is required (a space is not one)
+  await page.getByLabel('New password', { exact: true }).fill('Fresh start 2026 cafe')
+  await page.getByLabel('Repeat the new password').fill('Fresh start 2026 cafe')
+  await page.getByRole('button', { name: 'Save new password' }).click()
+  await expect(page.getByRole('alert')).toContainText('Add a symbol')
   expect(calls.updates).toHaveLength(0)
 
   await page.getByLabel('New password', { exact: true }).fill(NEW_PASSWORD)
@@ -100,11 +113,39 @@ test('a Tenant Admin sets a new password from the recovery link and is sent to a
   expect(storage).not.toContain('auth-token')
 })
 
-test('an expired or used recovery link asks for a new reset by the platform administrator', async ({ page }) => {
+test('when the global sign-out fails the person still gets to admin sign-in, with a non-blocking warning', async ({
+  page,
+}) => {
   const calls = await setup(page)
-  await page.goto('/reset-password#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired')
+  await page.route('**/auth/v1/logout*', (r) => {
+    if (r.request().method() === 'OPTIONS') return r.fulfill({ status: 204, headers: CORS })
+    calls.logouts.push(new URL(r.request().url()).searchParams.get('scope') ?? '')
+    return r.fulfill({
+      status: 500,
+      headers: { ...CORS, 'content-type': 'application/json' },
+      body: '{"code":"unexpected_failure"}',
+    })
+  })
+  await page.goto(LINK)
+  await page.getByLabel('New password', { exact: true }).fill(NEW_PASSWORD)
+  await page.getByLabel('Repeat the new password').fill(NEW_PASSWORD)
+  await page.getByRole('button', { name: 'Save new password' }).click()
+  await expect(page).toHaveURL(/\/r\/demo-cafe\/admin-login$/)
+  await expect(page.getByRole('status').filter({ hasText: 'Password changed' })).toContainText(
+    'Signing out your other devices could not be confirmed; their old sessions are blocked from every authenticator-protected action.',
+  )
+  expect(calls.logouts[0]).toBe('global')
+})
+
+test('an expired or used recovery link asks the platform administrator to resend the recovery email', async ({
+  page,
+}) => {
+  const calls = await setup(page)
+  await page.goto(
+    '/reset-password#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired',
+  )
   await expect(page.getByRole('alert')).toContainText(
-    'This link has expired or has already been used. Ask the platform administrator to reset your authenticator again',
+    'This link has expired or has already been used. Ask the platform administrator to resend the recovery email.',
   )
   await expect(page.getByLabel('New password', { exact: true })).toHaveCount(0)
   expect(calls.updates).toHaveLength(0)

@@ -13,13 +13,15 @@ vi.mock('@/lib/supabase/rpc', () => rpc)
 
 const JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1LTEifQ.c2ln'
 const LINK = `/reset-password#access_token=${JWT}&expires_in=3600&refresh_token=r-1&token_type=bearer&type=recovery`
-const GOOD = 'new password 2026'
+const GOOD = 'New-password-2026'
 
 function authValue(over: Partial<AuthValue> = {}): AuthValue {
   return {
     status: 'authenticated',
     session: null,
-    context: { restaurant: { id: 'r', name: 'Demo Cafe', slug: 'demo-cafe', status: 'active' } } as AuthValue['context'],
+    context: {
+      restaurant: { id: 'r', name: 'Demo Cafe', slug: 'demo-cafe', status: 'active' },
+    } as AuthValue['context'],
     contextStatus: 'ready',
     can: () => false,
     signOut: vi.fn(),
@@ -83,22 +85,37 @@ describe('ResetPasswordPage', () => {
     expect(auth.signOut).toHaveBeenCalledTimes(1)
   })
 
-  it('falls back to a local sign-out when the global sign-out fails', async () => {
+  it('falls back to a local sign-out when the global sign-out fails, and warns (without blocking) on the sign-in page', async () => {
     const user = userEvent.setup()
     auth.signOut.mockResolvedValueOnce({ error: { status: 500 } }).mockResolvedValueOnce({ error: null })
     renderPage(LINK)
     await fill(user, GOOD)
-    await screen.findByText(/admin login/)
+    expect(await screen.findByText(/admin login/)).toHaveTextContent(
+      /Password changed\. Signing out your other devices could not be confirmed; their old sessions are blocked from every authenticator-protected action/,
+    )
     expect(auth.signOut).toHaveBeenNthCalledWith(2, { scope: 'local' })
   })
 
-  it('reads the restaurant from the server when the context is not loaded; without one it stays on the page', async () => {
+  it('reads the restaurant from the server when the context is not loaded; without one it stays on the page with a way on', async () => {
     const user = userEvent.setup()
     rpc.getSessionContext.mockResolvedValue(null)
     renderPage(LINK, authValue({ context: null, contextStatus: 'loading' }))
     await fill(user, GOOD)
-    expect(await screen.findByRole('status')).toHaveTextContent(/Password changed\. Sign in, then set up your authenticator again/)
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      /Password changed\. Sign in, then set up your authenticator again/,
+    )
+    expect(screen.getByText(/\/r\/<your restaurant>\/admin-login/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Go to the start page' })).toHaveAttribute('href', '/')
     expect(auth.signOut).toHaveBeenCalledWith({ scope: 'global' })
+  })
+
+  it('without a restaurant and with a failed global sign-out, the done state carries the warning', async () => {
+    const user = userEvent.setup()
+    rpc.getSessionContext.mockResolvedValue(null)
+    auth.signOut.mockResolvedValueOnce({ error: { status: 500 } }).mockResolvedValueOnce({ error: null })
+    renderPage(LINK, authValue({ context: null, contextStatus: 'loading' }))
+    await fill(user, GOOD)
+    expect(await screen.findByRole('status')).toHaveTextContent(/could not be confirmed/)
   })
 
   it('applies the password policy before calling the server', async () => {
@@ -108,6 +125,10 @@ describe('ResetPasswordPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/at least 12/)
     await user.clear(screen.getByLabelText('New password'))
     await user.clear(screen.getByLabelText('Repeat the new password'))
+    await fill(user, 'new password 2026')
+    expect(await screen.findByRole('alert')).toHaveTextContent(/uppercase/)
+    await user.clear(screen.getByLabelText('New password'))
+    await user.clear(screen.getByLabelText('Repeat the new password'))
     await fill(user, GOOD, `${GOOD}x`)
     expect(await screen.findByRole('alert')).toHaveTextContent(/differ/)
     expect(auth.updateUser).not.toHaveBeenCalled()
@@ -115,7 +136,10 @@ describe('ResetPasswordPage', () => {
 
   it('shows a fixed message when the server refuses the password', async () => {
     const user = userEvent.setup()
-    auth.updateUser.mockResolvedValue({ data: {}, error: { status: 422, code: 'weak_password', message: 'raw server text' } })
+    auth.updateUser.mockResolvedValue({
+      data: {},
+      error: { status: 422, code: 'weak_password', message: 'raw server text' },
+    })
     renderPage(LINK)
     await fill(user, GOOD)
     expect(await screen.findByRole('alert')).toHaveTextContent(/too weak/)
@@ -128,12 +152,18 @@ describe('ResetPasswordPage', () => {
     auth.updateUser.mockResolvedValue({ data: {}, error: { status: 403, code: 'session_not_found' } })
     renderPage(LINK)
     await fill(user, GOOD)
-    expect(await screen.findByRole('alert')).toHaveTextContent(/expired or has already been used\. Ask the platform administrator/)
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /expired or has already been used\. Ask the platform administrator to resend the recovery email/,
+    )
   })
 
   it('expired / used link (GoTrue error in the fragment): asks for a new reset, no session call', async () => {
-    renderPage('/reset-password#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid')
-    expect(await screen.findByRole('alert')).toHaveTextContent(/Ask the platform administrator to reset your authenticator again/)
+    renderPage(
+      '/reset-password#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid',
+    )
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /Ask the platform administrator to resend the recovery email/,
+    )
     expect(auth.setSession).not.toHaveBeenCalled()
     expect(window.location.hash).toBe('')
   })

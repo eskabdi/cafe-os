@@ -111,6 +111,8 @@ const tenantAdminSchema = z.object({
   mfa_enrolled: z.boolean(),
   /** A half-done authenticator reset (factors deleted, completion missing): the portal offers "Finish reset". */
   mfa_reset_pending: z.boolean().optional().default(false),
+  /** A completed reset whose recovery link was never used (no authenticator, nothing pending): "Resend recovery email". */
+  recovery_resend_available: z.boolean().optional().default(false),
   trusted_devices: count,
 })
 export type TenantAdminRow = z.infer<typeof tenantAdminSchema>

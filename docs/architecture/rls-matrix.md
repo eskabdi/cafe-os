@@ -19,7 +19,7 @@ Suspended/cancelled tenants resolve to NULL (no access); `past_due` is read-only
 | profiles | T and (self or `users.view`/`users.manage`) | none (staff-create / fn_accept_tenant_admin_invitation) | **no client grant since 0031**: `fn_update_user` (names), `fn_set_user_active`, `fn_change_user_role`; the 0007 policy stays as ceiling | none |
 | profile_secrets, tenant_counters, idempotency_keys | none (RLS on, zero policies, no grants) | none | none | none |
 | tenant_admin_invitations (0030) | none (RPC only: `fn_list_tenant_admin_invitations`, `fn_platform_get_tenant`) | none (`fn_prepare_tenant_admin_invitation`) | none (attach / resend / revoke / accept RPCs) | none (trigger-blocked) |
-| mfa_resets (0036) | none (RLS forced, zero policies, no grant to any API role incl. service_role) | none (`fn_platform_prepare_mfa_reset`) | none (`fn_platform_complete_mfa_reset`) | none (trigger-blocked) |
+| mfa_resets (0036) | none (RLS forced, zero policies, no grant to any API role incl. service_role) | none (`fn_platform_prepare_mfa_reset`) | none (`fn_platform_claim_mfa_reset`, `fn_platform_mfa_reset_sign_out`, `fn_platform_complete_mfa_reset`) | none (DELETE and TRUNCATE trigger-blocked, owner included) |
 | platform_backup_runs (0030) | none (`fn_platform_list_backup_runs`, `fn_platform_system_health`) | service_role only (ops job) | service_role only, while `running` | none |
 | roles | T | **no client grant since 0031** (`fn_create_role`) | none (`fn_update_role`, `fn_set_role_active`: `role_in_use` while active users hold it) | none (`fn_delete_role`: only a role no profile ever held) |
 | role_permissions, role_station_access | T and (own role or `roles.manage`) | none | none | none (only `fn_update_role_permissions`) |

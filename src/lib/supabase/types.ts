@@ -782,36 +782,48 @@ export type Database = {
       }
       mfa_resets: {
         Row: {
+          claimed_at: string | null
           completed_at: string | null
           created_at: string
+          devices_revoked: number | null
           expires_at: string
           factor_ids: string[]
           id: string
           reason: string
           requested_by: string
           restaurant_id: string
+          sessions_revoked: number | null
+          signed_out_at: string | null
           user_id: string
         }
         Insert: {
+          claimed_at?: string | null
           completed_at?: string | null
           created_at?: string
+          devices_revoked?: number | null
           expires_at: string
           factor_ids?: string[]
           id?: string
           reason: string
           requested_by: string
           restaurant_id: string
+          sessions_revoked?: number | null
+          signed_out_at?: string | null
           user_id: string
         }
         Update: {
+          claimed_at?: string | null
           completed_at?: string | null
           created_at?: string
+          devices_revoked?: number | null
           expires_at?: string
           factor_ids?: string[]
           id?: string
           reason?: string
           requested_by?: string
           restaurant_id?: string
+          sessions_revoked?: number | null
+          signed_out_at?: string | null
           user_id?: string
         }
         Relationships: [
@@ -3080,9 +3092,21 @@ export type Database = {
         Args: { p_id: string }
         Returns: Json
       }
+      fn_mfa_recovery_resend_available: {
+        Args: { p_user_id: string }
+        Returns: boolean
+      }
       fn_mfa_reset_pending: {
         Args: { p_user_id: string }
         Returns: boolean
+      }
+      fn_mfa_reset_revoke_access: {
+        Args: { p_user_id: string; p_by: string }
+        Returns: Record<string, unknown>
+      }
+      fn_mfa_reset_target_check: {
+        Args: { p_restaurant_id: string; p_profile_id: string }
+        Returns: undefined
       }
       fn_mfa_session_ok: {
         Args: Record<PropertyKey, never>
@@ -3172,6 +3196,10 @@ export type Database = {
         Args: { p_restaurant_id: string; p_plan_id: string; p_reason: string }
         Returns: Json
       }
+      fn_platform_claim_mfa_reset: {
+        Args: { p_reset_id: string }
+        Returns: Json
+      }
       fn_platform_complete_mfa_reset: {
         Args: { p_reset_id: string }
         Returns: Json
@@ -3251,11 +3279,23 @@ export type Database = {
         }
         Returns: Json
       }
+      fn_platform_mfa_reset_sign_out: {
+        Args: { p_reset_id: string }
+        Returns: Json
+      }
       fn_platform_mfa_satisfied: {
         Args: Record<PropertyKey, never>
         Returns: boolean
       }
       fn_platform_prepare_mfa_reset: {
+        Args: {
+          p_restaurant_id: string
+          p_profile_id: string
+          p_reason: string
+        }
+        Returns: Json
+      }
+      fn_platform_prepare_recovery_resend: {
         Args: {
           p_restaurant_id: string
           p_profile_id: string

@@ -8,11 +8,12 @@ import { RpcError } from '@/lib/supabase/rpc'
 import type { TenantAdminRow } from '@/lib/supabase/platform'
 import type * as EdgeModule from '@/lib/supabase/edge-functions'
 
-const h = vi.hoisted(() => ({ resetTenantAdminMfa: vi.fn() }))
+const h = vi.hoisted(() => ({ resetTenantAdminMfa: vi.fn(), resendTenantAdminRecovery: vi.fn() }))
 vi.mock('@/lib/supabase/client', () => ({ supabase: {} }))
 vi.mock('@/lib/supabase/edge-functions', async (orig) => ({
   ...(await orig<typeof EdgeModule>()),
   resetTenantAdminMfa: h.resetTenantAdminMfa,
+  resendTenantAdminRecovery: h.resendTenantAdminRecovery,
 }))
 vi.mock('@/features/auth/StepUpDialog', () => ({
   StepUpDialog: ({
@@ -47,6 +48,7 @@ const admins: TenantAdminRow[] = [
     is_active: true,
     mfa_enrolled: true,
     mfa_reset_pending: false,
+    recovery_resend_available: false,
     trusted_devices: 2,
   },
   {
@@ -58,6 +60,7 @@ const admins: TenantAdminRow[] = [
     is_active: false,
     mfa_enrolled: false,
     mfa_reset_pending: false,
+    recovery_resend_available: false,
     trusted_devices: 0,
   },
 ]
@@ -95,6 +98,7 @@ const ok = {
 
 beforeEach(() => {
   h.resetTenantAdminMfa.mockReset()
+  h.resendTenantAdminRecovery.mockReset()
 })
 
 describe('Tenant Admins card', () => {
@@ -173,10 +177,12 @@ describe('Tenant Admins card', () => {
     expect(done).not.toHaveTextContent(/e-mailed/)
     expect(
       await screen.findByText(
-        'Sign-out could not be confirmed; their old sessions can no longer pass the authenticator check.',
+        'Sign-out could not be confirmed. Their old sessions are blocked from every authenticator-protected action.',
       ),
     ).toBeInTheDocument()
-    expect(await screen.findByText(/password-reset e-mail could not be sent/)).toBeInTheDocument()
+    expect(
+      await screen.findByText(/password-reset e-mail could not be sent.*Resend recovery email/),
+    ).toBeInTheDocument()
   })
 
   it('offers "Finish reset" for a half-done reset and sends the same request', async () => {
@@ -210,7 +216,67 @@ describe('Tenant Admins card', () => {
 
   it('offers no action for an admin who never enrolled and has nothing pending', () => {
     renderCard([{ ...(admins[0] as TenantAdminRow), mfa_enrolled: false }])
-    expect(screen.queryByRole('button', { name: /Reset authenticator|Finish/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Reset authenticator|Finish|Resend/ })).toBeNull()
+  })
+
+  it('offers "Resend recovery email" after a completed reset whose link was never used, with reason and step-up', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    const waiting: TenantAdminRow = {
+      ...(admins[0] as TenantAdminRow),
+      mfa_enrolled: false,
+      recovery_resend_available: true,
+      trusted_devices: 0,
+    }
+    const { invalidate } = renderCard([waiting])
+    const row = screen.getByRole('listitem', { name: 'Selam Bekele Tadesse' })
+    expect(row).toHaveTextContent('Authenticator:reset, waiting for the new password')
+    expect(within(row).queryByRole('button', { name: /Reset authenticator|Finish/ })).toBeNull()
+    h.resendTenantAdminRecovery
+      .mockRejectedValueOnce(new RpcError('step_up_required'))
+      .mockResolvedValueOnce({ profile_id: ADMIN, action: 'resend_recovery', recovery_sent: true })
+    await user.click(
+      within(row).getByRole('button', { name: 'Resend recovery email to Selam Bekele Tadesse' }),
+    )
+    const dialog = screen.getByRole('dialog', { name: 'Resend recovery email: Selam Bekele' })
+    expect(dialog).toHaveTextContent(/e-mails a new link to their registered address/)
+    expect(dialog).toHaveTextContent(/audit logs with your reason/)
+    await user.type(within(dialog).getByLabelText(/Reason/), 'Link expired, verified by call')
+    await user.click(within(dialog).getByRole('button', { name: 'Resend recovery email' }))
+    await user.click(await screen.findByRole('button', { name: 'Verify code' }))
+    await waitFor(() => expect(h.resendTenantAdminRecovery).toHaveBeenCalledTimes(2))
+    expect(h.resendTenantAdminRecovery).toHaveBeenLastCalledWith({
+      restaurantId: RID,
+      profileId: ADMIN,
+      reason: 'Link expired, verified by call',
+    })
+    expect(
+      await screen.findByText('A new password-reset link was e-mailed to Selam Bekele.'),
+    ).toBeInTheDocument()
+    expect(h.resetTenantAdminMfa).not.toHaveBeenCalled()
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['platform', 'tenant', RID] })
+  })
+
+  it('a refused resend shows fixed copy and keeps the dialog open', async () => {
+    const user = userEvent.setup()
+    renderCard([{ ...(admins[0] as TenantAdminRow), mfa_enrolled: false, recovery_resend_available: true }])
+    h.resendTenantAdminRecovery.mockRejectedValueOnce(new RpcError('recovery_not_available'))
+    await user.click(screen.getByRole('button', { name: 'Resend recovery email to Selam Bekele Tadesse' }))
+    const dialog = screen.getByRole('dialog', { name: /Resend recovery email/ })
+    await user.type(within(dialog).getByLabelText(/Reason/), 'Link expired')
+    await user.click(within(dialog).getByRole('button', { name: 'Resend recovery email' }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/no recovery e-mail to resend/)
+  })
+
+  it('offers no resend for an inactive admin', () => {
+    renderCard([
+      {
+        ...(admins[0] as TenantAdminRow),
+        is_active: false,
+        mfa_enrolled: false,
+        recovery_resend_available: true,
+      },
+    ])
+    expect(screen.queryByRole('button', { name: /Resend recovery email/ })).toBeNull()
   })
 
   it('shows fixed copy for a refused reset and keeps the dialog open', async () => {
@@ -238,6 +304,9 @@ describe('mfaResetErrorMessage', () => {
       'not_found',
       'no_factor',
       'reset_expired',
+      'reset_in_progress',
+      'recovery_not_available',
+      'tenant_suspended',
       'try_later',
       'server_error',
       'network',
@@ -262,7 +331,10 @@ describe('mfaResetWarnings', () => {
   it('is empty for a confirmed sign-out and a sent e-mail', () => {
     expect(mfaResetWarnings({ sessions_revoked: 0, recovery_sent: true })).toEqual([])
   })
-  it('flags an unconfirmed sign-out and an unsent e-mail', () => {
-    expect(mfaResetWarnings({ sessions_revoked: null, recovery_sent: false })).toHaveLength(2)
+  it('flags an unconfirmed sign-out and an unsent e-mail, without overstating', () => {
+    expect(mfaResetWarnings({ sessions_revoked: null, recovery_sent: false })).toEqual([
+      'Sign-out could not be confirmed. Their old sessions are blocked from every authenticator-protected action.',
+      expect.stringMatching(/could not be sent/),
+    ])
   })
 })

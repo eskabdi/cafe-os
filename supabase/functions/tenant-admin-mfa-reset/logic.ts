@@ -9,17 +9,21 @@ export const REASON_MAX = 500
 export const MAX_FACTORS = 20
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+/** 'reset' (default): remove the authenticator and force a password recovery; 'resend_recovery': send the recovery e-mail again. */
+export type MfaResetAction = 'reset' | 'resend_recovery'
 export interface MfaResetInput {
   restaurant_id: string
   profile_id: string
   reason: string
+  action: MfaResetAction
 }
 export type ParseResult = { ok: true; value: MfaResetInput } | { ok: false; error: 'invalid_request' }
 
 /**
- * Exactly { restaurant_id, profile_id, reason }. The reason is trimmed with String.prototype.trim (every Unicode white space) and
- * must be 3..500 code points here. This is a PRE-CHECK only: SQL fn_platform_reason is authoritative and trims with btrim (spaces
- * only), so a value this check accepts can still be refused there (invalid_input -> 400) but never the other way round in practice.
+ * Exactly { restaurant_id, profile_id, reason } plus an optional action ('reset' | 'resend_recovery', default 'reset'). The reason
+ * is trimmed with String.prototype.trim (every Unicode white space) and must be 3..500 code points here. This is a PRE-CHECK only:
+ * SQL fn_platform_reason is authoritative and trims with btrim (spaces only), so a value this check accepts can still be refused
+ * there (invalid_input -> 400) but never the other way round in practice.
  */
 export function parseMfaResetBody(text: string): ParseResult {
   const fail: ParseResult = { ok: false, error: 'invalid_request' }
@@ -33,15 +37,24 @@ export function parseMfaResetBody(text: string): ParseResult {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return fail
   const obj = raw as Record<string, unknown>
   const keys = Object.keys(obj)
-  if (keys.length !== 3 || !('restaurant_id' in obj) || !('profile_id' in obj) || !('reason' in obj)) return fail
+  const hasAction = 'action' in obj
+  if (keys.length !== (hasAction ? 4 : 3) || !('restaurant_id' in obj) || !('profile_id' in obj) || !('reason' in obj)) return fail
   const { restaurant_id, profile_id, reason } = obj
+  let action: MfaResetAction = 'reset'
+  if (hasAction) {
+    if (obj.action !== 'reset' && obj.action !== 'resend_recovery') return fail
+    action = obj.action
+  }
   if (typeof restaurant_id !== 'string' || !UUID_RE.test(restaurant_id)) return fail
   if (typeof profile_id !== 'string' || !UUID_RE.test(profile_id)) return fail
   if (typeof reason !== 'string') return fail
   const trimmed = reason.trim()
   const chars = [...trimmed].length
   if (chars < REASON_MIN || chars > REASON_MAX) return fail
-  return { ok: true, value: { restaurant_id: restaurant_id.toLowerCase(), profile_id: profile_id.toLowerCase(), reason: trimmed } }
+  return {
+    ok: true,
+    value: { restaurant_id: restaurant_id.toLowerCase(), profile_id: profile_id.toLowerCase(), reason: trimmed, action },
+  }
 }
 
 /**
@@ -68,16 +81,86 @@ export function interpretPrepare(
   return { resetId: d.reset_id.toLowerCase(), userId: profileId, factorIds: ids }
 }
 
+/**
+ * {reset_id, profile_id, user_id, created_at, factor_ids} from fn_platform_claim_mfa_reset: the SAME reset and profile as prepared,
+ * a parseable request time, and the factor ids the prepare step handed out. Anything else fails closed (nothing has changed yet).
+ */
+export function interpretClaim(
+  data: unknown,
+  profileId: string,
+  resetId: string,
+): { createdAt: number; factorIds: string[] } | null {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return null
+  const d = data as Record<string, unknown>
+  if (typeof d.reset_id !== 'string' || d.reset_id.toLowerCase() !== resetId) return null
+  const prepared = interpretPrepare(d, profileId)
+  if (!prepared) return null
+  if (typeof d.created_at !== 'string') return null
+  const createdAt = Date.parse(d.created_at)
+  if (!Number.isFinite(createdAt)) return null
+  return { createdAt, factorIds: prepared.factorIds }
+}
+
+export interface RevokeCounts {
+  sessionsRevoked: number | null
+  devicesRevoked: number
+}
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0
+
+/** {profile_id, sessions_revoked (null: the DB role may not touch auth.sessions), devices_revoked} from the sign-out step. */
+export function interpretSignOut(data: unknown, profileId: string): RevokeCounts | null {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return null
+  const d = data as Record<string, unknown>
+  if (d.profile_id !== profileId) return null
+  if (!isCount(d.devices_revoked)) return null
+  if (d.sessions_revoked !== null && !isCount(d.sessions_revoked)) return null
+  return { sessionsRevoked: d.sessions_revoked, devicesRevoked: d.devices_revoked }
+}
+
+/**
+ * The factors GoTrue still lists for the user AFTER the prepared ones were deleted (admin.auth.admin.mfa.listFactors). EVERY one
+ * of them is deleted: a factor the prepare step handed out failed to delete, and one enrolled after the reset was requested (e.g.
+ * by whoever holds an old session) is never legitimate. `late` counts the ones created at or after the reset request (or with no
+ * readable creation time), for the warning log. null: the answer is not a factor list (fail closed: the reset stops).
+ */
+export function remainingFactors(data: unknown, resetCreatedAt: number): { ids: string[]; late: number } | null {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return null
+  const list = (data as { factors?: unknown }).factors
+  if (!Array.isArray(list) || list.length > MAX_FACTORS * 5) return null
+  const ids: string[] = []
+  let late = 0
+  for (const f of list) {
+    if (typeof f !== 'object' || f === null) return null
+    const { id, created_at } = f as { id?: unknown; created_at?: unknown }
+    if (typeof id !== 'string' || !UUID_RE.test(id)) return null
+    const lower = id.toLowerCase()
+    if (!ids.includes(lower)) ids.push(lower)
+    const t = typeof created_at === 'string' ? Date.parse(created_at) : Number.NaN
+    if (!Number.isFinite(t) || t >= resetCreatedAt) late += 1
+  }
+  return { ids, late }
+}
+
+/** {profile_id, user_id} from fn_platform_prepare_recovery_resend, both the requested profile. */
+export function interpretResend(data: unknown, profileId: string): { userId: string } | null {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return null
+  const d = data as Record<string, unknown>
+  if (d.profile_id !== profileId || d.user_id !== profileId) return null
+  return { userId: profileId }
+}
+
 export interface CompleteResult {
   sessionsRevoked: number | null
   devicesRevoked: number
 }
-export type CompleteOutcome = ({ ok: true } & CompleteResult) | { ok: false; kind: 'forbidden' | 'not_found' }
+export type CompleteOutcome =
+  | ({ ok: true } & CompleteResult)
+  | { ok: false; kind: 'forbidden' | 'not_found' | 'tenant_suspended' }
 
 /**
  * The completion step's answer: {profile_id, sessions_revoked (null when the DB role may not touch auth.sessions), devices_revoked},
- * or {profile_id, refused: permission_denied | not_found} when the requester / target no longer qualifies after the factors were
- * already deleted (returned, not raised, so the database keeps its tenant_admin.mfa_reset_incomplete audit row).
+ * or {profile_id, refused: permission_denied | not_found | tenant_suspended} when the requester / target / tenant no longer
+ * qualifies after the factors were already deleted (returned, not raised, so the database keeps its audit rows in both trails).
  */
 export function interpretComplete(data: unknown, profileId: string): CompleteOutcome | null {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) return null
@@ -86,11 +169,11 @@ export function interpretComplete(data: unknown, profileId: string): CompleteOut
   if ('refused' in d) {
     if (d.refused === 'permission_denied') return { ok: false, kind: 'forbidden' }
     if (d.refused === 'not_found') return { ok: false, kind: 'not_found' }
+    if (d.refused === 'tenant_suspended') return { ok: false, kind: 'tenant_suspended' }
     return null
   }
-  const count = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0
-  if (!count(d.devices_revoked)) return null
-  if (d.sessions_revoked !== null && !count(d.sessions_revoked)) return null
+  if (!isCount(d.devices_revoked)) return null
+  if (d.sessions_revoked !== null && !isCount(d.sessions_revoked)) return null
   return { ok: true, sessionsRevoked: d.sessions_revoked, devicesRevoked: d.devices_revoked }
 }
 
@@ -118,6 +201,9 @@ export type FailureKind =
   | 'not_found'
   | 'no_factor'
   | 'reset_expired'
+  | 'reset_in_progress'
+  | 'recovery_not_available'
+  | 'tenant_suspended'
   | 'rate_limited'
   | 'payload_too_large'
   | 'method_not_allowed'
@@ -136,8 +222,12 @@ export function mapRpcError(message: unknown, detail?: unknown): FailureKind {
       return 'forbidden'
     case 'not_found':
       return 'not_found'
+    case 'tenant_suspended':
+      return 'tenant_suspended'
     case 'invalid_state':
-      return detail === 'no_factor' ? 'no_factor' : 'server_error'
+      if (detail === 'no_factor') return 'no_factor'
+      if (detail === 'recovery_not_available') return 'recovery_not_available'
+      return 'server_error'
     case 'invalid_input':
       return 'invalid_request'
     default:
@@ -146,8 +236,10 @@ export function mapRpcError(message: unknown, detail?: unknown): FailureKind {
 }
 
 /**
- * Maps the SQL error of the service-role completion step. reset_expired / reset_superseded / reset_completed: the reset row can no
- * longer be used (the Super Admin starts again); factors_remain and anything else: server_error (nothing was revoked, retry).
+ * Maps the SQL error of a service-role step (claim, sign-out, completion). reset_expired / reset_superseded / reset_completed: the
+ * reset row can no longer be used (the Super Admin starts again); reset_in_progress: another reset of this admin is running (claim);
+ * tenant_suspended: the tenant was suspended / cancelled meanwhile; factors_remain, reset_not_claimed and anything else:
+ * server_error (retry).
  */
 export function mapCompleteError(message: unknown, detail?: unknown): FailureKind {
   switch (typeof message === 'string' ? message : '') {
@@ -155,10 +247,12 @@ export function mapCompleteError(message: unknown, detail?: unknown): FailureKin
       return 'forbidden'
     case 'not_found':
       return 'not_found'
+    case 'tenant_suspended':
+      return 'tenant_suspended'
     case 'invalid_state':
-      return detail === 'reset_expired' || detail === 'reset_superseded' || detail === 'reset_completed'
-        ? 'reset_expired'
-        : 'server_error'
+      if (detail === 'reset_expired' || detail === 'reset_superseded' || detail === 'reset_completed') return 'reset_expired'
+      if (detail === 'reset_in_progress') return 'reset_in_progress'
+      return 'server_error'
     default:
       return 'server_error'
   }
@@ -195,6 +289,12 @@ export function shapeFailure(kind: FailureKind, retryAfterSec?: number): ShapedR
       return json(409, 'no_factor')
     case 'reset_expired':
       return json(409, 'reset_expired')
+    case 'reset_in_progress':
+      return json(409, 'reset_in_progress')
+    case 'recovery_not_available':
+      return json(409, 'recovery_not_available')
+    case 'tenant_suspended':
+      return json(409, 'tenant_suspended')
     case 'payload_too_large':
       return json(413, 'invalid_request')
     case 'method_not_allowed':
@@ -228,6 +328,15 @@ export function shapeSuccess(
       password_rotated: true,
       recovery_sent: recoverySent,
     },
+    headers: { ...NO_STORE },
+  }
+}
+
+/** The resend answer: the recovery e-mail was (or was not) accepted by GoTrue; the request itself is audited either way. */
+export function shapeResendSuccess(profileId: string, recoverySent: boolean): ShapedResponse {
+  return {
+    status: 200,
+    body: { profile_id: profileId, action: 'resend_recovery', recovery_sent: recoverySent },
     headers: { ...NO_STORE },
   }
 }

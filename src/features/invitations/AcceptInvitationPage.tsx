@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { FormError, FormField } from '@/components/ui/form-field'
 import { Input } from '@/components/ui/input'
 import { useAuth } from '@/features/auth'
-import { MIN_PASSWORD, passwordProblem } from '@/lib/domain/password'
+import { MIN_PASSWORD, PASSWORD_HINT, passwordProblem } from '@/lib/domain/password'
 import { formatDateTime } from '@/lib/domain/portal'
 import { supabase } from '@/lib/supabase/client'
 import { portalErrorMessage } from '@/lib/supabase/portal-errors'
@@ -37,7 +37,9 @@ export function AcceptInvitationPage() {
   const { status, refreshContext } = useAuth()
   const navigate = useNavigate()
   const link = useRef(takeLinkParams())
-  const [linkState, setLinkState] = useState<'verifying' | 'done' | 'failed'>(link.current ? 'verifying' : 'done')
+  const [linkState, setLinkState] = useState<'verifying' | 'done' | 'failed'>(
+    link.current ? 'verifying' : 'done',
+  )
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -87,36 +89,72 @@ export function AcceptInvitationPage() {
 
   let body: React.ReactNode
   if (linkState === 'verifying' || status === 'loading' || (signedIn && invitation.isPending)) {
-    body = <p role="status" className="text-sm text-muted-foreground">Checking your invitation…</p>
+    body = (
+      <p role="status" className="text-sm text-muted-foreground">
+        Checking your invitation…
+      </p>
+    )
   } else if (linkState === 'failed') {
-    body = <p role="alert" className="text-sm text-status-error">This invitation link is invalid or has already been used. Ask for a new invitation.</p>
+    body = (
+      <p role="alert" className="text-sm text-status-error">
+        This invitation link is invalid or has already been used. Ask for a new invitation.
+      </p>
+    )
   } else if (!signedIn) {
-    body = <p className="text-sm text-muted-foreground">Open the link in your invitation e-mail to continue.</p>
+    body = (
+      <p className="text-sm text-muted-foreground">Open the link in your invitation e-mail to continue.</p>
+    )
   } else if (invitation.isError) {
-    body = <p role="alert" className="text-sm text-status-error">The invitation could not be loaded. Reload the page.</p>
+    body = (
+      <p role="alert" className="text-sm text-status-error">
+        The invitation could not be loaded. Reload the page.
+      </p>
+    )
   } else if (!invitation.data) {
     body = <p className="text-sm text-muted-foreground">There is no open invitation for this account.</p>
   } else if (invitation.data.expired) {
-    body = <p role="alert" className="text-sm text-status-error">This invitation has expired. Ask your administrator to send a new one.</p>
+    body = (
+      <p role="alert" className="text-sm text-status-error">
+        This invitation has expired. Ask your administrator to send a new one.
+      </p>
+    )
   } else {
     const inv = invitation.data
     body = (
       <form onSubmit={(e) => void accept(e)} className="space-y-4" noValidate>
         <p className="text-sm text-ink">
-          You are invited as <strong>Tenant Admin</strong> of <strong>{inv.restaurant.name}</strong> (username {inv.username}). The
-          invitation is valid until {formatDateTime(inv.expires_at)}.
+          You are invited as <strong>Tenant Admin</strong> of <strong>{inv.restaurant.name}</strong> (username{' '}
+          {inv.username}). The invitation is valid until {formatDateTime(inv.expires_at)}.
         </p>
-        <FormField id="inv-pw" label="Choose a password" hint={`At least ${MIN_PASSWORD} characters, letters and a digit.`}>
-          {(a) => <Input {...a} type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />}
+        <FormField id="inv-pw" label="Choose a password" hint={PASSWORD_HINT}>
+          {(a) => (
+            <Input
+              {...a}
+              type="password"
+              autoComplete="new-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          )}
         </FormField>
         <FormField id="inv-pw2" label="Repeat the password">
-          {(a) => <Input {...a} type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />}
+          {(a) => (
+            <Input
+              {...a}
+              type="password"
+              autoComplete="new-password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+            />
+          )}
         </FormField>
         <FormError message={error} />
         <Button type="submit" className="w-full" disabled={busy}>
           {busy ? 'Accepting…' : 'Accept invitation'}
         </Button>
-        <p className="text-xs text-muted-foreground">Next you will set up an authenticator app; it is required for administrators.</p>
+        <p className="text-xs text-muted-foreground">
+          Next you will set up an authenticator app; it is required for administrators.
+        </p>
       </form>
     )
   }

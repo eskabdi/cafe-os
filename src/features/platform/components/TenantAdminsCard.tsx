@@ -9,7 +9,7 @@ import { formatCount, fullName, shortName } from '@/lib/domain/portal'
 import { errorCode } from '@/lib/supabase/menu-inventory-errors'
 import type { TenantAdminRow } from '@/lib/supabase/platform'
 import { portalErrorMessage } from '@/lib/supabase/portal-errors'
-import { useResetTenantAdminMfa } from '../usePlatform'
+import { useResendTenantAdminRecovery, useResetTenantAdminMfa } from '../usePlatform'
 
 /**
  * Safe, fixed copy for a failed authenticator reset. Switches on the codes tenant-admin-mfa-reset actually emits; the rest
@@ -27,6 +27,10 @@ export function mfaResetErrorMessage(err: unknown): string {
       return 'Enter a reason of 3 to 500 characters.'
     case 'reset_expired':
       return 'The reset did not finish in time. Refresh the page and run it again.'
+    case 'reset_in_progress':
+      return 'Another reset of this admin is running right now. Wait a few minutes, refresh the page and check again.'
+    case 'recovery_not_available':
+      return 'There is no recovery e-mail to resend: this admin has an authenticator again or a reset is still pending. Refresh the page.'
     case 'step_up_required':
       return 'Resetting an authenticator needs a fresh code from your own authenticator app (at most 12 hours old). Try again and enter the code.'
     default:
@@ -39,18 +43,66 @@ const RESET_EFFECTS =
 const FINISH_EFFECTS =
   'An earlier reset of this admin stopped half-way: their authenticator is already gone. Finishing it removes every trusted device, signs them out everywhere, replaces their password with a random one and e-mails them a password-reset link. It is recorded in the platform and tenant audit logs with your reason.'
 
+export const SIGN_OUT_UNCONFIRMED =
+  'Sign-out could not be confirmed. Their old sessions are blocked from every authenticator-protected action.'
+export const RECOVERY_NOT_SENT =
+  'The password-reset e-mail could not be sent. Their password was replaced, so they cannot sign in until they receive one: use "Resend recovery email" on their row.'
+
 /** The follow-up notes after a reset: sign-out not confirmed (hosted auth) and recovery e-mail not sent. */
 export function mfaResetWarnings(r: { sessions_revoked: number | null; recovery_sent: boolean }): string[] {
   const out: string[] = []
-  if (r.sessions_revoked === null)
-    out.push(
-      'Sign-out could not be confirmed; their old sessions can no longer pass the authenticator check.',
-    )
-  if (!r.recovery_sent)
-    out.push(
-      'The password-reset e-mail could not be sent. Their password was replaced, so they cannot sign in until they receive a recovery e-mail.',
-    )
+  if (r.sessions_revoked === null) out.push(SIGN_OUT_UNCONFIRMED)
+  if (!r.recovery_sent) out.push(RECOVERY_NOT_SENT)
   return out
+}
+
+const RESEND_EFFECTS =
+  'Their authenticator was reset, but they never used the password-reset link (it expires). This e-mails a new link to their registered address; they set a new password, then enrol a new authenticator. It is recorded in the platform and tenant audit logs with your reason.'
+
+/** Confirmation for re-sending the recovery e-mail of a reset Tenant Admin: audited reason, step-up aware, safe error copy. */
+export function ResendRecoveryDialog({
+  restaurantId,
+  admin,
+  run,
+  onClose,
+}: {
+  restaurantId: string
+  admin: TenantAdminRow | null
+  run: StepUpRunner['run']
+  onClose: () => void
+}) {
+  const resend = useResendTenantAdminRecovery(restaurantId)
+  const [error, setError] = useState<string | null>(null)
+  if (!admin) return null
+  const name = shortName(admin) || fullName(admin)
+
+  const confirm = async (reason: string) => {
+    setError(null)
+    try {
+      const r = await run(() => resend.mutateAsync({ profileId: admin.profile_id, reason }))
+      if (r.recovery_sent) toast.success(`A new password-reset link was e-mailed to ${name}.`)
+      else toast.warning('The password-reset e-mail could not be sent. Wait a few minutes and try again.')
+      onClose()
+    } catch (err) {
+      setError(mfaResetErrorMessage(err))
+    }
+  }
+
+  return (
+    <ReasonDialog
+      open
+      title={`Resend recovery email: ${name}`}
+      description={RESEND_EFFECTS}
+      confirmLabel="Resend recovery email"
+      busy={resend.isPending}
+      error={error}
+      onConfirm={(reason) => void confirm(reason)}
+      onCancel={() => {
+        setError(null)
+        onClose()
+      }}
+    />
+  )
 }
 
 /** Confirmation for one Tenant Admin's authenticator reset: required audited reason, step-up aware, safe error copy. */
@@ -108,7 +160,8 @@ export function ResetAuthenticatorDialog({
 /**
  * Tenant Admins of the tenant with their MFA posture (authenticator enrolled, trusted devices). Identity data only; no tenant
  * operational data. An active, enrolled admin's authenticator can be reset (lost phone) through the audited Edge Function; a reset
- * that stopped half-way (mfa_reset_pending) can be finished.
+ * that stopped half-way (mfa_reset_pending) can be finished; a completed reset whose recovery link was never used
+ * (recovery_resend_available) can have its recovery e-mail sent again.
  */
 export function TenantAdminsCard({
   restaurantId,
@@ -120,6 +173,7 @@ export function TenantAdminsCard({
   run: StepUpRunner['run']
 }) {
   const [target, setTarget] = useState<TenantAdminRow | null>(null)
+  const [resendTarget, setResendTarget] = useState<TenantAdminRow | null>(null)
   return (
     <Card title="Tenant Admins">
       {admins.length === 0 ? (
@@ -141,7 +195,9 @@ export function TenantAdminsCard({
                           ? 'enrolled'
                           : a.mfa_reset_pending
                             ? 'reset not finished'
-                            : 'not enrolled'}
+                            : a.recovery_resend_available
+                              ? 'reset, waiting for the new password'
+                              : 'not enrolled'}
                       </dd>
                     </div>
                     <div className="flex gap-1">
@@ -169,6 +225,15 @@ export function TenantAdminsCard({
                     Finish reset
                   </Button>
                 )}
+                {a.is_active && !a.mfa_enrolled && !a.mfa_reset_pending && a.recovery_resend_available && (
+                  <Button
+                    variant="outline"
+                    aria-label={`Resend recovery email to ${name}`}
+                    onClick={() => setResendTarget(a)}
+                  >
+                    Resend recovery email
+                  </Button>
+                )}
               </li>
             )
           })}
@@ -179,6 +244,12 @@ export function TenantAdminsCard({
         admin={target}
         run={run}
         onClose={() => setTarget(null)}
+      />
+      <ResendRecoveryDialog
+        restaurantId={restaurantId}
+        admin={resendTarget}
+        run={run}
+        onClose={() => setResendTarget(null)}
       />
     </Card>
   )
