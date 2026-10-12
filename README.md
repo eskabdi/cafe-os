@@ -37,3 +37,13 @@ The phase gate (also CI `quality`): `pnpm typecheck && pnpm lint && pnpm test --
 ## Layout
 
 `src/app` (shell, providers, routes) · `src/features/*` · `src/components/ui` (shadcn) · `src/lib/{supabase,domain,utils}` · `src/hooks` · `src/services` · `src/types` · `supabase/{migrations,functions,seed.sql}` · `tests/{unit,e2e}`.
+
+## Operations
+
+Production is deployed by the owner, never automatically: [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) is manual
+(`workflow_dispatch`), defaults to a dry run, and the `production` Environment requires reviewer approval.
+
+- [Production cutover runbook](docs/operations/production-cutover.md) (start here) and the per-migration [deploy checklist](docs/architecture/deploy-checklist.md)
+- [Secrets and env inventory](docs/operations/secrets.md)
+- [Backups, DR and the purge schedule](docs/operations/backups-and-dr.md) (`scripts/ops/logical-backup.sh`, dry run by default)
+- [Monitoring and incident response](docs/operations/monitoring.md)

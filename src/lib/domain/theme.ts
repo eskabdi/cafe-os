@@ -1,7 +1,7 @@
 // Tenant branding -> CSS custom properties. Only the brand tokens (primary / accent) are ever overridden; the semantic status
 // colours (--status-*) are platform-wide and deliberately absent here.
 
-import { readableForeground } from './tile-style'
+import { contrastRatio, readableForeground } from './tile-style'
 
 export const DEFAULT_PRIMARY = '#dc2626'
 export const DEFAULT_ACCENT = '#b91c1c'
@@ -58,4 +58,22 @@ export function brandThemeVars(branding: unknown): Record<BrandVar, string> {
     '--brand-accent': hexToHslTriplet(accent),
     '--brand-accent-foreground': hexToHslTriplet(readableForeground(accent)),
   }
+}
+
+/** WCAG AA minimum for normal text. Branded buttons render white text on the brand colour. */
+export const MIN_TEXT_CONTRAST = 4.5
+
+/**
+ * Contrast of white button text on a brand colour, or null when the value is not a strict #rrggbb.
+ * Used by the branding editor to WARN (not block) when the ratio is under MIN_TEXT_CONTRAST.
+ */
+export function whiteTextContrast(value: unknown): number | null {
+  if (typeof value !== 'string' || !STRICT_HEX.test(value)) return null
+  return contrastRatio(value.toLowerCase(), '#ffffff')
+}
+
+/** True when white text on this brand colour falls below WCAG AA (4.5:1). Invalid input is not flagged (the hex check reports it). */
+export function hasLowWhiteTextContrast(value: unknown): boolean {
+  const ratio = whiteTextContrast(value)
+  return ratio !== null && ratio < MIN_TEXT_CONTRAST
 }

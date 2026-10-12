@@ -169,6 +169,11 @@ were re-run unchanged and still pass.
    host must replicate them (deploy-checklist).
 4. The `*.supabase.co` wildcard in CSP must be narrowed to the project origin at deploy time (already noted in `_headers`).
 
+Phase 12 status: (2) the branding editor now warns when white text on the primary or accent colour is under 4.5:1
+(`whiteTextContrast` / `hasLowWhiteTextContrast` in `src/lib/domain/theme.ts`, unit-tested; a warning, not a block);
+(4) `.github/workflows/deploy.yml` rewrites the wildcard in `dist/_headers` to `https://<ref>.supabase.co` and fails if one remains;
+(1) and (3) are staging checks in `docs/operations/production-cutover.md` (sections 5 and 7, go/no-go).
+
 ## Verification (this branch)
 
 | check | result |
