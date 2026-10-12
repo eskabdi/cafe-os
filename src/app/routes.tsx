@@ -270,7 +270,7 @@ export const routes: RouteObject[] = [
                           </RequireNavPermission>
                         ),
                       },
-                      // Generated from the nav catalogue: modules without a page yet (Day close, ...) as "coming soon" placeholders.
+                      // Generated from the nav catalogue: modules without a page yet as "coming soon" placeholders (none left after Phase 9).
                       ...placeholderModuleRoutes(),
                       // ONE generic board for every station row (by UUID); never a per-station route.
                       {

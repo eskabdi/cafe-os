@@ -25,7 +25,7 @@ import {
 } from '@/lib/supabase/day'
 import { errorCode } from '@/lib/supabase/menu-inventory-errors'
 import { fetchOpenDay, ordersKeys } from '@/lib/supabase/orders'
-import { fetchPaymentMethods, paymentsKeys } from '@/lib/supabase/payments'
+import { fetchPaymentMethods, fetchTenantTimezone, paymentsKeys } from '@/lib/supabase/payments'
 
 const newKey = () => crypto.randomUUID()
 /** Fixed semantic colours (never tenant-branded). */
@@ -34,7 +34,20 @@ const TONE_CLASS: Record<VarianceTone, string> = {
   minor: 'text-status-warning',
   major: 'text-status-error',
 }
-const signed = (v: number) => `${v > 0 ? '+' : ''}${formatEtb(v)}`
+/** "ETB +5.00" / "ETB -11.00" / "ETB 0.00". */
+const signed = (v: number) => (v > 0 ? formatEtb(v).replace('ETB ', 'ETB +') : formatEtb(v))
+/** Dates are shown in the Ethiopian calendar and clock, in the restaurant's time zone. */
+function useTenantTz(): string {
+  const { context } = useAuth()
+  const rid = context?.restaurant?.id ?? ''
+  const tz = useQuery({
+    queryKey: paymentsKeys.timezone(rid),
+    queryFn: fetchTenantTimezone,
+    enabled: Boolean(rid),
+    staleTime: 3_600_000,
+  })
+  return tz.data ?? 'Africa/Addis_Ababa'
+}
 
 function dayErrorMessage(err: unknown): string {
   const { code, detail } = errorCode(err)
@@ -44,12 +57,17 @@ function dayErrorMessage(err: unknown): string {
   }
   if (code === 'day_closed') return 'There is no open business day.'
   if (code === 'invalid_state' && detail === 'day_open') return 'A business day is already open.'
-  if (code === 'invalid_input' && detail === 'counted_cash') return 'Enter the counted cash (0 or more, at most 2 decimals).'
-  if (code === 'invalid_input' && detail === 'station_counts') return 'A stock count is not valid (0 or more, at most 3 decimals).'
-  if (code === 'invalid_input' && detail === 'opening_float') return 'Enter the opening float (0 or more, at most 2 decimals).'
+  if (code === 'invalid_input' && detail === 'counted_cash')
+    return 'Enter the counted cash (0 or more, at most 2 decimals).'
+  if (code === 'invalid_input' && detail === 'station_counts')
+    return 'A stock count is not valid (0 or more, at most 3 decimals).'
+  if (code === 'invalid_input' && detail === 'opening_float')
+    return 'Enter the opening float (0 or more, at most 2 decimals).'
   if (code === 'permission_denied') return 'You do not have permission to do this.'
-  if (code === 'idempotency_conflict') return 'An earlier attempt may already have gone through. Refresh before trying again.'
-  if (code === 'tenant_suspended' || code === 'tenant_read_only') return 'This restaurant account cannot change the business day right now.'
+  if (code === 'idempotency_conflict')
+    return 'An earlier attempt may already have gone through. Refresh before trying again.'
+  if (code === 'tenant_suspended' || code === 'tenant_read_only')
+    return 'This restaurant account cannot change the business day right now.'
   return 'We could not confirm whether this went through. Press the button again: it will not be done twice.'
 }
 
@@ -59,10 +77,16 @@ function dayErrorMessage(err: unknown): string {
  * new-day workflow (the only way forward: a closed day never reopens). History of closed days stays readable.
  */
 export function DayClosePage() {
+  const tz = useTenantTz()
   const { context, can } = useAuth()
   const rid = context?.restaurant?.id ?? ''
   const qc = useQueryClient()
-  const openDayQ = useQuery({ queryKey: ordersKeys.openDay(rid), queryFn: fetchOpenDay, enabled: Boolean(rid), initialData: context?.open_day ?? null })
+  const openDayQ = useQuery({
+    queryKey: ordersKeys.openDay(rid),
+    queryFn: fetchOpenDay,
+    enabled: Boolean(rid),
+    initialData: context?.open_day ?? null,
+  })
   const history = useQuery({ queryKey: dayKeys.history(rid), queryFn: fetchDays, enabled: Boolean(rid) })
   const [sheet, setSheet] = useState<Day | null>(null)
   const refreshAll = () => {
@@ -78,7 +102,9 @@ export function DayClosePage() {
         <BalanceSheet day={sheet} onDone={() => setSheet(null)} />
       ) : openDayQ.data ? (
         <>
-          {(can('expenses.manage') || can('expenses.view')) && <ExpensesCard dayId={openDayQ.data.id} canManage={can('expenses.manage')} />}
+          {(can('expenses.manage') || can('expenses.view')) && (
+            <ExpensesCard dayId={openDayQ.data.id} canManage={can('expenses.manage')} />
+          )}
           {can('day_close.execute') && (
             <CloseCard
               onClosed={(d) => {
@@ -105,12 +131,24 @@ export function DayClosePage() {
               <caption className="sr-only">Business days</caption>
               <thead className="bg-muted text-left">
                 <tr>
-                  <th scope="col" className="px-3 py-2">Day</th>
-                  <th scope="col" className="px-3 py-2">Closed</th>
-                  <th scope="col" className="px-3 py-2 text-right">Collected</th>
-                  <th scope="col" className="px-3 py-2 text-right">Expenses</th>
-                  <th scope="col" className="px-3 py-2 text-right">Cash variance</th>
-                  <th scope="col" className="px-3 py-2"><span className="sr-only">Actions</span></th>
+                  <th scope="col" className="px-3 py-2">
+                    Day
+                  </th>
+                  <th scope="col" className="px-3 py-2">
+                    Closed
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-right">
+                    Collected
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-right">
+                    Expenses
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-right">
+                    Cash variance
+                  </th>
+                  <th scope="col" className="px-3 py-2">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
@@ -120,10 +158,18 @@ export function DayClosePage() {
                       {d.day_no}
                       {d.status === 'open' && <span className="ml-2 text-xs text-status-success">open</span>}
                     </td>
-                    <td className="px-3 py-2 font-amharic">{d.closed_at ? formatEthiopianDateTime(d.closed_at) : '—'}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{d.gross_collected != null ? formatEtb(d.gross_collected) : '—'}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{d.expenses_total != null ? formatEtb(d.expenses_total) : '—'}</td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${d.cash_variance != null ? TONE_CLASS[cashVarianceTone(d.cash_variance)] : ''}`}>
+                    <td className="px-3 py-2 font-amharic">
+                      {d.closed_at ? formatEthiopianDateTime(d.closed_at, tz) : '—'}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {d.gross_collected != null ? formatEtb(d.gross_collected) : '—'}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {d.expenses_total != null ? formatEtb(d.expenses_total) : '—'}
+                    </td>
+                    <td
+                      className={`px-3 py-2 text-right tabular-nums ${d.cash_variance != null ? TONE_CLASS[cashVarianceTone(d.cash_variance)] : ''}`}
+                    >
                       {d.cash_variance != null ? signed(d.cash_variance) : '—'}
                     </td>
                     <td className="px-3 py-2 text-right">
@@ -148,9 +194,21 @@ function ExpensesCard({ dayId, canManage }: { dayId: string; canManage: boolean 
   const { context } = useAuth()
   const rid = context?.restaurant?.id ?? ''
   const qc = useQueryClient()
-  const cats = useQuery({ queryKey: dayKeys.expenseCategories(rid), queryFn: fetchExpenseCategories, enabled: Boolean(rid) })
-  const methods = useQuery({ queryKey: paymentsKeys.methods(rid), queryFn: fetchPaymentMethods, enabled: Boolean(rid && canManage) })
-  const list = useQuery({ queryKey: dayKeys.expenses(rid, dayId), queryFn: () => fetchExpenses(dayId), enabled: Boolean(rid) })
+  const cats = useQuery({
+    queryKey: dayKeys.expenseCategories(rid),
+    queryFn: fetchExpenseCategories,
+    enabled: Boolean(rid),
+  })
+  const methods = useQuery({
+    queryKey: paymentsKeys.methods(rid),
+    queryFn: fetchPaymentMethods,
+    enabled: Boolean(rid && canManage),
+  })
+  const list = useQuery({
+    queryKey: dayKeys.expenses(rid, dayId),
+    queryFn: () => fetchExpenses(dayId),
+    enabled: Boolean(rid),
+  })
   const [cat, setCat] = useState('')
   const [method, setMethod] = useState('')
   const [amount, setAmount] = useState('')
@@ -161,7 +219,13 @@ function ExpensesCard({ dayId, canManage }: { dayId: string; canManage: boolean 
 
   const add = useMutation({
     mutationFn: () =>
-      addExpense({ restaurantId: rid, categoryId: cat, paymentMethodId: method, amount: amountValue ?? 0, description: desc.trim() || null }),
+      addExpense({
+        restaurantId: rid,
+        categoryId: cat,
+        paymentMethodId: method,
+        amount: amountValue ?? 0,
+        description: desc.trim() || null,
+      }),
     onSuccess: () => {
       setAmount('')
       setDesc('')
@@ -169,7 +233,12 @@ function ExpensesCard({ dayId, canManage }: { dayId: string; canManage: boolean 
       toast.success('Expense recorded')
       void qc.invalidateQueries({ queryKey: ['day', rid] })
     },
-    onError: (e) => setError(e instanceof Error && e.message === 'day_closed' ? 'There is no open business day.' : 'The expense could not be recorded.'),
+    onError: (e) =>
+      setError(
+        e instanceof Error && e.message === 'day_closed'
+          ? 'There is no open business day.'
+          : 'The expense could not be recorded.',
+      ),
   })
 
   return (
@@ -210,12 +279,25 @@ function ExpensesCard({ dayId, canManage }: { dayId: string; canManage: boolean 
             )}
           </FormField>
           <FormField id="exp-amount" label="Amount (ETB)">
-            {(a11y) => <Input {...a11y} inputMode="decimal" value={amount} maxLength={14} onChange={(e) => setAmount(e.target.value)} />}
+            {(a11y) => (
+              <Input
+                {...a11y}
+                inputMode="decimal"
+                value={amount}
+                maxLength={14}
+                onChange={(e) => setAmount(e.target.value)}
+              />
+            )}
           </FormField>
           <FormField id="exp-desc" label="Description (optional)">
-            {(a11y) => <Input {...a11y} value={desc} maxLength={300} onChange={(e) => setDesc(e.target.value)} />}
+            {(a11y) => (
+              <Input {...a11y} value={desc} maxLength={300} onChange={(e) => setDesc(e.target.value)} />
+            )}
           </FormField>
-          <Button type="submit" disabled={!cat || !method || !amountValue || amountValue <= 0 || add.isPending}>
+          <Button
+            type="submit"
+            disabled={!cat || !method || !amountValue || amountValue <= 0 || add.isPending}
+          >
             Add
           </Button>
         </form>
@@ -230,7 +312,8 @@ function ExpensesCard({ dayId, canManage }: { dayId: string; canManage: boolean 
                 {x.description && <span className="ml-2 text-muted-foreground">{x.description}</span>}
               </span>
               <span className="shrink-0 tabular-nums">
-                {formatEtb(x.amount)} <span className="text-xs text-muted-foreground">{x.method_name_snapshot}</span>
+                {formatEtb(x.amount)}{' '}
+                <span className="text-xs text-muted-foreground">{x.method_name_snapshot}</span>
               </span>
             </li>
           ))}
@@ -243,9 +326,14 @@ function ExpensesCard({ dayId, canManage }: { dayId: string; canManage: boolean 
 }
 
 function CloseCard({ onClosed }: { onClosed: (d: Day) => void }) {
+  const tz = useTenantTz()
   const { context } = useAuth()
   const rid = context?.restaurant?.id ?? ''
-  const preview = useQuery({ queryKey: dayKeys.preview(rid), queryFn: fetchClosePreview, enabled: Boolean(rid) })
+  const preview = useQuery({
+    queryKey: dayKeys.preview(rid),
+    queryFn: fetchClosePreview,
+    enabled: Boolean(rid),
+  })
   const [cash, setCash] = useState('')
   const [counts, setCounts] = useState<Record<string, string>>({})
   const [note, setNote] = useState('')
@@ -293,7 +381,8 @@ function CloseCard({ onClosed }: { onClosed: (d: Day) => void }) {
   })
 
   if (preview.isPending) return <PageSkeleton label="Preparing the close sheet" />
-  if (preview.isError) return <ErrorState title="The close sheet could not be prepared" onRetry={() => void preview.refetch()} />
+  if (preview.isError)
+    return <ErrorState title="The close sheet could not be prepared" onRetry={() => void preview.refetch()} />
   const p = preview.data
   const cashVar = cashValue !== null ? cashValue - p.expected_cash : null
   const touch = () => {
@@ -309,11 +398,17 @@ function CloseCard({ onClosed }: { onClosed: (d: Day) => void }) {
         <h2 id="day-close" className="text-lg font-semibold text-ink">
           Close business day {p.day_no}
         </h2>
-        <span className="font-amharic text-sm text-muted-foreground">opened {formatEthiopianDateTime(p.opened_at)}</span>
+        <span className="font-amharic text-sm text-muted-foreground">
+          opened {formatEthiopianDateTime(p.opened_at, tz)}
+        </span>
       </div>
       {p.unpaid_orders > 0 && (
-        <p role="alert" className="rounded-md border border-status-warning bg-status-warning/10 p-3 text-sm text-ink">
-          {p.unpaid_orders} order(s) are still unpaid. They must be paid, put on an installment voucher, or cancelled before the day can close.
+        <p
+          role="alert"
+          className="rounded-md border border-status-warning bg-status-warning/10 p-3 text-sm text-ink"
+        >
+          {p.unpaid_orders} order(s) are still unpaid. They must be paid, put on an installment voucher, or
+          cancelled before the day can close.
         </p>
       )}
       <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 text-sm md:max-w-md">
@@ -333,7 +428,13 @@ function CloseCard({ onClosed }: { onClosed: (d: Day) => void }) {
         <dd className="text-right font-semibold tabular-nums">{formatEtb(p.expected_cash)}</dd>
       </dl>
       <div className="grid gap-4 md:grid-cols-2">
-        <FormField id="close-cash" label="Counted cash (ETB)" error={cash.trim() !== '' && cashValue === null ? 'Enter an amount like 2500 or 2500.50.' : undefined}>
+        <FormField
+          id="close-cash"
+          label="Counted cash (ETB)"
+          error={
+            cash.trim() !== '' && cashValue === null ? 'Enter an amount like 2500 or 2500.50.' : undefined
+          }
+        >
           {(a11y) => (
             <Input
               {...a11y}
@@ -350,7 +451,10 @@ function CloseCard({ onClosed }: { onClosed: (d: Day) => void }) {
         <p className="self-end text-sm" aria-live="polite">
           {cashVar !== null && (
             <>
-              Variance: <span className={`font-semibold tabular-nums ${TONE_CLASS[cashVarianceTone(cashVar)]}`}>{signed(cashVar)}</span>
+              Variance:{' '}
+              <span className={`font-semibold tabular-nums ${TONE_CLASS[cashVarianceTone(cashVar)]}`}>
+                {signed(cashVar)}
+              </span>
             </>
           )}
         </p>
@@ -362,9 +466,15 @@ function CloseCard({ onClosed }: { onClosed: (d: Day) => void }) {
             <thead className="text-left text-xs text-muted-foreground">
               <tr>
                 <th scope="col">Ingredient</th>
-                <th scope="col" className="text-right">Expected</th>
-                <th scope="col" className="text-right">Counted</th>
-                <th scope="col" className="text-right">Variance</th>
+                <th scope="col" className="text-right">
+                  Expected
+                </th>
+                <th scope="col" className="text-right">
+                  Counted
+                </th>
+                <th scope="col" className="text-right">
+                  Variance
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-line">
@@ -392,7 +502,9 @@ function CloseCard({ onClosed }: { onClosed: (d: Day) => void }) {
                         }}
                       />
                     </td>
-                    <td className={`py-1 text-right tabular-nums ${v !== null ? TONE_CLASS[stockVarianceTone(v, it.expected)] : 'text-status-error'}`}>
+                    <td
+                      className={`py-1 text-right tabular-nums ${v !== null ? TONE_CLASS[stockVarianceTone(v, it.expected)] : 'text-status-error'}`}
+                    >
                       {v !== null ? `${v > 0 ? '+' : ''}${formatQty(v)}` : 'invalid'}
                     </td>
                   </tr>
@@ -417,7 +529,11 @@ function CloseCard({ onClosed }: { onClosed: (d: Day) => void }) {
       </FormField>
       <FormError message={error} />
       <div className="flex flex-wrap gap-2">
-        <Button type="button" disabled={cashValue === null || p.unpaid_orders > 0 || close.isPending} onClick={() => setConfirm(true)}>
+        <Button
+          type="button"
+          disabled={cashValue === null || p.unpaid_orders > 0 || close.isPending}
+          onClick={() => setConfirm(true)}
+        >
           Close the day
         </Button>
         {unsure && !close.isPending && (
@@ -459,7 +575,9 @@ function OpenDayCard({ onOpened }: { onOpened: () => void }) {
       <h2 id="day-open" className="text-lg font-semibold text-ink">
         Open a new business day
       </h2>
-      <p className="text-sm text-muted-foreground">No business day is open. Orders, payments and stock movements start once a day is opened.</p>
+      <p className="text-sm text-muted-foreground">
+        No business day is open. Orders, payments and stock movements start once a day is opened.
+      </p>
       <form
         className="flex flex-wrap items-end gap-3"
         onSubmit={(e) => {
@@ -492,11 +610,16 @@ function OpenDayCard({ onOpened }: { onOpened: () => void }) {
 }
 
 function BalanceSheet({ day, onDone }: { day: Day; onDone: () => void }) {
+  const tz = useTenantTz()
   return (
-    <section aria-label={`Balance sheet day ${day.day_no}`} className="receipt-print space-y-3 rounded-lg border border-line bg-white p-4 text-sm">
+    <section
+      aria-label={`Balance sheet day ${day.day_no}`}
+      className="receipt-print space-y-3 rounded-lg border border-line bg-white p-4 text-sm"
+    >
       <h2 className="text-lg font-semibold text-ink">Balance sheet — business day {day.day_no}</h2>
       <p className="font-amharic text-muted-foreground">
-        {formatEthiopianDateTime(day.opened_at)} → {day.closed_at ? formatEthiopianDateTime(day.closed_at) : ''}
+        {formatEthiopianDateTime(day.opened_at, tz)} →{' '}
+        {day.closed_at ? formatEthiopianDateTime(day.closed_at, tz) : ''}
         {day.closed_by ? ` · closed by ${day.closed_by}` : ''}
       </p>
       <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 md:max-w-md">
@@ -513,7 +636,11 @@ function BalanceSheet({ day, onDone }: { day: Day; onDone: () => void }) {
         <dt>Counted cash</dt>
         <dd className="text-right tabular-nums">{formatEtb(day.counted_cash ?? 0)}</dd>
         <dt>Cash variance</dt>
-        <dd className={`text-right font-semibold tabular-nums ${TONE_CLASS[cashVarianceTone(day.cash_variance ?? 0)]}`}>{signed(day.cash_variance ?? 0)}</dd>
+        <dd
+          className={`text-right font-semibold tabular-nums ${TONE_CLASS[cashVarianceTone(day.cash_variance ?? 0)]}`}
+        >
+          {signed(day.cash_variance ?? 0)}
+        </dd>
       </dl>
       <div className="grid gap-3 md:grid-cols-2">
         <div>

@@ -29,7 +29,7 @@ vi.mock('@/lib/supabase/stations', async (orig) => ({
 const { TenantShell } = await import('@/features/tenant/TenantShell')
 const { default: TenantHome, TenantNotFound } = await import('@/features/tenant/TenantRoutes')
 const { StationKDS } = await import('@/features/stations/StationKDS')
-const { RequireStationAccess } = await import('./RouteGuards')
+const { RequireNavPermission, RequireStationAccess } = await import('./RouteGuards')
 const { CONTEXT_REFRESH_DEBOUNCE_MS } = await import('@/features/stations/StationsProvider')
 const { placeholderModuleRoutes } = await import('./module-routes')
 
@@ -80,6 +80,15 @@ const routes: RouteObject[] = [
     element: <TenantShell />,
     children: [
       ...placeholderModuleRoutes(),
+      // a real guarded module route, shaped like the ones in src/app/routes.tsx
+      {
+        path: 'day-close',
+        element: (
+          <RequireNavPermission permission="day_close.execute">
+            <h1>Day close</h1>
+          </RequireNavPermission>
+        ),
+      },
       {
         path: 'stations/:stationId',
         element: (
@@ -282,10 +291,13 @@ describe('dynamic station navigation', () => {
 })
 
 describe('route guards', () => {
-  it('a permitted module renders its page (day close, Phase 9)', async () => {
+  it('every catalogue module has its own page now (no coming-soon placeholders left)', () => {
+    expect(placeholderModuleRoutes()).toEqual([])
+  })
+
+  it('a permitted module renders behind its guard', async () => {
     renderAt('/r/demo-cafe/day-close', auth(ctx(['day_close.execute'])))
     expect(await screen.findByRole('heading', { level: 1, name: 'Day close' })).toBeInTheDocument()
-    expect(screen.queryByText('Coming soon')).toBeNull()
   })
 
   it('a module without the permission renders 403', async () => {
