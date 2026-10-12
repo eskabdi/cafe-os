@@ -87,7 +87,10 @@ export const PRINT_LOGO_TIMEOUT_MS = 3000
  * Resolves once the image is decoded, has failed, or after `timeoutMs`, whichever comes first; never rejects. Uses
  * img.decode() where available, the load / error events otherwise. A null image (no logo) resolves at once.
  */
-export async function waitForImage(img: HTMLImageElement | null, timeoutMs = PRINT_LOGO_TIMEOUT_MS): Promise<void> {
+export async function waitForImage(
+  img: HTMLImageElement | null,
+  timeoutMs = PRINT_LOGO_TIMEOUT_MS,
+): Promise<void> {
   if (!img) return
   if (img.complete && img.naturalWidth > 0) return
   const settled: Promise<unknown> =

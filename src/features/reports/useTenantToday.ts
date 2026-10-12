@@ -19,10 +19,11 @@ export function useTenantToday(timeZone: string | null): string {
     setToday(todayIn(zone))
   }
   useEffect(() => {
-    const refresh = () => setToday((prev) => {
-      const next = todayIn(zone)
-      return next === prev ? prev : next
-    })
+    const refresh = () =>
+      setToday((prev) => {
+        const next = todayIn(zone)
+        return next === prev ? prev : next
+      })
     const onVisibility = () => {
       if (document.visibilityState === 'visible') refresh()
     }

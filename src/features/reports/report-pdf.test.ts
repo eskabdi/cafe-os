@@ -65,7 +65,9 @@ describe('renderReportPdf', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('offline')))
     const text = async (restaurantName: string) =>
       new TextDecoder('latin1').decode(
-        new Uint8Array(await (await renderReportPdf(view, { ...meta, restaurantName }, generated)).blob.arrayBuffer()),
+        new Uint8Array(
+          await (await renderReportPdf(view, { ...meta, restaurantName }, generated)).blob.arrayBuffer(),
+        ),
       )
     const amharic = await text('ቡና ቤት')
     expect(amharic).toContain('(demo-cafe) Tj')

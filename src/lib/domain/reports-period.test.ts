@@ -169,6 +169,7 @@ describe('parseEthiopianYear (the month picker year field)', () => {
     expect(parseEthiopianYear(' 2018 ')).toBe(2018)
     expect(parseEthiopianYear(String(MIN_ETH_YEAR))).toBe(MIN_ETH_YEAR)
     expect(parseEthiopianYear(String(MAX_ETH_YEAR))).toBe(MAX_ETH_YEAR)
-    for (const bad of ['', '20', '201', '1989', '2101', '2018.5', '2e3', 'abcd', '-2018', '20180']) expect(parseEthiopianYear(bad)).toBeNull()
+    for (const bad of ['', '20', '201', '1989', '2101', '2018.5', '2e3', 'abcd', '-2018', '20180'])
+      expect(parseEthiopianYear(bad)).toBeNull()
   })
 })

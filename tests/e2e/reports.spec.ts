@@ -411,7 +411,9 @@ test('a manager report: period label, report types with their own tables, names 
   for (const body of m.periodBodies) expect(Object.keys(body).sort()).toEqual(['p_from', 'p_to'])
 })
 
-test("'today' is the tenant-local date (restaurants.timezone), not the browser's or Addis Ababa's", async ({ page }) => {
+test("'today' is the tenant-local date (restaurants.timezone), not the browser's or Addis Ababa's", async ({
+  page,
+}) => {
   // 20:00 UTC on 12 Oct = 23:00 in Addis Ababa (still the 12th) but 10:00 on 13 Oct in Pacific/Kiritimati (UTC+14)
   await page.clock.setFixedTime(new Date('2026-10-12T20:00:00Z'))
   const m = await setup(page, MANAGER, { timezone: 'Pacific/Kiritimati' })

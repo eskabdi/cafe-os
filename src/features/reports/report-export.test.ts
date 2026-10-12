@@ -27,7 +27,12 @@ describe('waitForImage (print waits for the logo)', () => {
     ok()
     await p
     expect(done).toBe(true)
-    await expect(waitForImage(pending(document.createElement('img'), () => Promise.reject(new Error('broken'))), 10_000)).resolves.toBeUndefined()
+    await expect(
+      waitForImage(
+        pending(document.createElement('img'), () => Promise.reject(new Error('broken'))),
+        10_000,
+      ),
+    ).resolves.toBeUndefined()
   })
 
   it('without decode(): the load / error event settles it', async () => {
