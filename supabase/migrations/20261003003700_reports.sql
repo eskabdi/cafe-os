@@ -4,14 +4,17 @@
 --  Client RPCs (Private, authenticated):
 --  * fn_report(p_from_day_no, p_to_day_no)   reports.view
 --      Business days from..to by day number. Both null: the open day, or the last day when none is open. ONE bound null: that single
---      day (coalesce). from/to < 1, to < from, or more than 367 days -> invalid_input|day_range.
+--      day (coalesce). from/to < 1, to < from, or a span of more than 366 days (to - from > 365, the same limit as the period
+--      RPCs) -> invalid_input|day_range. Compatibility API: the web client uses fn_report_period; fn_report stays granted.
 --  * fn_report_period(p_from date, p_to date)   reports.view
 --      Business days whose opened_at, in the tenant's time zone (restaurants.timezone), falls on a calendar date within [from, to]
---      inclusive. null bound, to < from, or more than 366 calendar days -> invalid_input|period. Same document as fn_report plus
+--      inclusive (a sargable opened_at range: [local midnight of from, local midnight of to + 1)). null bound, to < from, or more than 366 calendar days -> invalid_input|period. Same document as fn_report plus
 --      'period' {from, to}.
 --  * fn_log_report_export(p_report, p_from, p_to, p_format)   reports.view AND reports.export (AND the section permission of that
 --      report type): audit 'report.exported' {report, from, to, format}; returns {ok: true, exported_at}. A read action: past_due
---      (tenant_read_only) does NOT block it; suspended / cancelled -> tenant_suspended.
+--      (tenant_read_only) does NOT block it; suspended / cancelled -> tenant_suspended. Throttled per user: 20 exports in the last
+--      60 seconds -> rate_limited. reports.export is an AUDIT / UX control, not a data boundary: every figure an export contains
+--      already reaches a reports.view holder through fn_report_period, and the audited period is the client's claim.
 --  * fn_dashboard()   dashboard.view: the open day's floor (counts by status, last 15 visible orders), money figures with
 --      reports.view AND payments.view, low_stock_count with inventory.view (station-scoped like ingredients_select).
 --
@@ -26,7 +29,8 @@
 --      installments  vouchers.view                     kpis.vouchers_outstanding, kpis.vouchers_overdue, installments
 --      inventory     inventory.view                    inventory {low_stock, consumption}, station-scoped exactly like the
 --                                                      ingredients_select / stock_movements_select RLS predicates
---      staff         reports.staff                     by_waiter
+--      staff         reports.staff                     by_waiter, cancellations.items[].by_name, reversals.items[].by_name
+--                                                      (the staff member's name; null without it)
 --
 --  Money from payments (net of reversals, by the payment's business day); sales from orders (not cancelled, by the order's day).
 --  Names are the LATEST snapshot (payment method, waiter, item, category) or the row's name (expense category, ingredient), always
@@ -95,6 +99,10 @@ create trigger trg_order_item_category_snapshot before insert or update of categ
 -- period -> business days. Already present and reused: stock_movements_day_idx (0016) for consumption per day, and the partial
 -- index installments_due_idx (restaurant_id, due_date) WHERE NOT paid (0005) for the set-based outstanding / overdue aggregate.
 create index if not exists day_sessions_opened_idx on public.day_sessions (restaurant_id, opened_at);
+-- the export throttle of fn_log_report_export (count of the caller's recent report.exported rows). The existing audit_logs
+-- indexes are (restaurant_id, created_at desc), (restaurant_id, table_name, record_id) and (restaurant_id, actor_id): none
+-- bounds both the actor and the time window, so a small partial index over the export rows only.
+create index audit_logs_report_export_idx on public.audit_logs (restaurant_id, actor_id, created_at) where event = 'report.exported';
 
 -- ── internal: day range -> day ids ──────────────────────────────────────────────────────────────────────────────────────────
 create or replace function public.fn_report_days(p_rid uuid, p_from integer, p_to integer)
@@ -225,15 +233,26 @@ begin
     'days', (select coalesce(jsonb_agg(jsonb_build_object('id', d.id, 'day_no', d.day_no, 'status', d.status, 'opened_at', d.opened_at,
                                                           'closed_at', d.closed_at) order by d.day_no), '[]'::jsonb)
              from public.day_sessions d where d.restaurant_id = p_rid and d.id = any (p_days)),
+    -- one aggregate pass per source table (GROUP BY day), joined to the days: no per-day correlated subqueries
     'by_day', (select coalesce(jsonb_agg(jsonb_build_object(
                  'day_session_id', d.id, 'day_no', d.day_no, 'date', (d.opened_at at time zone v_tz)::date,
-                 'orders', (select count(*)::int from public.orders o where o.restaurant_id = p_rid and o.day_session_id = d.id and o.status <> 'cancelled'),
-                 'sales', (select coalesce(sum(o.total), 0) from public.orders o where o.restaurant_id = p_rid and o.day_session_id = d.id and o.status <> 'cancelled'),
-                 'collected', case when v_pay then (select coalesce(sum(case when p.kind = 'reversal' then -p.amount else p.amount end), 0)
-                                                    from public.payments p where p.restaurant_id = p_rid and p.day_session_id = d.id) end,
-                 'expenses', case when v_exp then (select coalesce(sum(e.amount), 0) from public.expenses e
-                                                   where e.restaurant_id = p_rid and e.day_session_id = d.id) end) order by d.day_no), '[]'::jsonb)
-               from public.day_sessions d where d.restaurant_id = p_rid and d.id = any (p_days)),
+                 'orders', coalesce(od.n, 0), 'sales', coalesce(od.sales, 0),
+                 'collected', case when v_pay then coalesce(pd.amount, 0) end,
+                 'expenses', case when v_exp then coalesce(ed.amount, 0) end) order by d.day_no), '[]'::jsonb)
+               from public.day_sessions d
+               left join (select o.day_session_id id, count(*)::int n, sum(o.total) sales
+                          from public.orders o
+                          where o.restaurant_id = p_rid and o.day_session_id = any (p_days) and o.status <> 'cancelled'
+                          group by o.day_session_id) od on od.id = d.id
+               left join (select p.day_session_id id, sum(case when p.kind = 'reversal' then -p.amount else p.amount end) amount
+                          from public.payments p
+                          where v_pay and p.restaurant_id = p_rid and p.day_session_id = any (p_days)
+                          group by p.day_session_id) pd on pd.id = d.id
+               left join (select e.day_session_id id, sum(e.amount) amount
+                          from public.expenses e
+                          where v_exp and e.restaurant_id = p_rid and e.day_session_id = any (p_days)
+                          group by e.day_session_id) ed on ed.id = d.id
+               where d.restaurant_id = p_rid and d.id = any (p_days)),
     'by_category', (select coalesce(jsonb_agg(jsonb_build_object('category_id', x.id, 'name', x.name, 'qty', x.qty, 'amount', x.amount)
                                               order by x.amount desc, x.name), '[]'::jsonb)
                     from (select i.category_id_snapshot id,
@@ -283,8 +302,10 @@ begin
                       where sm.qty <> 0)) end,
     'cancellations', (select jsonb_build_object(
                         'count', count(*)::int, 'amount', coalesce(sum(o.total), 0),
+                        -- by_name (who cancelled) is staff data: only with reports.staff
                         'items', coalesce((select jsonb_agg(jsonb_build_object('order_no', c.order_no, 'total', c.total, 'reason', c.cancel_reason,
-                                                                               'cancelled_at', c.cancelled_at, 'by_name', c.by_name)
+                                                                               'cancelled_at', c.cancelled_at,
+                                                                               'by_name', case when v_staff then c.by_name end)
                                                             order by c.cancelled_at desc, c.order_no)
                                            from (select o2.order_no, o2.total, o2.cancel_reason, o2.cancelled_at,
                                                         (select pr.short_name from public.profiles pr where pr.id = o2.cancelled_by and pr.restaurant_id = p_rid) by_name
@@ -296,7 +317,8 @@ begin
       select jsonb_build_object(
         'count', count(*)::int, 'amount', coalesce(sum(p.amount), 0),
         'items', coalesce((select jsonb_agg(jsonb_build_object('receipt_no', r.receipt_no, 'amount', r.amount, 'method', r.method_name_snapshot,
-                                                               'created_at', r.created_at, 'by_name', r.by_name) order by r.created_at desc, r.receipt_no)
+                                                               'created_at', r.created_at, 'by_name', case when v_staff then r.by_name end)
+                                          order by r.created_at desc, r.receipt_no)
                            from (select p2.receipt_no, p2.amount, p2.method_name_snapshot, p2.created_at,
                                         (select pr.short_name from public.profiles pr where pr.id = p2.created_by and pr.restaurant_id = p_rid) by_name
                                  from public.payments p2
@@ -333,8 +355,8 @@ declare
   v_to integer := coalesce(p_to_day_no, p_from_day_no);
 begin
   if not public.has_permission('reports.view') then perform public.fn_err('permission_denied'); end if;
-  -- one bound null = that single day; at most 367 days
-  if v_from is not null and (v_from < 1 or v_to < 1 or v_to < v_from or v_to - v_from > 366) then
+  -- one bound null = that single day; a span of at most 366 days (the same limit as fn_report_period / fn_log_report_export)
+  if v_from is not null and (v_from < 1 or v_to < 1 or v_to < v_from or v_to - v_from > 365) then
     perform public.fn_err('invalid_input', 'day_range');
   end if;
   return public.fn_report_build(v_rid, public.fn_report_days(v_rid, v_from, v_to));
@@ -357,9 +379,13 @@ begin
     perform public.fn_err('invalid_input', 'period');
   end if;
   select coalesce(r.timezone, 'Africa/Addis_Ababa') into v_tz from public.restaurants r where r.id = v_rid;
+  -- sargable on day_sessions_opened_idx: the local calendar dates [from, to] as the instant range
+  -- [local midnight of from, local midnight of to + 1)
   select coalesce(array_agg(d.id), '{}') into v_days
   from public.day_sessions d
-  where d.restaurant_id = v_rid and (d.opened_at at time zone v_tz)::date between p_from and p_to;
+  where d.restaurant_id = v_rid
+    and d.opened_at >= (p_from::timestamp at time zone v_tz)
+    and d.opened_at < ((p_to + 1)::timestamp at time zone v_tz);
   return public.fn_report_build(v_rid, v_days) || jsonb_build_object('period', jsonb_build_object('from', p_from, 'to', p_to));
 end;
 $$;
@@ -371,8 +397,10 @@ language plpgsql security definer set search_path = ''
 as $$
 declare
   v_rid uuid := public.fn_tenant_status_guard(false);   -- a read action: past_due may still export; suspended may not
+  v_uid uuid := (select auth.uid());
   v_now timestamptz := now();
   v_section_ok boolean;
+  v_recent integer;
 begin
   if not (public.has_permission('reports.view') and public.has_permission('reports.export')) then
     perform public.fn_err('permission_denied');
@@ -392,6 +420,13 @@ begin
                     when 'installments' then public.has_permission('vouchers.view')
                     else true end;
   if not v_section_ok then perform public.fn_err('permission_denied'); end if;
+  -- per-user throttle: at most 20 audited exports in any 60 seconds. Serialised per user (transaction advisory lock) so two
+  -- concurrent calls cannot both pass at 19; the count uses the partial index audit_logs_report_export_idx.
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('report.exported:' || v_uid::text, 0));
+  select count(*)::int into v_recent
+  from public.audit_logs a
+  where a.restaurant_id = v_rid and a.actor_id = v_uid and a.event = 'report.exported' and a.created_at > v_now - interval '60 seconds';
+  if v_recent >= 20 then perform public.fn_err('rate_limited'); end if;
   perform public.fn_write_audit('report.exported', jsonb_build_object('report', p_report, 'from', p_from, 'to', p_to, 'format', p_format));
   return jsonb_build_object('ok', true, 'exported_at', v_now);
 end;
