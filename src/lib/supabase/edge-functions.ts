@@ -147,12 +147,19 @@ const mfaResetSchema = z.object({
   factors_removed: z.number().int().nonnegative(),
   sessions_revoked: z.number().int().nonnegative().nullable(),
   devices_revoked: z.number().int().nonnegative(),
+  /** Always true: the server never completes a reset without replacing the password with a random one. */
+  password_rotated: z.literal(true),
+  /** Whether the password-recovery e-mail to the Tenant Admin's registered address was accepted. */
+  recovery_sent: z.boolean(),
 })
 export type TenantAdminMfaReset = z.infer<typeof mfaResetSchema>
 
 /**
- * Super Admin only: removes a Tenant Admin's authenticator factors and trusted devices and signs them out (audited). The server
- * requires a TOTP verified within 12 h (step_up_required, handled by the step-up runner) and rate-limits the call.
+ * Super Admin only: removes a Tenant Admin's authenticator factors and trusted devices, signs them out, replaces their password with
+ * a random one and e-mails them a password-recovery link (audited). Also finishes a half-done reset (mfa_reset_pending). The server
+ * requires a TOTP verified within 12 h (step_up_required, handled by the step-up runner) and rate-limits the call. Error codes:
+ * invalid_request, unauthorized, forbidden, mfa_required, step_up_required, not_found, no_factor, reset_expired, try_later,
+ * server_error.
  */
 export async function resetTenantAdminMfa(i: ResetTenantAdminMfaInput): Promise<TenantAdminMfaReset> {
   return mfaResetSchema.parse(

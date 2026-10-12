@@ -58,13 +58,19 @@ export interface MfaResetEnv {
   serviceRoleKey: string
   anonKey: string
   allowedOrigins: string | undefined
+  /** Where the password-recovery e-mail sends the Tenant Admin (the Tenant Portal's set-new-password page). Absolute https URL. */
+  recoveryRedirectUrl: string
 }
 
-/** tenant-admin-mfa-reset: no PIN pepper; a missing variable disables the function (fail closed). */
-export function readMfaResetEnv(): MfaResetEnv | null {
+/**
+ * tenant-admin-mfa-reset: no PIN pepper. A missing variable, or a missing / unsafe RECOVERY_REDIRECT_URL (same rule as
+ * INVITE_REDIRECT_URL), disables the function (fail closed): a reset must always be able to send the recovery e-mail.
+ */
+export function readMfaResetEnv(isSafeRedirect: (url: string | undefined) => boolean): MfaResetEnv | null {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY')
-  if (!supabaseUrl || !serviceRoleKey || !anonKey) return null
-  return { supabaseUrl, serviceRoleKey, anonKey, allowedOrigins: Deno.env.get('ALLOWED_ORIGINS') }
+  const recoveryRedirectUrl = Deno.env.get('RECOVERY_REDIRECT_URL')
+  if (!supabaseUrl || !serviceRoleKey || !anonKey || !recoveryRedirectUrl || !isSafeRedirect(recoveryRedirectUrl)) return null
+  return { supabaseUrl, serviceRoleKey, anonKey, allowedOrigins: Deno.env.get('ALLOWED_ORIGINS'), recoveryRedirectUrl }
 }

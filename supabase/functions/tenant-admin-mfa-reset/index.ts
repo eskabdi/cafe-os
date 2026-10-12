@@ -1,39 +1,49 @@
 // tenant-admin-mfa-reset: a Super Admin removes the authenticator(s) of a Tenant Admin who lost them (owner decision 2026-10-11),
-// so that person can sign in with the password and enrol a new one. Platform Admin Portal only.
+// and FORCES CREDENTIAL RE-PROOF: the password is rotated to a random value and a recovery e-mail goes to the registered address,
+// so a phone call plus a stolen password is not enough to take the account over. Platform Admin Portal only.
 //
 //   1. verify the caller's JWT with Supabase Auth, rate limit per IP and per user;
 //   2. fn_platform_prepare_mfa_reset(restaurant_id, profile_id, reason) AS THE CALLER: fn_platform_guard (active Super Admin, MFA
 //      session), fn_require_recent_totp (a real TOTP at most 12 h old), reason 3..500, target = an ACTIVE tenant_admin of that
-//      restaurant (anything else not_found), never the caller, a verified factor must exist (no_factor). Audited
-//      (admin_audit_log tenant_admin.mfa_reset_requested). Returns every factor id of that user;
+//      restaurant (anything else not_found), never the caller, a verified factor must exist (no_factor) unless a half-done reset is
+//      being finished. Inserts a single-use public.mfa_resets row (expires in 5 min). Audited (tenant_admin.mfa_reset_requested).
+//      Returns { reset_id, profile_id, user_id, factor_ids } (factor_ids may be empty when finishing);
 //   3. SERVICE ROLE: admin.auth.admin.mfa.deleteFactor({ id, userId }) for each factor (GoTrue owns auth.mfa_factors);
-//   4. SERVICE ROLE: fn_platform_complete_mfa_reset(profile_id, caller id, reason): refuses while a verified factor remains
-//      (factors_remain: then nothing is revoked and the reset can be retried), revokes the user's trusted devices, drops their
-//      device attestations, deletes their auth sessions (signed out everywhere). Audited (admin_audit_log tenant_admin.mfa_reset with
-//      the caller as actor; the tenant's audit_logs auth.mfa_reset_by_platform).
-// Step 4 runs even when an individual deletion failed: the database decides from the factors that remain. Returns
-// { profile_id, mfa_reset, factors_removed, sessions_revoked, devices_revoked }. Nothing sensitive is logged.
+//   4. SERVICE ROLE: admin.auth.admin.updateUserById(userId, { password: <32 random bytes> }); the value is never logged or
+//      returned. If this fails the reset is NOT completed (503, retry: prepare lets the Super Admin finish it);
+//   5. SERVICE ROLE: fn_platform_complete_mfa_reset(reset_id): consumes the row (expired / completed / superseded refused), derives
+//      actor, target, tenant and reason from it, re-checks both, refuses while a verified factor remains (factors_remain), revokes the
+//      trusted devices, drops attestations, deletes auth sessions (null when not permitted), stamps completed_at: from then on only
+//      sessions created after the reset pass any MFA gate (fn_mfa_session_ok / fn_require_recent_totp). Audited (admin_audit_log
+//      tenant_admin.mfa_reset; the tenant's audit_logs auth.mfa_reset_by_platform, with the reason);
+//   6. anon client: resetPasswordForEmail(<registered e-mail>, { redirectTo: RECOVERY_REDIRECT_URL }) AFTER completion (so the
+//      recovery session is newer than completed_at). A failure here does not undo the reset: recovery_sent = false.
+// Returns { profile_id, mfa_reset, factors_removed, sessions_revoked, devices_revoked, password_rotated, recovery_sent }. Nothing
+// sensitive is logged.
 //
-// NOT EXECUTED here: Deno / Docker were unavailable when this was written. See README.md.
-import { createClient } from '@supabase/supabase-js'
+// NOT EXECUTED against a real Supabase stack (see README.md); the pure logic is unit-tested and the SQL is pgTAP-tested.
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { readLimitedBody } from '../_shared/body.ts'
 import { corsHeaders, parseAllowedOrigins, resolveAllowedOrigin } from '../_shared/cors.ts'
 import { readMfaResetEnv } from '../_shared/env.ts'
 import { clientIp, createRateLimiter } from '../pin-login/logic.ts'
 import { extractBearer } from '../staff-create/logic.ts'
+import { isSafeRedirect } from '../tenant-admin-invite/logic.ts'
 import {
   MAX_BODY_BYTES,
   interpretComplete,
   interpretPrepare,
+  mapCompleteError,
   mapRpcError,
   parseMfaResetBody,
+  rotationPassword,
   shapeFailure,
   shapeSuccess,
   type MfaResetInput,
   type ShapedResponse,
 } from './logic.ts'
 
-const env = readMfaResetEnv()
+const env = readMfaResetEnv(isSafeRedirect)
 const allowedOrigins = parseAllowedOrigins(env?.allowedOrigins)
 const ipLimiter = createRateLimiter({ capacity: 20, refillPerSec: 0.2, maxKeys: 5000 })
 const userLimiter = createRateLimiter({ capacity: 5, refillPerSec: 1 / 60, maxKeys: 5000 })
@@ -69,15 +79,39 @@ async function reset(token: string, input: MfaResetInput): Promise<ShapedRespons
   }
   if (failed > 0) console.warn(`tenant-admin-mfa-reset: factor_delete_failed count=${failed}`)
 
-  const done = await admin.rpc('fn_platform_complete_mfa_reset', {
-    p_profile_id: input.profile_id,
-    p_actor: callerId,
-    p_reason: input.reason,
-  })
-  if (done.error) return shapeFailure('server_error')
+  // credential re-proof: whoever knew the old password (e.g. the caller on the phone) can no longer use it
+  const rotated = await admin.auth.admin.updateUserById(prepared.userId, { password: rotationPassword() })
+  if (rotated.error) {
+    console.warn('tenant-admin-mfa-reset: password_rotation_failed')
+    return shapeFailure('server_error')
+  }
+
+  const done = await admin.rpc('fn_platform_complete_mfa_reset', { p_reset_id: prepared.resetId })
+  if (done.error) return shapeFailure(mapCompleteError(done.error.message, done.error.details))
   const result = interpretComplete(done.data, input.profile_id)
   if (!result) return shapeFailure('server_error')
-  return shapeSuccess(input.profile_id, result, prepared.factorIds.length - failed)
+  if (!result.ok) return shapeFailure(result.kind)
+
+  const recoverySent = await sendRecovery(admin, prepared.userId)
+  if (!recoverySent) console.warn('tenant-admin-mfa-reset: recovery_email_not_sent')
+  return shapeSuccess(input.profile_id, result, prepared.factorIds.length - failed, recoverySent)
+}
+
+/** The recovery e-mail to the user's REGISTERED address (read with the service role, never taken from the request). */
+async function sendRecovery(admin: SupabaseClient, userId: string): Promise<boolean> {
+  if (!env) return false
+  try {
+    const u = await admin.auth.admin.getUserById(userId)
+    const email = u.data?.user?.email
+    if (u.error || !email) return false
+    const anon = createClient(env.supabaseUrl, env.anonKey, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false, flowType: 'implicit' },
+    })
+    const sent = await anon.auth.resetPasswordForEmail(email, { redirectTo: env.recoveryRedirectUrl })
+    return !sent.error
+  } catch {
+    return false
+  }
 }
 
 Deno.serve(async (req: Request): Promise<Response> => {

@@ -780,6 +780,64 @@ export type Database = {
           },
         ]
       }
+      mfa_resets: {
+        Row: {
+          completed_at: string | null
+          created_at: string
+          expires_at: string
+          factor_ids: string[]
+          id: string
+          reason: string
+          requested_by: string
+          restaurant_id: string
+          user_id: string
+        }
+        Insert: {
+          completed_at?: string | null
+          created_at?: string
+          expires_at: string
+          factor_ids?: string[]
+          id?: string
+          reason: string
+          requested_by: string
+          restaurant_id: string
+          user_id: string
+        }
+        Update: {
+          completed_at?: string | null
+          created_at?: string
+          expires_at?: string
+          factor_ids?: string[]
+          id?: string
+          reason?: string
+          requested_by?: string
+          restaurant_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mfa_resets_requested_by_fkey"
+            columns: ["requested_by"]
+            isOneToOne: false
+            referencedRelation: "platform_admins"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mfa_resets_restaurant_id_fkey"
+            columns: ["restaurant_id"]
+            isOneToOne: false
+            referencedRelation: "restaurants"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mfa_resets_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       order_items: {
         Row: {
           created_at: string
@@ -3022,6 +3080,10 @@ export type Database = {
         Args: { p_id: string }
         Returns: Json
       }
+      fn_mfa_reset_pending: {
+        Args: { p_user_id: string }
+        Returns: boolean
+      }
       fn_mfa_session_ok: {
         Args: Record<PropertyKey, never>
         Returns: boolean
@@ -3111,7 +3173,7 @@ export type Database = {
         Returns: Json
       }
       fn_platform_complete_mfa_reset: {
-        Args: { p_profile_id: string; p_actor: string; p_reason: string }
+        Args: { p_reset_id: string }
         Returns: Json
       }
       fn_platform_create_invoice: {
@@ -3420,6 +3482,10 @@ export type Database = {
       fn_serve_order: {
         Args: { p_order_id: string }
         Returns: Json
+      }
+      fn_session_after_mfa_reset: {
+        Args: Record<PropertyKey, never>
+        Returns: boolean
       }
       fn_session_timers_json: {
         Args: { p_restaurant_id: string }

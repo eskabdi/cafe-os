@@ -104,18 +104,22 @@ flowchart LR
     TAI -->|3 fn_attach_tenant_admin_invitation (service role)| INV[("tenant_admin_invitations")]
     OPSJOB["ops backup job (service role)"] -->|insert / finish run| HB
     SA -->|lost authenticator of a Tenant Admin (TOTP <= 12 h, reason)| MFR["tenant-admin-mfa-reset (Edge Function)"]
-    MFR -->|1 fn_platform_prepare_mfa_reset AS CALLER: active tenant_admin of that tenant, factor ids| RPC
+    MFR -->|1 fn_platform_prepare_mfa_reset AS CALLER: active tenant_admin of that tenant; inserts single-use reset row; reset_id + factor ids| RPC
+    RPC -->|1 insert / 4 consume FOR UPDATE| MR[("mfa_resets (no API-role access)")]
     MFR -->|2 auth.admin.mfa.deleteFactor per factor (service role)| GT
-    MFR -->|3 fn_platform_complete_mfa_reset (service role, actor = caller): revoke trusted devices, delete auth.sessions| TD[("trusted_devices, session_device_attestations, auth.sessions")]
-    MFR -->|3 audit: tenant_admin.mfa_reset + tenant auth.mfa_reset_by_platform| AAL
+    MFR -->|3 auth.admin.updateUserById: random password (service role)| GT
+    MFR -->|4 fn_platform_complete_mfa_reset(reset_id) (service role; actor, target, reason from the row): revoke trusted devices, delete auth.sessions, completed_at| TD[("trusted_devices, session_device_attestations, auth.sessions")]
+    MFR -->|4 audit: tenant_admin.mfa_reset + tenant auth.mfa_reset_by_platform (with reason)| AAL
+    MFR -->|5 resetPasswordForEmail(registered e-mail, RECOVERY_REDIRECT_URL) (anon)| GT
     SA -.->|no RLS path, no profile| X["tenant operational rows: 0 rows, tenant RPCs: permission_denied"]
 ```
 Trust boundaries: the SPA never holds the service role; the Edge Function forwards the caller's JWT for step 1 so the DATABASE decides who may invite; the
 invitee later signs in from the e-mail link (confirmed address) and calls `fn_accept_tenant_admin_invitation()` with its own session, which creates its
 `tenant_admin` profile. Usage counters cross the platform/tenant boundary only as numbers.
 The tenant detail also lists the tenant's Tenant Admins (identity, e-mail, `mfa_enrolled`, live trusted-device count: no operational data), the
-input of the MFA reset (0036). Only the caller-scoped step 1 decides who may reset whom; the service role only deletes the factors it was handed and
-completes after the database confirms no verified factor remains.
+input of the MFA reset (0036). Only the caller-scoped step 1 decides who may reset whom (and records it in a single-use `mfa_resets` row); the service
+role only deletes the factors it was handed, rotates the password, and completes that row after the database confirms no verified factor remains.
+After completion `fn_mfa_session_ok` / `fn_require_recent_totp` accept only sessions of that user created after `completed_at`.
 
 ## Level 1: Tenant Portal administration (Phase 3B, `/r/<slug>/*`)
 ```mermaid

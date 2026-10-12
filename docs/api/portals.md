@@ -72,27 +72,42 @@ Errors: `invalid_input` (`patch` for an unknown key, else the field), `duplicate
 
 Plan features (0036): a submitted `features` object without `installments` is stored with `"installments": false`; `create_plan` without
 `features` stores `{"installments": false}`; `installments`, when present, must be a boolean (`invalid_input/features`). Absent always meant
-"not entitled"; existing plans were backfilled with `false`. Entitlement is enforced by the RPCs; the tenant's features are also returned to
-tenant users as `plan_features` by `fn_get_session_context` (UX only).
+"not entitled"; existing plans were backfilled with `false`, and any legacy non-boolean value was coerced to a boolean (true only for
+`true`/`t`/`yes`/`on`/`1`, case-insensitive). Entitlement is enforced by the RPCs; the tenant's features are also returned to tenant users as
+`plan_features` by `fn_get_session_context` (UX only).
+
+Plan editor default (owner decision, "best experience"): a NEW plan starts with **Installment vouchers switched on** in the Platform Admin
+Portal and the editor always submits `installments` explicitly (with the other known switches, unknown keys preserved). The database default
+(`false` when absent) only applies to API callers that omit the key.
 
 ### Tenant Admin MFA reset (0036; owner decision 2026-10-11)
 
-A Super Admin removes the authenticator of a Tenant Admin who lost it. Two steps behind one Edge Function; the Super Admin needs a real TOTP
-verification at most 12 h old (a trusted-device session is not enough).
+A Super Admin removes the authenticator of a Tenant Admin who lost it and forces credential re-proof (the password is replaced with a random
+value and a recovery e-mail goes to the registered address). Prepare and complete are bound by a single-use reset row behind one Edge
+Function; the Super Admin needs a real TOTP verification at most 12 h old (a trusted-device session is not enough).
 
 | endpoint | class | parameters | returns / rules |
 |---|---|---|---|
-| `tenant-admin-mfa-reset` (Edge Function) | Private, recent TOTP | `{ restaurant_id, profile_id, reason }` (exactly these keys, ≤2048 bytes, reason 3..500 chars) | `200 { profile_id, mfa_reset: true, factors_removed, sessions_revoked (int or null), devices_revoked }`; errors `400 invalid_request`, `401 unauthorized`, `403 forbidden \| mfa_required \| step_up_required`, `404 not_found`, `409 no_factor`, `429 try_later`, `503 server_error`; see its README |
-| `fn_platform_prepare_mfa_reset` | Private (step 1, AS THE CALLER) | `p_restaurant_id uuid`, `p_profile_id uuid`, `p_reason text` | `{ profile_id, user_id, factor_ids: [uuid] }` (every factor of the user, any status). `fn_platform_guard` (`permission_denied`, `mfa_required`), `step_up_required`, `invalid_input` (`restaurant_id\|profile_id\|reason`), `permission_denied` (own id), `not_found` (unknown / other tenant / not a tenant_admin / inactive: one answer), `invalid_state/no_factor`. Audit: admin_audit_log `tenant_admin.mfa_reset_requested` `{profile_id, reason}` |
-| `fn_platform_complete_mfa_reset` | Internal (service_role only) | `p_profile_id uuid`, `p_actor uuid` (the Super Admin), `p_reason text` | `{ profile_id, sessions_revoked (null when auth.sessions is not writable by the DB role), devices_revoked }`. `permission_denied` (not service role / actor not an active Super Admin), `invalid_input/reason`, `not_found`, `invalid_state/factors_remain` (a verified factor still exists: nothing revoked). Revokes live trusted devices (`revoke_reason = 'mfa_reset'`, `revoked_by = actor`), deletes session attestations and every `auth.sessions` row of the user. Audit: admin_audit_log `tenant_admin.mfa_reset` (actor = `p_actor`) + tenant audit_logs `auth.mfa_reset_by_platform` (actor = `p_actor`, `actor_type = platform_admin`) |
+| `tenant-admin-mfa-reset` (Edge Function) | Private, recent TOTP | `{ restaurant_id, profile_id, reason }` (exactly these keys, ≤2048 bytes, reason 3..500 chars) | `200 { profile_id, mfa_reset: true, factors_removed, sessions_revoked (int or null), devices_revoked, password_rotated: true, recovery_sent }`; errors `400 invalid_request`, `401 unauthorized`, `403 forbidden \| mfa_required \| step_up_required`, `404 not_found`, `409 no_factor \| reset_expired`, `429 try_later`, `503 server_error` (nothing completed; run again). Disabled (503) without a safe `RECOVERY_REDIRECT_URL`. See its README |
+| `fn_platform_prepare_mfa_reset` | Private (step 1, AS THE CALLER) | `p_restaurant_id uuid`, `p_profile_id uuid`, `p_reason text` | `{ reset_id, profile_id, user_id, factor_ids: [uuid] }` (every factor of the user, any status; EMPTY when finishing a half-done reset). Inserts a `mfa_resets` row (expires in 5 min). `fn_platform_guard` (`permission_denied`, `mfa_required`), `step_up_required`, `invalid_input` (`restaurant_id\|profile_id\|reason`), `permission_denied` (own id), `not_found` (unknown / other tenant / not a tenant_admin / inactive: one answer), `invalid_state/no_factor` (no verified factor and no half-done reset pending). Audit: admin_audit_log `tenant_admin.mfa_reset_requested` `{profile_id, reset_id, reason, finishing}` |
+| `fn_platform_complete_mfa_reset` | Internal (service_role only) | `p_reset_id uuid` | `{ profile_id, sessions_revoked (null when auth.sessions is not writable by the DB role), devices_revoked }`, or `{ profile_id, refused: permission_denied \| not_found }` (requester no longer an active Super Admin / target no longer an active tenant_admin of that tenant, AFTER the factors were deleted: returned so the admin audit `tenant_admin.mfa_reset_incomplete` persists). Raises `permission_denied` (not service role; or the refusals above while a verified factor remains), `invalid_input/reset_id`, `not_found` (unknown reset), `invalid_state/reset_completed` (replay), `invalid_state/reset_expired`, `invalid_state/reset_superseded` (older than the user's latest completed reset), `invalid_state/factors_remain`. Actor, target, tenant and reason come from the row. Revokes live trusted devices (`revoke_reason = 'mfa_reset'`, `revoked_by` = requester), deletes session attestations and every `auth.sessions` row of the user, stamps `completed_at`. Audit: admin_audit_log `tenant_admin.mfa_reset` `{profile_id, reset_id, reason, sessions_revoked, devices_revoked}` + tenant audit_logs `auth.mfa_reset_by_platform` `{profile_id, reason, sessions_revoked, devices_revoked}` (actor = requester, `actor_type = platform_admin`) |
+
+After a completed reset, `fn_mfa_session_ok()` and `fn_require_recent_totp()` accept a session of that user only when the JWT `session_id`
+names an `auth.sessions` row created after the latest `completed_at` (no row: refused). Sessions that survived the reset (hosted Supabase,
+stolen password) can never pass an MFA gate again, even after enrolling a new factor.
+
+`fn_platform_get_tenant` → `tenant_admins[]`: `{ profile_id, first_name, middle_name, last_name, email, is_active, mfa_enrolled,
+mfa_reset_pending, trusted_devices }`. `mfa_reset_pending` = a half-done reset (factors deleted, completion missing); the portal then offers
+"Finish reset" (same Edge Function call).
 
 Example:
 ```http
 POST /functions/v1/tenant-admin-mfa-reset
 { "restaurant_id": "2b1e…", "profile_id": "7c40…", "reason": "Lost phone, identity confirmed by call" }
-200 { "profile_id": "7c40…", "mfa_reset": true, "factors_removed": 1, "sessions_revoked": 2, "devices_revoked": 1 }
+200 { "profile_id": "7c40…", "mfa_reset": true, "factors_removed": 1, "sessions_revoked": 2, "devices_revoked": 1, "password_rotated": true, "recovery_sent": true }
 403 { "error": "step_up_required" }
 409 { "error": "no_factor" }
+409 { "error": "reset_expired" }
 ```
 
 ### Invoices

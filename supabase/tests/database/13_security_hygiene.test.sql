@@ -59,8 +59,8 @@ select is((select string_agg(name, ',' order by name) from _fn
                           'fn_receipt_json',
                           -- 0035 installments (Phase 7)
                           'fn_tenant_today', 'fn_voucher_json',
-                          -- 0036 MFA reset (service-role completion step)
-                          'fn_platform_complete_mfa_reset')
+                          -- 0036 MFA reset (service-role completion step, post-reset session rule, half-done reset)
+                          'fn_platform_complete_mfa_reset', 'fn_session_after_mfa_reset', 'fn_mfa_reset_pending')
              and (has_function_privilege('authenticated', oid, 'execute') or has_function_privilege('anon', oid, 'execute'))),
           null, 'PIN, audit, seeding, counter, idempotency, session-timer, step-up, stock-ledger and order-pipeline internal functions are not client-executable');
 select is((select string_agg(name, ',' order by name) from _fn where prorettype = 'trigger'::regtype
@@ -113,9 +113,9 @@ grant select on _tbl to public;
 select is((select string_agg(name, ',') from _tbl where not rls), null, 'RLS is enabled on every public table');
 select is((select string_agg(name, ',') from _tbl where not forced), null, 'RLS is FORCED on every public table (owner included)');
 select is((select string_agg(t.name, ',' order by t.name) from _tbl t where not exists (select 1 from pg_policies p where p.schemaname = 'public' and p.tablename = t.name)),
-          'idempotency_keys,identity_claims,platform_backup_runs,profile_secrets,session_device_attestations,tenant_admin_invitations,tenant_counters', 'the only policy-less (deny-all) tables are the intended internal ones (0030: invitations and backup runs are RPC-only)');
+          'idempotency_keys,identity_claims,mfa_resets,platform_backup_runs,profile_secrets,session_device_attestations,tenant_admin_invitations,tenant_counters', 'the only policy-less (deny-all) tables are the intended internal ones (0030: invitations and backup runs are RPC-only; 0036: MFA reset rows)');
 select is((select string_agg(t.name, ',') from _tbl t
-           where t.name in ('idempotency_keys', 'profile_secrets', 'tenant_counters', 'platform_backup_runs', 'tenant_admin_invitations')
+           where t.name in ('idempotency_keys', 'profile_secrets', 'tenant_counters', 'platform_backup_runs', 'tenant_admin_invitations', 'mfa_resets')
              and (has_any_column_privilege('anon', t.oid, 'select,insert,update,references') or has_any_column_privilege('authenticated', t.oid, 'select,insert,update,references')
                   or has_table_privilege('anon', t.oid, 'delete,truncate,trigger') or has_table_privilege('authenticated', t.oid, 'delete,truncate,trigger'))),
           null, 'deny-all tables carry no privilege for any client role');

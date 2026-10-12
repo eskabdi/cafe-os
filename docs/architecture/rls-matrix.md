@@ -19,6 +19,7 @@ Suspended/cancelled tenants resolve to NULL (no access); `past_due` is read-only
 | profiles | T and (self or `users.view`/`users.manage`) | none (staff-create / fn_accept_tenant_admin_invitation) | **no client grant since 0031**: `fn_update_user` (names), `fn_set_user_active`, `fn_change_user_role`; the 0007 policy stays as ceiling | none |
 | profile_secrets, tenant_counters, idempotency_keys | none (RLS on, zero policies, no grants) | none | none | none |
 | tenant_admin_invitations (0030) | none (RPC only: `fn_list_tenant_admin_invitations`, `fn_platform_get_tenant`) | none (`fn_prepare_tenant_admin_invitation`) | none (attach / resend / revoke / accept RPCs) | none (trigger-blocked) |
+| mfa_resets (0036) | none (RLS forced, zero policies, no grant to any API role incl. service_role) | none (`fn_platform_prepare_mfa_reset`) | none (`fn_platform_complete_mfa_reset`) | none (trigger-blocked) |
 | platform_backup_runs (0030) | none (`fn_platform_list_backup_runs`, `fn_platform_system_health`) | service_role only (ops job) | service_role only, while `running` | none |
 | roles | T | **no client grant since 0031** (`fn_create_role`) | none (`fn_update_role`, `fn_set_role_active`: `role_in_use` while active users hold it) | none (`fn_delete_role`: only a role no profile ever held) |
 | role_permissions, role_station_access | T and (own role or `roles.manage`) | none | none | none (only `fn_update_role_permissions`) |
@@ -43,7 +44,7 @@ Policies per table: admin_audit_log 1, audit_logs 1, categories 4, customer_sess
 ingredients 4, installments 1, kiosk_devices 1, menu_items 4, order_items 1, orders 1, payment_methods 4, payments 1, permissions 1, plans 5,
 platform_admins 3, platform_invoices 4, profiles 2, qr_credentials 1, recipe_lines 4, restaurant_session_settings 1, restaurants 3, role_permissions 1,
 role_station_access 1, roles 4, stations 4, stock_movements 1, subscriptions 4, table_areas 4, table_sessions 1, tables 4, user_notifications 1, vouchers 1;
-profile_secrets, tenant_counters, idempotency_keys, tenant_admin_invitations, platform_backup_runs: 0 (deny all).
+profile_secrets, tenant_counters, idempotency_keys, tenant_admin_invitations, platform_backup_runs, mfa_resets: 0 (deny all).
 
 ## Migration 0010 hardening (found by the adversarial suite, `supabase/tests/database/1*_*.test.sql`)
 - **Realtime**: `qr_credentials` was removed from `supabase_realtime`. postgres_changes streams whole rows (column privileges do not apply),

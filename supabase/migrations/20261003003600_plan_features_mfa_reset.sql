@@ -10,21 +10,40 @@
 --     fn_plan_normalize: a submitted 'features' object without 'installments' is stored with "installments": false (absent already
 --     meant "not entitled"; storing it makes the plan editor show the real value), and 'installments' must be a boolean (a string
 --     would make the entitlement cast fail at issue time). fn_platform_create_plan stores {"installments": false} when no features
---     are submitted. Existing plans without the key are backfilled with false (same semantics).
+--     are submitted. Backfill: a plan without the key gets false (same semantics); a non-boolean value (legacy string / number) is
+--     coerced to a boolean (true only for true/t/yes/on/1, case-insensitive), so the entitlement cast can never fail.
 --  B. fn_platform_get_tenant (0030 body unchanged) + 'tenant_admins': the profiles of that tenant holding the system tenant_admin
---     role: identity, e-mail (auth.users), is_active, mfa_enrolled (a verified factor exists), trusted_devices (live count). Identity
+--     role: identity, e-mail (auth.users), is_active, mfa_enrolled (a verified factor exists), mfa_reset_pending (a half-done reset
+--     can be finished, see C), trusted_devices (live count). Identity
 --     and authenticator state only; no operational data.
---  C. Two-step MFA reset (pattern: staff-pin-reset):
+--  C. Super Admin MFA reset (pattern: staff-pin-reset), bound by a single-use reset row and forcing credential re-proof:
+--     public.mfa_resets   one row per prepare: user, restaurant, requested_by (the Super Admin), reason, the factor ids handed to the
+--        Edge Function, created_at, expires_at (created + 5 min), completed_at. RLS enabled + forced, NO policy, NO privilege for any
+--        API role (incl. service_role): written and read only by the definer functions below.
 --     fn_platform_prepare_mfa_reset(restaurant, profile, reason)   AS THE CALLER (Super Admin, fn_platform_guard + a real TOTP at most
 --        12 h old): target = an ACTIVE tenant_admin profile of that restaurant (anything else, including another tenant's admin, is
---        not_found, same as unknown); refuses invalid_state|no_factor without a verified factor. Audited
---        (admin_audit_log 'tenant_admin.mfa_reset_requested'). Returns the factor ids the Edge Function deletes through GoTrue.
---     fn_platform_complete_mfa_reset(profile, actor, reason)        SERVICE ROLE ONLY: after the factors are gone (refuses
---        invalid_state|factors_remain otherwise) revokes the user's live trusted devices (reason 'mfa_reset'), drops their session
---        attestations and deletes their auth sessions (sign-out everywhere). Audited twice: admin_audit_log 'tenant_admin.mfa_reset'
---        (actor = p_actor, an active Super Admin) and the tenant's audit_logs 'auth.mfa_reset_by_platform' (actor = p_actor,
---        actor_type platform_admin; written directly because fn_write_audit derives the actor from auth.uid(), null here).
---     The Tenant Admin then signs in with the password and must enrol a new authenticator (every tenant-admin gate needs one).
+--        not_found, same as unknown). Needs a verified factor (else invalid_state|no_factor) UNLESS a half-done reset is pending
+--        (fn_mfa_reset_pending: factors already deleted, completion never happened), so a failed completion can always be finished.
+--        Inserts the mfa_resets row and returns {reset_id, profile_id, user_id, factor_ids} (factor_ids may be empty when finishing).
+--        Audited (admin_audit_log 'tenant_admin.mfa_reset_requested').
+--     fn_platform_complete_mfa_reset(reset_id)        SERVICE ROLE ONLY. Consumes the row FOR UPDATE: unknown -> not_found, completed ->
+--        invalid_state|reset_completed (replay), expired -> invalid_state|reset_expired, requested before the user's latest completed
+--        reset -> invalid_state|reset_superseded. Actor, profile, restaurant and reason come
+--        from the row, never from the caller. Re-checks the requester is still an active Super Admin and the target still an active
+--        tenant_admin of that restaurant: when that fails AFTER the factors are gone it RETURNS {refused: permission_denied|not_found}
+--        (no exception, so the admin audit 'tenant_admin.mfa_reset_incomplete' persists); otherwise it raises. Refuses
+--        invalid_state|factors_remain while a verified factor remains. Then revokes the user's live trusted devices (reason
+--        'mfa_reset'), drops their session attestations, deletes their auth sessions (null when the DB role may not), and stamps
+--        completed_at. Audited twice: admin_audit_log 'tenant_admin.mfa_reset' and the tenant's audit_logs 'auth.mfa_reset_by_platform'
+--        (actor = the requesting Super Admin, actor_type platform_admin, WITH the reason so the tenant knows why).
+--     fn_mfa_session_ok() (0032) + fn_require_recent_totp() (0032): when the user has a completed reset, the JWT session (session_id
+--        claim -> auth.sessions.created_at) must have been created AFTER the latest completed_at; no such session row -> not ok. A
+--        session that survived the reset (e.g. hosted Supabase where auth.sessions cannot be deleted, or a stolen password session)
+--        can never reach an MFA-gated action again, even after enrolling a new factor. Every aal2 gate goes through one of the two
+--        (fn_platform_mfa_satisfied, fn_platform_guard, fn_require_aal2, fn_require_step_up -> fn_mfa_session_ok; fn_trust_device and
+--        the step-up actions -> fn_require_recent_totp).
+--     The Edge Function rotates the password to a random value before completion and sends a recovery e-mail after it: the Tenant
+--     Admin proves the e-mail inbox, sets a new password and enrols a new authenticator.
 
 -- ════════════════════════════════════════ C0. revoke reason ════════════════════════════════════════
 alter table public.trusted_devices drop constraint trusted_devices_revoke_reason_check;
@@ -181,8 +200,14 @@ end;
 $$;
 -- (fn_platform_update_plan is unchanged: it stores the normalised features, which now always carry 'installments')
 
--- backfill: absent already meant "not entitled"; make it explicit (the plans row-audit trigger records the change)
+-- backfill (the plans row-audit trigger records each change):
+--  absent already meant "not entitled": make it explicit; a non-boolean value (string / number / null / array / object) becomes a
+--  boolean, true only for the usual truthy spellings, so fn_generate_voucher's ::boolean cast can never fail at issue time
 update public.plans set features = features || '{"installments": false}'::jsonb where not (features ? 'installments');
+update public.plans
+   set features = features || jsonb_build_object('installments',
+         coalesce(lower(btrim(features ->> 'installments')) in ('true', 't', 'yes', 'on', '1'), false))
+ where jsonb_typeof(features -> 'installments') <> 'boolean';
 
 -- ════════════════════════════════════════ B. platform tenant detail + tenant_admins ════════════════════════════════════════
 create or replace function public.fn_platform_get_tenant(p_restaurant_id uuid)
@@ -216,6 +241,8 @@ begin
                          'profile_id', p.id, 'first_name', p.first_name, 'middle_name', p.middle_name, 'last_name', p.last_name,
                          'email', u.email, 'is_active', p.is_active,
                          'mfa_enrolled', exists (select 1 from auth.mfa_factors f where f.user_id = p.id and f.status = 'verified'),
+                         -- a half-done reset (factors deleted, completion missing): the portal offers "Finish reset"
+                         'mfa_reset_pending', public.fn_mfa_reset_pending(p.id),
                          'trusted_devices', (select count(*) from public.trusted_devices d
                                              where d.user_id = p.id and public.fn_device_live(d)))
                          order by p.created_at, p.id), '[]'::jsonb)
@@ -227,7 +254,108 @@ end;
 $$;
 
 -- ════════════════════════════════════════ C. MFA reset ════════════════════════════════════════
--- step 1 (AS THE CALLER, through the tenant-admin-mfa-reset Edge Function)
+-- C1. the single-use reset rows (tenant table: restaurant_id + FK + lock trigger; no client access at all)
+create table public.mfa_resets (
+  id             uuid primary key default gen_random_uuid(),
+  user_id        uuid not null references public.profiles (id) on delete restrict,
+  restaurant_id  uuid not null references public.restaurants (id) on delete restrict,
+  requested_by   uuid not null references public.platform_admins (id) on delete restrict,
+  reason         text not null check (char_length(reason) between 3 and 500),
+  factor_ids     uuid[] not null default '{}' check (cardinality(factor_ids) <= 20),
+  created_at     timestamptz not null default now(),
+  expires_at     timestamptz not null,
+  completed_at   timestamptz,
+  check (expires_at > created_at),
+  check (completed_at is null or completed_at >= created_at)
+);
+create index mfa_resets_user_idx on public.mfa_resets (user_id, created_at desc);
+create index mfa_resets_user_completed_idx on public.mfa_resets (user_id, completed_at desc) where completed_at is not null;
+create index mfa_resets_restaurant_idx on public.mfa_resets (restaurant_id);
+create index mfa_resets_requested_by_idx on public.mfa_resets (requested_by);
+alter table public.mfa_resets enable row level security;
+alter table public.mfa_resets force row level security;
+-- NO policies and NO privileges for any API role: only the definer functions below read / write it
+revoke all on public.mfa_resets from public, anon, authenticated, service_role;
+create trigger trg_lock_restaurant_id before update on public.mfa_resets
+  for each row execute function public.fn_lock_restaurant_id();
+create trigger trg_00_no_delete before delete on public.mfa_resets
+  for each row execute function public.fn_forbid_mutation();
+
+-- the bulk deletes of fn_platform_complete_mfa_reset / fn_revoke_devices_of filter by user
+create index if not exists session_device_attestations_user_idx on public.session_device_attestations (user_id);
+
+-- C2. predicates
+-- true unless the caller had a completed MFA reset and THIS session (JWT session_id) was not created after the latest one
+create or replace function public.fn_session_after_mfa_reset()
+returns boolean
+language plpgsql stable security definer set search_path = ''
+as $$
+declare
+  v_uid uuid := (select auth.uid());
+  v_done timestamptz;
+  v_created timestamptz;
+begin
+  if v_uid is null then return true; end if;   -- no user: the callers' own checks refuse
+  select max(r.completed_at) into v_done from public.mfa_resets r where r.user_id = v_uid and r.completed_at is not null;
+  if v_done is null then return true; end if;
+  begin
+    select s.created_at into v_created from auth.sessions s where s.id = public.fn_jwt_session_id() and s.user_id = v_uid;
+  exception when insufficient_privilege then
+    return false;   -- fail closed
+  end;
+  return v_created is not null and v_created > v_done;
+end;
+$$;
+revoke all on function public.fn_session_after_mfa_reset() from public, anon, authenticated;
+
+-- 0032 body + the post-reset session rule (THE MFA predicate of every portal gate)
+create or replace function public.fn_mfa_session_ok()
+returns boolean
+language sql stable security definer set search_path = ''
+as $$
+  select ((coalesce((select auth.jwt()) ->> 'aal', '') = 'aal2'
+           and exists (select 1 from auth.mfa_factors f where f.user_id = (select auth.uid()) and f.status = 'verified'))
+          or public.fn_device_trust_satisfied())
+     and public.fn_session_after_mfa_reset()
+$$;
+revoke all on function public.fn_mfa_session_ok() from public, anon, authenticated;
+
+-- 0032 body + the post-reset session rule (it reads the JWT itself, not fn_mfa_session_ok)
+create or replace function public.fn_require_recent_totp(p_max interval default interval '12 hours')
+returns void
+language plpgsql stable security definer set search_path = ''
+as $$
+declare
+  v_jwt jsonb := coalesce((select auth.jwt()), '{}'::jsonb);
+begin
+  if coalesce(v_jwt ->> 'aal', '') <> 'aal2'
+     or not exists (select 1 from auth.mfa_factors f where f.user_id = (select auth.uid()) and f.status = 'verified')
+     or not exists (select 1 from jsonb_array_elements(case when jsonb_typeof(v_jwt -> 'amr') = 'array' then v_jwt -> 'amr' else '[]'::jsonb end) e
+                    where jsonb_typeof(e) = 'object' and e ->> 'method' = 'totp' and (e ->> 'timestamp') ~ '^[0-9]{1,12}$'
+                      and to_timestamp((e ->> 'timestamp')::bigint) > now() - p_max
+                      and to_timestamp((e ->> 'timestamp')::bigint) <= now() + interval '5 minutes')
+     or not public.fn_session_after_mfa_reset() then
+    perform public.fn_err('step_up_required');
+  end if;
+end;
+$$;
+revoke all on function public.fn_require_recent_totp(interval) from public, anon, authenticated;
+
+-- a half-done reset: no verified factor any more, and a reset whose factors were handed out for deletion was requested after the
+-- latest completed one but never completed itself (the Edge Function died / completion was refused). Finishing it is allowed.
+create or replace function public.fn_mfa_reset_pending(p_user_id uuid)
+returns boolean
+language sql stable security definer set search_path = ''
+as $$
+  select not exists (select 1 from auth.mfa_factors f where f.user_id = p_user_id and f.status = 'verified')
+     and exists (select 1 from public.mfa_resets r
+                 where r.user_id = p_user_id and r.completed_at is null and cardinality(r.factor_ids) > 0
+                   and r.created_at > coalesce((select max(c.completed_at) from public.mfa_resets c
+                                                where c.user_id = p_user_id and c.completed_at is not null), '-infinity'::timestamptz))
+$$;
+revoke all on function public.fn_mfa_reset_pending(uuid) from public, anon, authenticated;
+
+-- C3. step 1 (AS THE CALLER, through the tenant-admin-mfa-reset Edge Function)
 create or replace function public.fn_platform_prepare_mfa_reset(p_restaurant_id uuid, p_profile_id uuid, p_reason text)
 returns jsonb
 language plpgsql
@@ -237,7 +365,9 @@ as $$
 declare
   v_uid uuid := public.fn_platform_guard();
   v_reason text;
-  v_factors jsonb;
+  v_factors uuid[];
+  v_finishing boolean;
+  v_id uuid;
 begin
   perform public.fn_require_recent_totp();
   if p_restaurant_id is null then perform public.fn_err('invalid_input', 'restaurant_id'); end if;
@@ -248,71 +378,97 @@ begin
   perform 1 from public.profiles p join public.roles ro on ro.id = p.role_id and ro.restaurant_id = p.restaurant_id
    where p.id = p_profile_id and p.restaurant_id = p_restaurant_id and p.is_active and ro.system_key = 'tenant_admin';
   if not found then perform public.fn_err('not_found'); end if;
-  if not exists (select 1 from auth.mfa_factors f where f.user_id = p_profile_id and f.status = 'verified') then
+  v_finishing := not exists (select 1 from auth.mfa_factors f where f.user_id = p_profile_id and f.status = 'verified');
+  if v_finishing and not public.fn_mfa_reset_pending(p_profile_id) then
     perform public.fn_err('invalid_state', 'no_factor');
   end if;
-  select coalesce(jsonb_agg(f.id order by f.created_at, f.id), '[]'::jsonb) into v_factors
+  select coalesce(array_agg(f.id order by f.created_at, f.id), '{}') into v_factors
   from auth.mfa_factors f where f.user_id = p_profile_id;
+  if cardinality(v_factors) > 20 then perform public.fn_err('invalid_state', 'too_many_factors'); end if;
+  insert into public.mfa_resets (user_id, restaurant_id, requested_by, reason, factor_ids, expires_at)
+  values (p_profile_id, p_restaurant_id, v_uid, v_reason, v_factors, now() + interval '5 minutes')
+  returning id into v_id;
   perform public.fn_write_admin_audit('tenant_admin.mfa_reset_requested', p_restaurant_id,
-                                      jsonb_build_object('profile_id', p_profile_id, 'reason', v_reason));
-  return jsonb_build_object('profile_id', p_profile_id, 'user_id', p_profile_id, 'factor_ids', v_factors);
+                                      jsonb_build_object('profile_id', p_profile_id, 'reset_id', v_id, 'reason', v_reason,
+                                                         'finishing', v_finishing));
+  return jsonb_build_object('reset_id', v_id, 'profile_id', p_profile_id, 'user_id', p_profile_id, 'factor_ids', to_jsonb(v_factors));
 end;
 $$;
 
--- step 3 (SERVICE ROLE, after GoTrue deleted the factors): devices, attestations, sessions, audit
-create or replace function public.fn_platform_complete_mfa_reset(p_profile_id uuid, p_actor uuid, p_reason text)
+-- C4. step 3 (SERVICE ROLE, after GoTrue deleted the factors and the password was rotated): consume the reset row; devices,
+-- attestations, sessions, completed_at, audit
+create or replace function public.fn_platform_complete_mfa_reset(p_reset_id uuid)
 returns jsonb
 language plpgsql
 security definer
 set search_path = ''
 as $$
 declare
-  v_reason text;
-  v_rid uuid;
+  r public.mfa_resets%rowtype;
+  v_factors_gone boolean;
+  v_refusal text;
   v_devices integer;
   v_sessions integer;
 begin
   if not public.is_service_role() then perform public.fn_err('permission_denied'); end if;
-  if p_profile_id is null then perform public.fn_err('invalid_input', 'profile_id'); end if;
-  if p_actor is null or not exists (select 1 from public.platform_admins a
-                                    where a.id = p_actor and a.is_active and a.role = 'platform_super_admin') then
-    perform public.fn_err('permission_denied');
-  end if;
-  v_reason := public.fn_platform_reason(p_reason);
-  select p.restaurant_id into v_rid
-  from public.profiles p join public.roles ro on ro.id = p.role_id and ro.restaurant_id = p.restaurant_id
-  where p.id = p_profile_id and p.is_active and ro.system_key = 'tenant_admin'
-  for update of p;
-  if v_rid is null then perform public.fn_err('not_found'); end if;
-  if exists (select 1 from auth.mfa_factors f where f.user_id = p_profile_id and f.status = 'verified') then
-    perform public.fn_err('invalid_state', 'factors_remain');
+  if p_reset_id is null then perform public.fn_err('invalid_input', 'reset_id'); end if;
+  select * into r from public.mfa_resets m where m.id = p_reset_id for update;
+  if not found then perform public.fn_err('not_found'); end if;
+  if r.completed_at is not null then perform public.fn_err('invalid_state', 'reset_completed'); end if;
+  if r.expires_at <= now() then perform public.fn_err('invalid_state', 'reset_expired'); end if;
+  -- a reset requested before the user's latest completed one is spent: completing it would only re-stamp completed_at
+  if exists (select 1 from public.mfa_resets c where c.user_id = r.user_id and c.completed_at > r.created_at) then
+    perform public.fn_err('invalid_state', 'reset_superseded');
   end if;
 
-  with r as (
-    update public.trusted_devices set revoked_at = now(), revoked_by = p_actor, revoke_reason = 'mfa_reset'
-     where user_id = p_profile_id and revoked_at is null
+  v_factors_gone := not exists (select 1 from auth.mfa_factors f where f.user_id = r.user_id and f.status = 'verified');
+  if not exists (select 1 from public.platform_admins a
+                 where a.id = r.requested_by and a.is_active and a.role = 'platform_super_admin') then
+    v_refusal := 'permission_denied';
+  else
+    perform 1 from public.profiles p join public.roles ro on ro.id = p.role_id and ro.restaurant_id = p.restaurant_id
+     where p.id = r.user_id and p.restaurant_id = r.restaurant_id and p.is_active and ro.system_key = 'tenant_admin'
+     for update of p;
+    if not found then v_refusal := 'not_found'; end if;
+  end if;
+  if v_refusal is not null then
+    if not v_factors_gone then perform public.fn_err(v_refusal); end if;
+    -- the factors are already gone: RETURN (not raise) so this record of the half-done reset survives
+    insert into public.admin_audit_log (platform_admin_id, restaurant_id, action, detail)
+    values (r.requested_by, r.restaurant_id, 'tenant_admin.mfa_reset_incomplete',
+            jsonb_build_object('profile_id', r.user_id, 'reset_id', r.id, 'refused', v_refusal));
+    return jsonb_build_object('profile_id', r.user_id, 'refused', v_refusal);
+  end if;
+  if not v_factors_gone then perform public.fn_err('invalid_state', 'factors_remain'); end if;
+
+  with x as (
+    update public.trusted_devices set revoked_at = now(), revoked_by = r.requested_by, revoke_reason = 'mfa_reset'
+     where user_id = r.user_id and revoked_at is null
     returning id
-  ) select count(*) into v_devices from r;
-  delete from public.session_device_attestations where user_id = p_profile_id;
+  ) select count(*) into v_devices from x;
+  delete from public.session_device_attestations where user_id = r.user_id;
   begin
-    delete from auth.sessions s where s.user_id = p_profile_id;
+    delete from auth.sessions s where s.user_id = r.user_id;
     get diagnostics v_sessions = row_count;
   exception when insufficient_privilege then
-    v_sessions := null;
+    v_sessions := null;   -- hosted: the post-reset session rule (fn_session_after_mfa_reset) still shuts every old session out
   end;
+  -- stamped AFTER the sign-out: every session created before this instant fails fn_session_after_mfa_reset
+  update public.mfa_resets set completed_at = clock_timestamp() where id = r.id;
 
   insert into public.admin_audit_log (platform_admin_id, restaurant_id, action, detail)
-  values (p_actor, v_rid, 'tenant_admin.mfa_reset',
-          jsonb_build_object('profile_id', p_profile_id, 'reason', v_reason,
+  values (r.requested_by, r.restaurant_id, 'tenant_admin.mfa_reset',
+          jsonb_build_object('profile_id', r.user_id, 'reset_id', r.id, 'reason', r.reason,
                              'sessions_revoked', v_sessions, 'devices_revoked', v_devices));
   insert into public.audit_logs (restaurant_id, actor_id, actor_type, event, action, new_data)
-  values (v_rid, p_actor, 'platform_admin', 'auth.mfa_reset_by_platform', 'event',
-          jsonb_build_object('profile_id', p_profile_id, 'sessions_revoked', v_sessions, 'devices_revoked', v_devices));
-  return jsonb_build_object('profile_id', p_profile_id, 'sessions_revoked', v_sessions, 'devices_revoked', v_devices);
+  values (r.restaurant_id, r.requested_by, 'platform_admin', 'auth.mfa_reset_by_platform', 'event',
+          jsonb_build_object('profile_id', r.user_id, 'reason', r.reason,
+                             'sessions_revoked', v_sessions, 'devices_revoked', v_devices));
+  return jsonb_build_object('profile_id', r.user_id, 'sessions_revoked', v_sessions, 'devices_revoked', v_devices);
 end;
 $$;
 
 revoke all on function public.fn_platform_prepare_mfa_reset(uuid, uuid, text) from public, anon, authenticated, service_role;
 grant execute on function public.fn_platform_prepare_mfa_reset(uuid, uuid, text) to authenticated;
-revoke all on function public.fn_platform_complete_mfa_reset(uuid, uuid, text) from public, anon, authenticated, service_role;
-grant execute on function public.fn_platform_complete_mfa_reset(uuid, uuid, text) to service_role;
+revoke all on function public.fn_platform_complete_mfa_reset(uuid) from public, anon, authenticated, service_role;
+grant execute on function public.fn_platform_complete_mfa_reset(uuid) to service_role;

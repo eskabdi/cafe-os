@@ -117,6 +117,10 @@ erDiagram
     auth_users ||--o| tenant_admin_invitations : "auth_user_id (no FK: set by the Edge Function after inviteUserByEmail)"
     tenant_admin_invitations ||--o| profiles : "accepted -> tenant_admin profile (fn_accept_tenant_admin_invitation)"
     plans ||--o{ subscriptions : "quotas"
+    restaurants ||--o{ mfa_resets : "0036 (RESTRICT)"
+    profiles ||--o{ mfa_resets : "target tenant_admin (RESTRICT)"
+    platform_admins ||--o{ mfa_resets : "requested_by (RESTRICT)"
+    mfa_resets { uuid id PK uuid user_id FK uuid restaurant_id FK uuid requested_by FK text reason "3..500" uuid_array factor_ids "<= 20" timestamptz created_at timestamptz expires_at "created + 5 min" timestamptz completed_at "single use" }
     platform_backup_runs }o--|| ops_backup_job : "written by service_role only"
     tenant_admin_invitations { uuid id PK uuid restaurant_id FK text email "lower, real, not .invalid" text username "reserved while pending" uuid auth_user_id text status "pending|accepted|revoked (expiry derived)" text invited_by_type "platform_admin|tenant_admin" timestamptz expires_at "7 days, renewed by resend" int send_count "<= 5 sends" timestamptz last_sent_at "60 s gap" }
     platform_backup_runs { uuid id PK text kind "supabase_daily|supabase_pitr|logical_dump|storage_copy|restore_drill" text status "running|succeeded|failed" timestamptz started_at timestamptz finished_at bigint size_bytes text location "no credentials / query" text checksum_sha256 text error_code }
@@ -126,6 +130,9 @@ erDiagram
 - `tenant_admin_invitations`: tenant table (restaurant_id NOT NULL, FK RESTRICT, `trg_lock_restaurant_id`, never deleted). Partial unique indexes while `pending`:
   `email` (platform-wide), `auth_user_id`, `(restaurant_id, username)`. CHECKs tie `accepted_at` / `revoked_at` to the status. RLS forced with no policy and no client
   grant: read and written only through the definer RPCs (0030) and `service_role` (SELECT / INSERT / UPDATE, no DELETE).
+- `mfa_resets` (0036): tenant table (restaurant_id NOT NULL, FK RESTRICT, `trg_lock_restaurant_id`, never deleted). One single-use row per Super Admin
+  MFA-reset request; RLS forced with no policy and no grant to any API role (not even service_role): only `fn_platform_prepare_mfa_reset` /
+  `fn_platform_complete_mfa_reset` touch it. The latest `completed_at` per user drives the post-reset session rule in `fn_mfa_session_ok`.
 - `platform_backup_runs`: platform table (no restaurant_id). Written only by `service_role` (the ops backup job: INSERT, UPDATE of the result columns while
   `running`); a finished run is immutable (`trg_guard_backup_run`), nothing is deleted; row-audited into `admin_audit_log`. Read by `fn_platform_list_backup_runs` /
   `fn_platform_system_health` only.

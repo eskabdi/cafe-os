@@ -52,6 +52,8 @@ insert into public.platform_invoices (restaurant_id, subscription_id, amount, pe
   select b, b_sub, 990, current_date, current_date + 30, 'pending' from _f;
 insert into public.tenant_admin_invitations (restaurant_id, email, first_name, username, invited_by, invited_by_type, expires_at)
   select b, 'invitee@secondcafe.example.com', 'Invitee', 'invitee', b_admin, 'tenant_admin', now() + interval '7 days' from _f;
+insert into public.mfa_resets (user_id, restaurant_id, requested_by, reason, expires_at)
+  select b_admin, b, '00000000-0000-4000-8000-0000000000c1', 'fixture reset', now() + interval '5 minutes' from _f;
 insert into public.platform_backup_runs (kind, status, finished_at, size_bytes) values ('supabase_daily', 'succeeded', now(), 1024);
 insert into storage.objects (bucket_id, name, metadata) select 'menu-images', 'restaurants/' || b || '/menu/secret.png', '{"size": 2048}'::jsonb from _f;
 insert into storage.objects (bucket_id, name, metadata) select 'tenant-branding', 'restaurants/' || b || '/branding/logo.png', '{"size": 512}'::jsonb from _f;

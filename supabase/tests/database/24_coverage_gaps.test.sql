@@ -149,6 +149,8 @@ insert into public.platform_invoices (restaurant_id, subscription_id, amount, pe
 insert into public.admin_audit_log (action, platform_admin_id, restaurant_id) select 'fixture.sweep', su1, b from _f;
 insert into public.tenant_admin_invitations (restaurant_id, email, first_name, username, invited_by, invited_by_type, expires_at)
   select b, 'sweep@secondcafe.example.com', 'Sweep', 'sweep', b_admin, 'tenant_admin', now() + interval '1 day' from _f;
+-- 0036: an MFA reset row so its three RESTRICT foreign keys (profile, restaurant, requesting super admin) have a victim
+insert into public.mfa_resets (user_id, restaurant_id, requested_by, reason, expires_at) select b_admin, b, su1, 'sweep reset', now() + interval '5 minutes' from _f;
 insert into public.day_sessions (restaurant_id, day_no, status, opened_by, closed_at, closed_by, order_count, gross_collected, cash_collected, cash_expenses,
                                  expenses_total, expected_cash, counted_cash, cash_variance, net_profit, station_snapshot, expense_snapshot, payment_snapshot, inventory_variance)
   select b, 900, 'closed', b_admin, now(), b_admin, 0, 0, 0, 0, 0, 0, 0, 0, 0, '[]', '[]', '[]', 0 from _f;

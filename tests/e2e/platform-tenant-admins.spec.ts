@@ -25,7 +25,7 @@ interface Calls {
 
 async function setup(
   page: Page,
-  opts: { resetError?: { status: number; code: string } } = {},
+  opts: { resetError?: { status: number; code: string }; sessionsUnconfirmed?: boolean } = {},
 ): Promise<Calls> {
   const calls: Calls = { reset: [], rpc: [] }
   let reset = false
@@ -95,6 +95,7 @@ async function setup(
         email: 'selam@example.com',
         is_active: true,
         mfa_enrolled: !reset,
+        mfa_reset_pending: false,
         trusted_devices: reset ? 0 : 2,
       },
       {
@@ -105,6 +106,7 @@ async function setup(
         email: 'dawit@example.com',
         is_active: true,
         mfa_enrolled: false,
+        mfa_reset_pending: false,
         trusted_devices: 0,
       },
     ],
@@ -145,7 +147,14 @@ async function setup(
     if (opts.resetError) return r.fulfill(json(opts.resetError.status, { error: opts.resetError.code }))
     reset = true
     return r.fulfill(
-      json(200, { profile_id: ADMIN, factors_removed: 1, sessions_revoked: 3, devices_revoked: 2 }),
+      json(200, {
+        profile_id: ADMIN,
+        factors_removed: 1,
+        sessions_revoked: opts.sessionsUnconfirmed ? null : 3,
+        devices_revoked: 2,
+        password_rotated: true,
+        recovery_sent: true,
+      }),
     )
   })
   await page.route('**/rest/v1/**', (r) => {
@@ -186,6 +195,7 @@ test('a Super Admin resets a Tenant Admin authenticator with a reason and a fres
   await selam.getByRole('button', { name: 'Reset authenticator for Selam Bekele Tadesse' }).click()
   const dialog = page.getByRole('dialog', { name: 'Reset authenticator: Selam Bekele' })
   await expect(dialog).toContainText('signs them out everywhere')
+  await expect(dialog).toContainText('replaces their password with a random one')
   await dialog.getByLabel('Reason (recorded in the audit log)').fill('Lost phone, identity confirmed by call')
   await dialog.getByRole('button', { name: 'Reset authenticator' }).click()
 
@@ -193,7 +203,9 @@ test('a Super Admin resets a Tenant Admin authenticator with a reason and a fres
   await stepUp.getByLabel('Authentication code').fill('123456')
   await stepUp.getByRole('button', { name: 'Verify' }).click()
 
-  await expect(page.getByText(/Authenticator reset for Selam Bekele/)).toBeVisible()
+  await expect(page.getByText(/Authenticator reset for Selam Bekele/)).toContainText(
+    'They were signed out. A password-reset link was e-mailed to them.',
+  )
   await expect(dialog).toBeHidden()
   // the tenant query was invalidated: the refreshed posture shows no authenticator and no reset action
   await expect(selam).toContainText('not enrolled')
@@ -208,6 +220,26 @@ test('a Super Admin resets a Tenant Admin authenticator with a reason and a fres
     })
     expect(c.auth).toMatch(/^Bearer /)
   }
+})
+
+test('an unconfirmed sign-out (hosted auth) is reported as a warning, not as "signed out"', async ({
+  page,
+}) => {
+  await setup(page, { sessionsUnconfirmed: true })
+  await page.goto(`/platform/tenants/${RID}`)
+  await page.getByRole('button', { name: 'Reset authenticator for Selam Bekele Tadesse' }).click()
+  const dialog = page.getByRole('dialog', { name: /Reset authenticator/ })
+  await dialog.getByLabel('Reason (recorded in the audit log)').fill('Lost phone')
+  await dialog.getByRole('button', { name: 'Reset authenticator' }).click()
+  const stepUp = page.getByRole('dialog', { name: 'Verify it is you' })
+  await stepUp.getByLabel('Authentication code').fill('123456')
+  await stepUp.getByRole('button', { name: 'Verify' }).click()
+  await expect(page.getByText(/Authenticator reset for Selam Bekele/)).not.toContainText('signed out')
+  await expect(
+    page.getByText(
+      'Sign-out could not be confirmed; their old sessions can no longer pass the authenticator check.',
+    ),
+  ).toBeVisible()
 })
 
 test('a refused reset shows fixed copy and changes nothing', async ({ page }) => {
