@@ -36,15 +36,32 @@ export function reportToCsv(view: ReportView, meta: ExportMeta, generated: Gener
   if (view.kpis.length > 0) {
     parts.push(
       csvLine(['Key figures']) + '\r\n',
-      toCsv(view.kpis, [{ header: 'Metric', value: (k) => k.label }, { header: 'Value', value: (k) => (k.value === null ? formatKpi(k) : k.value) }], {
-        bom: false,
-      }),
+      toCsv(
+        view.kpis,
+        [
+          { header: 'Metric', value: (k) => k.label },
+          { header: 'Value', value: (k) => (k.value === null ? formatKpi(k) : k.value) },
+        ],
+        {
+          bom: false,
+        },
+      ),
     )
   }
   for (const t of view.tables) {
     parts.push(csvLine([t.title]) + '\r\n')
     if (t.restricted) parts.push(csvLine([RESTRICTED_NOTICE]) + '\r\n')
-    else parts.push(toCsv(t.rows, t.columns.map((c) => ({ header: c.header, value: (row: (typeof t.rows)[number]) => row[c.key] ?? null })), { bom: false }))
+    else
+      parts.push(
+        toCsv(
+          t.rows,
+          t.columns.map((c) => ({
+            header: c.header,
+            value: (row: (typeof t.rows)[number]) => row[c.key] ?? null,
+          })),
+          { bom: false },
+        ),
+      )
   }
   return CSV_BOM + parts.join('\r\n')
 }
@@ -66,7 +83,8 @@ export function downloadBlob(blob: Blob, filename: string): void {
 /** Safe, fixed copy for a refused export (no server text is ever shown). */
 export function exportErrorMessage(e: unknown): string {
   const code = e instanceof RpcError ? e.code : ''
-  if (code === 'permission_denied') return 'You do not have permission to export reports. Nothing was exported.'
+  if (code === 'permission_denied')
+    return 'You do not have permission to export reports. Nothing was exported.'
   if (code === 'invalid_input') return 'This period cannot be exported. Nothing was exported.'
   if (code === 'tenant_suspended') return 'The restaurant is suspended. Nothing was exported.'
   return 'The export could not be recorded, so nothing was exported. Try again.'

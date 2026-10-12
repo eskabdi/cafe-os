@@ -6,7 +6,15 @@ import type { ExportMeta, GeneratedAt } from './report-export'
  * Print-only layout, portalled to <body> while a print job runs (index.css hides the app and shows only `.report-print`).
  * Header: logo, restaurant, report title, period (Ethiopian + Gregorian), generated at (Ethiopian clock + international).
  */
-export function ReportPrintLayout({ view, meta, generated }: { view: ReportView; meta: ExportMeta; generated: GeneratedAt }) {
+export function ReportPrintLayout({
+  view,
+  meta,
+  generated,
+}: {
+  view: ReportView
+  meta: ExportMeta
+  generated: GeneratedAt
+}) {
   return createPortal(
     <div className="report-print" data-testid="report-print">
       <header className="report-print-header">

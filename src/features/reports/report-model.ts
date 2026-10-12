@@ -101,13 +101,25 @@ function table(
   restricted: boolean,
   empty = 'Nothing in this period.',
 ): ReportTable {
-  return { id, title, columns, rows: restricted || rows === null ? [] : rows, restricted: restricted || rows === null, empty }
+  return {
+    id,
+    title,
+    columns,
+    rows: restricted || rows === null ? [] : rows,
+    restricted: restricted || rows === null,
+    empty,
+  }
 }
 
 const dayDate = (d: string) => (isIsoDate(d) ? ethiopianDateLabel(d) : d)
 
 function byDayTable(r: PeriodReport, withExpenses: boolean, expensesRestricted: boolean): ReportTable {
-  const columns = [col('ethiopian', 'Date'), col('date', 'Gregorian'), col('day_no', 'Business day', 'int'), col('orders', 'Orders', 'int')]
+  const columns = [
+    col('ethiopian', 'Date'),
+    col('date', 'Gregorian'),
+    col('day_no', 'Business day', 'int'),
+    col('orders', 'Orders', 'int'),
+  ]
   columns.push(col('sales', 'Sales', 'money'), col('collected', 'Collected', 'money'))
   if (withExpenses && !expensesRestricted) columns.push(col('expenses', 'Expenses', 'money'))
   const rows =
@@ -148,13 +160,22 @@ export function buildReportView(type: ReportType, r: PeriodReport): ReportView {
           { label: 'Sales', value: k.sales_total, kind: 'money' },
           { label: 'Collected', value: k.gross_collected, kind: 'money' },
           { label: 'Expenses', value: blocked('expenses') ? null : k.expenses_total, kind: 'money' },
-          { label: 'Net position', value: blocked('expenses') ? null : k.net_position, kind: 'money', hint: 'collected minus expenses' },
+          {
+            label: 'Net position',
+            value: blocked('expenses') ? null : k.net_position,
+            kind: 'money',
+            hint: 'collected minus expenses',
+          },
           { label: 'Orders', value: k.order_count, kind: 'int' },
           { label: 'Items sold', value: k.items_sold, kind: 'int' },
           { label: 'Average order', value: k.avg_order_value, kind: 'money' },
           { label: 'Cancelled orders', value: k.cancelled_count, kind: 'int' },
           { label: 'Unpaid', value: k.unpaid_total, kind: 'money' },
-          { label: 'Installments outstanding', value: blocked('installments') ? null : k.vouchers_outstanding, kind: 'money' },
+          {
+            label: 'Installments outstanding',
+            value: blocked('installments') ? null : k.vouchers_outstanding,
+            kind: 'money',
+          },
         ],
         tables: [byDayTable(r, true, blocked('expenses'))],
       }
@@ -180,21 +201,28 @@ export function buildReportView(type: ReportType, r: PeriodReport): ReportView {
         kpis: [
           { label: 'Expenses', value: no ? null : k.expenses_total, kind: 'money' },
           { label: 'Collected', value: k.gross_collected, kind: 'money' },
-          { label: 'Net position', value: no ? null : k.net_position, kind: 'money', hint: 'collected minus expenses' },
+          {
+            label: 'Net position',
+            value: no ? null : k.net_position,
+            kind: 'money',
+            hint: 'collected minus expenses',
+          },
         ],
         tables: [
           table(
             'by-expense-category',
             'Expenses by category',
             [col('name', 'Category'), col('count', 'Entries', 'int'), col('amount', 'Amount', 'money')],
-            r.by_expense_category?.map((e) => ({ name: e.name ?? '—', count: e.count, amount: e.amount })) ?? null,
+            r.by_expense_category?.map((e) => ({ name: e.name ?? '—', count: e.count, amount: e.amount })) ??
+              null,
             no,
           ),
           table(
             'expenses-by-day',
             'Expenses by business day',
             [col('ethiopian', 'Date'), col('date', 'Gregorian'), col('expenses', 'Expenses', 'money')],
-            r.by_day?.map((d) => ({ ethiopian: dayDate(d.date), date: d.date, expenses: d.expenses })) ?? null,
+            r.by_day?.map((d) => ({ ethiopian: dayDate(d.date), date: d.date, expenses: d.expenses })) ??
+              null,
             no,
           ),
         ],
@@ -210,8 +238,18 @@ export function buildReportView(type: ReportType, r: PeriodReport): ReportView {
           table(
             'low-stock',
             'Low stock now',
-            [col('name', 'Ingredient'), col('stock', 'In stock', 'qty'), col('min_level', 'Minimum', 'qty'), col('unit', 'Unit')],
-            r.inventory?.low_stock.map((i) => ({ name: i.name, stock: i.stock, min_level: i.min_level, unit: i.unit })) ?? null,
+            [
+              col('name', 'Ingredient'),
+              col('stock', 'In stock', 'qty'),
+              col('min_level', 'Minimum', 'qty'),
+              col('unit', 'Unit'),
+            ],
+            r.inventory?.low_stock.map((i) => ({
+              name: i.name,
+              stock: i.stock,
+              min_level: i.min_level,
+              unit: i.unit,
+            })) ?? null,
             no,
             'Nothing below its minimum.',
           ),
@@ -256,7 +294,8 @@ export function buildReportView(type: ReportType, r: PeriodReport): ReportView {
             'by-waiter',
             'Sales by staff',
             [col('name', 'Name'), col('orders', 'Orders', 'int'), col('sales', 'Sales', 'money')],
-            r.by_waiter?.map((w) => ({ name: w.name ?? 'Unknown', orders: w.orders, sales: w.sales })) ?? null,
+            r.by_waiter?.map((w) => ({ name: w.name ?? 'Unknown', orders: w.orders, sales: w.sales })) ??
+              null,
             blocked('staff'),
           ),
         ],
@@ -311,7 +350,13 @@ export function buildReportView(type: ReportType, r: PeriodReport): ReportView {
           table(
             'cancellations',
             'Cancelled orders',
-            [col('order_no', 'Order'), col('total', 'Total', 'money'), col('reason', 'Reason'), col('at', 'Cancelled at'), col('by', 'By')],
+            [
+              col('order_no', 'Order'),
+              col('total', 'Total', 'money'),
+              col('reason', 'Reason'),
+              col('at', 'Cancelled at'),
+              col('by', 'By'),
+            ],
             r.cancellations?.items.map((c) => ({
               order_no: c.order_no,
               total: c.total,
@@ -324,7 +369,13 @@ export function buildReportView(type: ReportType, r: PeriodReport): ReportView {
           table(
             'reversals',
             'Payment reversals',
-            [col('receipt_no', 'Receipt'), col('amount', 'Amount', 'money'), col('method', 'Method'), col('at', 'Reversed at'), col('by', 'By')],
+            [
+              col('receipt_no', 'Receipt'),
+              col('amount', 'Amount', 'money'),
+              col('method', 'Method'),
+              col('at', 'Reversed at'),
+              col('by', 'By'),
+            ],
             r.reversals?.items.map((v) => ({
               receipt_no: v.receipt_no ?? '—',
               amount: v.amount,
@@ -345,7 +396,12 @@ export function buildReportView(type: ReportType, r: PeriodReport): ReportView {
           table(
             'by-hour',
             'Orders by hour',
-            [col('hour', 'Hour'), col('ethiopian', 'Ethiopian time'), col('orders', 'Orders', 'int'), col('sales', 'Sales', 'money')],
+            [
+              col('hour', 'Hour'),
+              col('ethiopian', 'Ethiopian time'),
+              col('orders', 'Orders', 'int'),
+              col('sales', 'Sales', 'money'),
+            ],
             r.by_hour?.map((h) => ({
               hour: internationalHourLabel(h.hour),
               ethiopian: ethiopianHourLabel(h.hour),

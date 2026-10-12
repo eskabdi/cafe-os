@@ -22,7 +22,14 @@ const view: ReportView = {
       restricted: false,
       empty: 'Nothing in this period.',
     },
-    { id: 'x', title: 'Withheld', columns: [{ key: 'a', header: 'A', kind: 'text' }], rows: [], restricted: true, empty: '' },
+    {
+      id: 'x',
+      title: 'Withheld',
+      columns: [{ key: 'a', header: 'A', kind: 'text' }],
+      rows: [],
+      restricted: true,
+      empty: '',
+    },
   ],
 }
 const meta = {
@@ -40,7 +47,11 @@ afterEach(() => vi.unstubAllGlobals())
 
 describe('renderReportPdf', () => {
   it('falls back to Helvetica (and says so) when /fonts/Tayitu.ttf is missing or not a font', async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response('<!doctype html>', { status: 200, headers: { 'content-type': 'text/html' } }))
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response('<!doctype html>', { status: 200, headers: { 'content-type': 'text/html' } }),
+      )
     vi.stubGlobal('fetch', fetch)
     const r = await renderReportPdf(view, meta, generated)
     expect(fetch).toHaveBeenCalledWith('/fonts/Tayitu.ttf', expect.anything())

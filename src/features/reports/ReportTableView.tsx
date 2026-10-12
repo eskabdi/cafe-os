@@ -24,7 +24,11 @@ export function ReportTableView({ t, className }: { t: ReportTable; className?: 
         <thead>
           <tr className="border-b border-line text-xs uppercase text-muted-foreground">
             {t.columns.map((c) => (
-              <th key={c.key} scope="col" className={cn('px-4 py-2 font-medium', c.kind === 'text' ? 'text-left' : 'text-right')}>
+              <th
+                key={c.key}
+                scope="col"
+                className={cn('px-4 py-2 font-medium', c.kind === 'text' ? 'text-left' : 'text-right')}
+              >
                 {c.header}
               </th>
             ))}

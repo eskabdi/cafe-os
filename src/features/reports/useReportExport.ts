@@ -2,7 +2,13 @@ import { useEffect, useState } from 'react'
 import { formatEthiopianDateTime, formatInternationalDateTime } from '@/lib/domain/ethiopian-time'
 import { exportFilename } from '@/lib/domain/reports-csv'
 import { logReportExport, type ExportFormat } from '@/lib/supabase/reports'
-import { downloadBlob, exportErrorMessage, reportToCsv, type ExportMeta, type GeneratedAt } from './report-export'
+import {
+  downloadBlob,
+  exportErrorMessage,
+  reportToCsv,
+  type ExportMeta,
+  type GeneratedAt,
+} from './report-export'
 import type { ReportView } from './report-model'
 
 export interface PrintJob {
@@ -48,7 +54,10 @@ export function useReportExport() {
     try {
       if (format === 'csv') {
         const csv = reportToCsv(view, meta, generated)
-        downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), exportFilename(meta.slug, view.type, meta.from, meta.to, 'csv'))
+        downloadBlob(
+          new Blob([csv], { type: 'text/csv;charset=utf-8' }),
+          exportFilename(meta.slug, view.type, meta.from, meta.to, 'csv'),
+        )
       } else if (format === 'pdf') {
         const { renderReportPdf, FALLBACK_NOTE } = await import('./report-pdf')
         const pdf = await renderReportPdf(view, meta, generated)

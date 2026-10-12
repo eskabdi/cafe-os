@@ -23,7 +23,9 @@ const WAITER = ['dashboard.view', 'orders.view', 'orders.create', 'menu.view', '
 const MANAGER = ['dashboard.view', 'reports.view', 'orders.view', 'orders.view_all', 'payments.view']
 
 const hours = (at: number, orders: number, sales: number) =>
-  Array.from({ length: 24 }, (_, hour) => (hour === at ? { hour, orders, sales } : { hour, orders: 0, sales: 0 }))
+  Array.from({ length: 24 }, (_, hour) =>
+    hour === at ? { hour, orders, sales } : { hour, orders: 0, sales: 0 },
+  )
 
 const KPIS = {
   order_count: 2,
@@ -76,15 +78,38 @@ const periodReport = (from: string, to: string, permissions: string[]) => {
     return {
       ...base,
       period: { from, to },
-      kpis: { ...KPIS, subtotal_total: '360.00', vat_total: '54.00', expenses_total: null, net_position: null },
-      by_day: [{ day_session_id: DAY, day_no: 11, date: from, orders: 2, sales: '414.00', collected: '414.00', expenses: null }],
+      kpis: {
+        ...KPIS,
+        subtotal_total: '360.00',
+        vat_total: '54.00',
+        expenses_total: null,
+        net_position: null,
+      },
+      by_day: [
+        {
+          day_session_id: DAY,
+          day_no: 11,
+          date: from,
+          orders: 2,
+          sales: '414.00',
+          collected: '414.00',
+          expenses: null,
+        },
+      ],
       by_item: [],
       by_waiter: null,
       by_expense_category: null,
       inventory: null,
       cancellations: { count: 0, amount: '0.00', items: [] },
       reversals: { count: 0, amount: '0.00', items: [] },
-      installments: { issued_count: 0, issued_total: 0, down_total: 0, collected_total: 0, outstanding_total: 0, overdue_count: 0 },
+      installments: {
+        issued_count: 0,
+        issued_total: 0,
+        down_total: 0,
+        collected_total: 0,
+        outstanding_total: 0,
+        overdue_count: 0,
+      },
       restricted: ['expenses', 'inventory', 'staff'],
     }
   }
@@ -93,13 +118,28 @@ const periodReport = (from: string, to: string, permissions: string[]) => {
     period: { from, to },
     kpis: { ...KPIS, subtotal_total: '360.00', vat_total: '54.00' },
     by_day: [
-      { day_session_id: DAY, day_no: 11, date: from, orders: 2, sales: '414.00', collected: '414.00', expenses: '50.00' },
+      {
+        day_session_id: DAY,
+        day_no: 11,
+        date: from,
+        orders: 2,
+        sales: '414.00',
+        collected: '414.00',
+        expenses: '50.00',
+      },
     ],
     by_item: [{ menu_item_id: CAT, name: '=1+1 Tiramisu', qty: 3, amount: '360.00' }],
     by_waiter: staff ? base.by_waiter : null,
     cancellations: { count: 0, amount: '0.00', items: [] },
     reversals: { count: 0, amount: '0.00', items: [] },
-    installments: { issued_count: 0, issued_total: 0, down_total: 0, collected_total: 0, outstanding_total: 0, overdue_count: 0 },
+    installments: {
+      issued_count: 0,
+      issued_total: 0,
+      down_total: 0,
+      collected_total: 0,
+      outstanding_total: 0,
+      overdue_count: 0,
+    },
     restricted: staff ? [] : ['staff'],
   }
 }
@@ -126,7 +166,14 @@ async function setup(page: Page, permissions: string[]): Promise<Mock> {
     user_metadata: {},
     created_at: '2026-01-01T00:00:00Z',
   }
-  const session = { access_token: jwt, refresh_token: 'r', expires_at: exp, expires_in: 3600, token_type: 'bearer', user }
+  const session = {
+    access_token: jwt,
+    refresh_token: 'r',
+    expires_at: exp,
+    expires_in: 3600,
+    token_type: 'bearer',
+    user,
+  }
   await page.addInitScript(
     ([s]) => {
       localStorage.setItem('sb-127-auth-token', s as string)
@@ -175,7 +222,9 @@ async function setup(page: Page, permissions: string[]): Promise<Mock> {
       : {}),
   })
   await page.route('**/auth/v1/**', (r) =>
-    r.request().method() === 'OPTIONS' ? r.fulfill({ status: 204, headers: CORS }) : r.fulfill(json(200, user)),
+    r.request().method() === 'OPTIONS'
+      ? r.fulfill({ status: 204, headers: CORS })
+      : r.fulfill(json(200, user)),
   )
   await page.route('**/rest/v1/**', (r) => {
     const req = r.request()
@@ -192,7 +241,10 @@ async function setup(page: Page, permissions: string[]): Promise<Mock> {
         return r.fulfill(json(200, body))
       }
       if (name === 'fn_report_period') {
-        if (!money) return r.fulfill(json(400, { code: 'P0001', message: 'permission_denied', details: null, hint: null }))
+        if (!money)
+          return r.fulfill(
+            json(400, { code: 'P0001', message: 'permission_denied', details: null, hint: null }),
+          )
         const body = (req.postDataJSON() ?? {}) as { p_from: string; p_to: string }
         m.periodBodies.push(body)
         m.events.push('report')
@@ -203,13 +255,21 @@ async function setup(page: Page, permissions: string[]): Promise<Mock> {
         m.exportBodies.push(body)
         m.events.push('log')
         if (!permissions.includes('reports.export')) {
-          return r.fulfill(json(400, { code: 'P0001', message: 'permission_denied', details: null, hint: null }))
+          return r.fulfill(
+            json(400, { code: 'P0001', message: 'permission_denied', details: null, hint: null }),
+          )
         }
         return r.fulfill(json(200, { ok: true, exported_at: '2026-10-10T16:05:00Z' }))
       }
       if (name === 'fn_report') {
-        if (!money) return r.fulfill(json(400, { code: 'P0001', message: 'permission_denied', details: null, hint: null }))
-        const body = (req.postDataJSON() ?? {}) as { p_from_day_no?: number | null; p_to_day_no?: number | null }
+        if (!money)
+          return r.fulfill(
+            json(400, { code: 'P0001', message: 'permission_denied', details: null, hint: null }),
+          )
+        const body = (req.postDataJSON() ?? {}) as {
+          p_from_day_no?: number | null
+          p_to_day_no?: number | null
+        }
         m.reportBodies.push(body)
         return r.fulfill(json(200, report(body.p_from_day_no ?? null, body.p_to_day_no ?? null)))
       }
@@ -218,7 +278,9 @@ async function setup(page: Page, permissions: string[]): Promise<Mock> {
     return r.fulfill(json(200, []))
   })
   await page.route('**/functions/v1/tenant-logo**', (r) =>
-    r.request().method() === 'OPTIONS' ? r.fulfill({ status: 204, headers: CORS }) : r.fulfill(json(200, { url: null })),
+    r.request().method() === 'OPTIONS'
+      ? r.fulfill({ status: 204, headers: CORS })
+      : r.fulfill(json(200, { url: null })),
   )
   await page.routeWebSocket(/\/realtime\/v1\/websocket/, (ws) => {
     ws.onMessage((raw) => {
@@ -271,7 +333,9 @@ function pushOrderChange(m: Mock) {
   )
 }
 
-test('a waiter (dashboard.view without reports.view) sees the floor but no money, and has no Reports', async ({ page }) => {
+test('a waiter (dashboard.view without reports.view) sees the floor but no money, and has no Reports', async ({
+  page,
+}) => {
   await setup(page, WAITER)
   await page.goto('/r/demo-cafe/dashboard')
   await expect(page.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeVisible()
@@ -293,9 +357,17 @@ test('a manager sees money on the dashboard, refreshed live over Realtime', asyn
   await page.goto('/r/demo-cafe/dashboard')
   const money = page.getByTestId('money-kpis')
   await expect(money.getByText('ETB 414.00').first()).toBeVisible()
-  await expect(page.getByRole('table', { name: 'Collected by payment method' }).getByRole('rowheader', { name: 'Amole' })).toBeAttached()
-  await expect(page.getByRole('table', { name: 'Orders by hour' }).getByRole('cell', { name: '1:00 ማታ' })).toBeAttached()
-  await expect.poll(() => m.socket?.topic ?? '').toMatch(new RegExp(`^realtime:activity-${RID}-[0-9a-f-]{36}$`))
+  await expect(
+    page
+      .getByRole('table', { name: 'Collected by payment method' })
+      .getByRole('rowheader', { name: 'Amole' }),
+  ).toBeAttached()
+  await expect(
+    page.getByRole('table', { name: 'Orders by hour' }).getByRole('cell', { name: '1:00 ማታ' }),
+  ).toBeAttached()
+  await expect
+    .poll(() => m.socket?.topic ?? '')
+    .toMatch(new RegExp(`^realtime:activity-${RID}-[0-9a-f-]{36}$`))
   const live = page.getByText('Live orders').locator('xpath=following-sibling::p[1]')
   const before = Number(await live.textContent())
   const calls = m.dashboardCalls
@@ -306,7 +378,9 @@ test('a manager sees money on the dashboard, refreshed live over Realtime', asyn
 
 const EXPORTER = [...MANAGER, 'reports.export', 'reports.staff']
 
-test('a manager report: period label, report types with their own tables, names from the data, no tenant id sent', async ({ page }) => {
+test('a manager report: period label, report types with their own tables, names from the data, no tenant id sent', async ({
+  page,
+}) => {
   const m = await setup(page, MANAGER)
   await page.goto('/r/demo-cafe/reports')
   await expect(page.getByRole('heading', { level: 1, name: 'Reports' })).toBeVisible()
@@ -319,21 +393,38 @@ test('a manager report: period label, report types with their own tables, names 
   const tabs = page.getByRole('tablist', { name: 'Report type' })
   await expect(tabs.getByRole('tab')).toHaveCount(10)
   await tabs.getByRole('tab', { name: 'Payments by method' }).click()
-  await expect(page.getByRole('table', { name: 'Collected by payment method' }).getByRole('rowheader', { name: 'Amole' })).toBeVisible()
+  await expect(
+    page
+      .getByRole('table', { name: 'Collected by payment method' })
+      .getByRole('rowheader', { name: 'Amole' }),
+  ).toBeVisible()
   await tabs.getByRole('tab', { name: 'Item & category sales' }).click()
-  await expect(page.getByRole('table', { name: 'Sales by item' }).getByRole('rowheader', { name: '=1+1 Tiramisu' })).toBeVisible()
-  await expect(page.getByRole('table', { name: 'Sales by category (before VAT)' }).getByRole('rowheader', { name: 'Desserts' })).toBeVisible()
+  await expect(
+    page.getByRole('table', { name: 'Sales by item' }).getByRole('rowheader', { name: '=1+1 Tiramisu' }),
+  ).toBeVisible()
+  await expect(
+    page
+      .getByRole('table', { name: 'Sales by category (before VAT)' })
+      .getByRole('rowheader', { name: 'Desserts' }),
+  ).toBeVisible()
   // keyboard: arrows move between tabs
   await tabs.getByRole('tab', { name: 'Item & category sales' }).focus()
   await page.keyboard.press('ArrowRight')
-  await expect(tabs.getByRole('tab', { name: 'Installments & vouchers' })).toHaveAttribute('aria-selected', 'true')
+  await expect(tabs.getByRole('tab', { name: 'Installments & vouchers' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  )
   await tabs.getByRole('tab', { name: 'Hourly traffic' }).click()
-  await expect(page.getByRole('table', { name: 'Orders by hour' }).getByRole('rowheader', { name: '09:00' })).toBeVisible()
+  await expect(
+    page.getByRole('table', { name: 'Orders by hour' }).getByRole('rowheader', { name: '09:00' }),
+  ).toBeVisible()
 
   for (const body of m.periodBodies) expect(Object.keys(body).sort()).toEqual(['p_from', 'p_to'])
 })
 
-test('periods: weekly Monday–Sunday, Ethiopian months with Pagume, prev / next, and a validated custom range', async ({ page }) => {
+test('periods: weekly Monday–Sunday, Ethiopian months with Pagume, prev / next, and a validated custom range', async ({
+  page,
+}) => {
   const m = await setup(page, MANAGER)
   await page.goto('/r/demo-cafe/reports')
   await expect(page.getByTestId('report-kpis')).toBeVisible()
@@ -367,7 +458,9 @@ test('periods: weekly Monday–Sunday, Ethiopian months with Pagume, prev / next
   expect(m.periodBodies.length).toBe(sent + 1)
 })
 
-test('without reports.export there is no Print / CSV / PDF, and withheld sections show the neutral notice', async ({ page }) => {
+test('without reports.export there is no Print / CSV / PDF, and withheld sections show the neutral notice', async ({
+  page,
+}) => {
   const m = await setup(page, MANAGER)
   await page.goto('/r/demo-cafe/reports')
   await expect(page.getByTestId('report-kpis')).toBeVisible()
@@ -380,7 +473,9 @@ test('without reports.export there is no Print / CSV / PDF, and withheld section
   expect(m.exportBodies).toHaveLength(0)
 })
 
-test('CSV export: audited first, then a BOM-prefixed, injection-safe file named after the slug, report and period', async ({ page }) => {
+test('CSV export: audited first, then a BOM-prefixed, injection-safe file named after the slug, report and period', async ({
+  page,
+}) => {
   const m = await setup(page, EXPORTER)
   await page.goto('/r/demo-cafe/reports')
   await expect(page.getByTestId('report-kpis')).toBeVisible()
@@ -391,9 +486,17 @@ test('CSV export: audited first, then a BOM-prefixed, injection-safe file named 
   await expect(page.getByRole('table', { name: 'Sales by item' })).toBeVisible()
 
   const before = m.events.length
-  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export CSV' }).click()])
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: 'Export CSV' }).click(),
+  ])
   expect(m.events.slice(before)).toEqual(['log'])
-  expect(m.exportBodies.at(-1)).toEqual({ p_report: 'items', p_from: '2026-10-12', p_to: '2026-10-18', p_format: 'csv' })
+  expect(m.exportBodies.at(-1)).toEqual({
+    p_report: 'items',
+    p_from: '2026-10-12',
+    p_to: '2026-10-18',
+    p_format: 'csv',
+  })
   expect(download.suggestedFilename()).toBe('demo-cafe-items-2026-10-12_2026-10-18.csv')
   const path = await download.path()
   const fs = await import('node:fs')
@@ -406,35 +509,64 @@ test('CSV export: audited first, then a BOM-prefixed, injection-safe file named 
   expect(text).toContain('Desserts,3,360')
 })
 
-test('Waiter performance with reports.staff shows the names; PDF export is audited before the lazy PDF chunk runs', async ({ page }) => {
+test('Waiter performance with reports.staff shows the names; PDF export is audited before the lazy PDF chunk runs', async ({
+  page,
+}) => {
   const m = await setup(page, EXPORTER)
   await page.goto('/r/demo-cafe/reports')
   await expect(page.getByTestId('report-kpis')).toBeVisible()
   await page.getByRole('tab', { name: 'Waiter performance' }).click()
-  await expect(page.getByRole('table', { name: 'Sales by staff' }).getByRole('rowheader', { name: 'Yonas Tesfaye' })).toBeVisible()
-  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export PDF' }).click()])
+  await expect(
+    page.getByRole('table', { name: 'Sales by staff' }).getByRole('rowheader', { name: 'Yonas Tesfaye' }),
+  ).toBeVisible()
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: 'Export PDF' }).click(),
+  ])
   expect(m.exportBodies.at(-1)).toMatchObject({ p_report: 'staff', p_format: 'pdf' })
   expect(download.suggestedFilename()).toMatch(/^demo-cafe-staff-\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}\.pdf$/)
   const fs = await import('node:fs')
-  expect(fs.readFileSync(await download.path()).subarray(0, 5).toString('latin1')).toBe('%PDF-')
+  expect(
+    fs
+      .readFileSync(await download.path())
+      .subarray(0, 5)
+      .toString('latin1'),
+  ).toBe('%PDF-')
 })
 
-test('a cashier-like role (expenses, inventory, staff withheld) sees notices, and export only for the types it may see', async ({ page }) => {
-  const m = await setup(page, ['dashboard.view', 'reports.view', 'reports.export', 'payments.view', 'cashier-like'])
+test('a cashier-like role (expenses, inventory, staff withheld) sees notices, and export only for the types it may see', async ({
+  page,
+}) => {
+  const m = await setup(page, [
+    'dashboard.view',
+    'reports.view',
+    'reports.export',
+    'payments.view',
+    'cashier-like',
+  ])
   await page.goto('/r/demo-cafe/reports')
   const kpis = page.getByTestId('report-kpis')
   await expect(kpis.getByText('Collected', { exact: true })).toBeVisible()
   await expect(kpis.getByText('Not available with your permissions')).toHaveCount(2) // expenses, net position
   for (const name of ['Expenses', 'Inventory', 'Waiter performance']) {
     await page.getByRole('tab', { name, exact: true }).click()
-    await expect(page.getByTestId('restricted-notice').first()).toHaveText('Not available with your permissions')
+    await expect(page.getByTestId('restricted-notice').first()).toHaveText(
+      'Not available with your permissions',
+    )
     await expect(page.getByRole('button', { name: 'Export CSV' })).toHaveCount(0)
   }
   await expect(page.getByText('Milk')).toHaveCount(0)
   await expect(page.getByText('Purchases')).toHaveCount(0)
   await page.getByRole('tab', { name: 'Payments by method' }).click()
-  await expect(page.getByRole('table', { name: 'Collected by payment method' }).getByRole('rowheader', { name: 'Amole' })).toBeVisible()
-  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export CSV' }).click()])
+  await expect(
+    page
+      .getByRole('table', { name: 'Collected by payment method' })
+      .getByRole('rowheader', { name: 'Amole' }),
+  ).toBeVisible()
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: 'Export CSV' }).click(),
+  ])
   expect(m.exportBodies.at(-1)).toMatchObject({ p_report: 'payments', p_format: 'csv' })
   expect(download.suggestedFilename()).toMatch(/^demo-cafe-payments-/)
 })

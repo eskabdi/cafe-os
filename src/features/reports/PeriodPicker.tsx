@@ -16,9 +16,20 @@ import {
   type PeriodKind,
 } from '@/lib/domain/reports-period'
 
-const KIND_LABEL: Record<PeriodKind, string> = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', custom: 'Custom' }
+const KIND_LABEL: Record<PeriodKind, string> = {
+  daily: 'Daily',
+  weekly: 'Weekly',
+  monthly: 'Monthly',
+  custom: 'Custom',
+}
 
-function CustomRangeForm({ value, onApply }: { value: { from: string; to: string }; onApply: (p: Period) => void }) {
+function CustomRangeForm({
+  value,
+  onApply,
+}: {
+  value: { from: string; to: string }
+  onApply: (p: Period) => void
+}) {
   const [from, setFrom] = useState(value.from)
   const [to, setTo] = useState(value.to)
   const [error, setError] = useState<string | null>(null)
@@ -38,11 +49,25 @@ function CustomRangeForm({ value, onApply }: { value: { from: string; to: string
     >
       <div className="space-y-1">
         <Label htmlFor="rep-custom-from">From</Label>
-        <Input id="rep-custom-from" type="date" className="w-44" value={from} aria-describedby={described} onChange={(e) => setFrom(e.target.value)} />
+        <Input
+          id="rep-custom-from"
+          type="date"
+          className="w-44"
+          value={from}
+          aria-describedby={described}
+          onChange={(e) => setFrom(e.target.value)}
+        />
       </div>
       <div className="space-y-1">
         <Label htmlFor="rep-custom-to">To</Label>
-        <Input id="rep-custom-to" type="date" className="w-44" value={to} aria-describedby={described} onChange={(e) => setTo(e.target.value)} />
+        <Input
+          id="rep-custom-to"
+          type="date"
+          className="w-44"
+          value={to}
+          aria-describedby={described}
+          onChange={(e) => setTo(e.target.value)}
+        />
       </div>
       <Button type="submit">Show</Button>
       {error && (
@@ -54,7 +79,15 @@ function CustomRangeForm({ value, onApply }: { value: { from: string; to: string
   )
 }
 
-function MonthFields({ year, month, onChange }: { year: number; month: number; onChange: (p: Period) => void }) {
+function MonthFields({
+  year,
+  month,
+  onChange,
+}: {
+  year: number
+  month: number
+  onChange: (p: Period) => void
+}) {
   return (
     <div className="flex flex-wrap items-end gap-3">
       <div className="space-y-1">
@@ -96,7 +129,15 @@ function MonthFields({ year, month, onChange }: { year: number; month: number; o
  * Daily (a date), Weekly (Monday–Sunday containing a date), Monthly (an Ethiopian month, Pagume included) or Custom (at
  * most 366 days). The label shows the Ethiopian date first, the Gregorian dates second; prev / next move one period.
  */
-export function PeriodPicker({ value, today, onChange }: { value: Period; today: string; onChange: (p: Period) => void }) {
+export function PeriodPicker({
+  value,
+  today,
+  onChange,
+}: {
+  value: Period
+  today: string
+  onChange: (p: Period) => void
+}) {
   const label = periodLabel(value)
   return (
     <div className="space-y-3 rounded-lg border border-line bg-white p-4 no-print">
@@ -121,21 +162,37 @@ export function PeriodPicker({ value, today, onChange }: { value: Period; today:
             type="date"
             className="w-44"
             value={value.date}
-            onChange={(e) => isIsoDate(e.target.value) && onChange({ kind: value.kind, date: e.target.value })}
+            onChange={(e) =>
+              isIsoDate(e.target.value) && onChange({ kind: value.kind, date: e.target.value })
+            }
           />
         </div>
       )}
       {value.kind === 'monthly' && <MonthFields year={value.year} month={value.month} onChange={onChange} />}
-      {value.kind === 'custom' && <CustomRangeForm key={`${value.from}_${value.to}`} value={value} onApply={onChange} />}
+      {value.kind === 'custom' && (
+        <CustomRangeForm key={`${value.from}_${value.to}`} value={value} onApply={onChange} />
+      )}
       <div className="flex flex-wrap items-center gap-3">
-        <Button type="button" variant="outline" size="icon" aria-label="Previous period" onClick={() => onChange(shiftPeriod(value, -1))}>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          aria-label="Previous period"
+          onClick={() => onChange(shiftPeriod(value, -1))}
+        >
           <ChevronLeft aria-hidden="true" className="h-5 w-5" />
         </Button>
         <p className="min-w-0" data-testid="period-label" aria-live="polite">
           <span className="block font-medium text-ink font-amharic">{label.ethiopian}</span>
           <span className="block text-sm text-muted-foreground">{label.gregorian}</span>
         </p>
-        <Button type="button" variant="outline" size="icon" aria-label="Next period" onClick={() => onChange(shiftPeriod(value, 1))}>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          aria-label="Next period"
+          onClick={() => onChange(shiftPeriod(value, 1))}
+        >
           <ChevronRight aria-hidden="true" className="h-5 w-5" />
         </Button>
       </div>

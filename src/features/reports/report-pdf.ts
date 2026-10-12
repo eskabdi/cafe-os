@@ -8,7 +8,8 @@ import type { ExportMeta, GeneratedAt } from './report-export'
 // /fonts/Tayitu.ttf and embedded; when it is missing the document falls back to Helvetica (Latin only) and says so.
 
 export const FONT_URL = '/fonts/Tayitu.ttf'
-export const FALLBACK_NOTE = 'Amharic text needs the Tayitu font, which could not be loaded: this PDF uses Helvetica (Latin only).'
+export const FALLBACK_NOTE =
+  'Amharic text needs the Tayitu font, which could not be loaded: this PDF uses Helvetica (Latin only).'
 
 const ETHIOPIC = /[ሀ-᎟ⶀ-⷟꬀-꬯]/
 
@@ -72,7 +73,11 @@ export interface PdfResult {
   amharicFont: boolean
 }
 
-export async function renderReportPdf(view: ReportView, meta: ExportMeta, generated: GeneratedAt): Promise<PdfResult> {
+export async function renderReportPdf(
+  view: ReportView,
+  meta: ExportMeta,
+  generated: GeneratedAt,
+): Promise<PdfResult> {
   const doc = new jsPDF({ unit: 'pt', format: 'a4' })
   const [amharicFont, logo] = await Promise.all([loadTayitu(doc), loadLogo(meta.logoUrl)])
   const font = amharicFont ? 'Tayitu' : 'helvetica'
@@ -109,7 +114,11 @@ export async function renderReportPdf(view: ReportView, meta: ExportMeta, genera
   y += 6
 
   const styles = { font, fontStyle: 'normal' as const, fontSize: 9 }
-  const headStyles = { font, fontStyle: 'normal' as const, fillColor: [30, 41, 59] as [number, number, number] }
+  const headStyles = {
+    font,
+    fontStyle: 'normal' as const,
+    fillColor: [30, 41, 59] as [number, number, number],
+  }
   if (view.kpis.length > 0) {
     autoTable(doc, {
       startY: y,
@@ -130,7 +139,9 @@ export async function renderReportPdf(view: ReportView, meta: ExportMeta, genera
     doc.setFontSize(11)
     doc.text(t.title, margin, y)
     y += 6
-    const numeric = Object.fromEntries(t.columns.flatMap((c, i) => (c.kind === 'text' ? [] : [[i, { halign: 'right' as const }]])))
+    const numeric = Object.fromEntries(
+      t.columns.flatMap((c, i) => (c.kind === 'text' ? [] : [[i, { halign: 'right' as const }]])),
+    )
     autoTable(doc, {
       startY: y,
       head: [t.columns.map((c) => c.header)],

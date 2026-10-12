@@ -11,7 +11,16 @@ export function ReportTabs({ value, onChange }: { value: ReportType; onChange: (
   const refs = useRef<Array<HTMLButtonElement | null>>([])
   const move = (e: KeyboardEvent, i: number) => {
     const n = REPORT_TYPES.length
-    const next = e.key === 'ArrowRight' ? (i + 1) % n : e.key === 'ArrowLeft' ? (i - 1 + n) % n : e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : -1
+    const next =
+      e.key === 'ArrowRight'
+        ? (i + 1) % n
+        : e.key === 'ArrowLeft'
+          ? (i - 1 + n) % n
+          : e.key === 'Home'
+            ? 0
+            : e.key === 'End'
+              ? n - 1
+              : -1
     if (next < 0) return
     e.preventDefault()
     const t = REPORT_TYPES[next]
@@ -20,7 +29,11 @@ export function ReportTabs({ value, onChange }: { value: ReportType; onChange: (
     refs.current[next]?.focus()
   }
   return (
-    <div role="tablist" aria-label="Report type" className="no-print flex gap-1 overflow-x-auto border-b border-line">
+    <div
+      role="tablist"
+      aria-label="Report type"
+      className="no-print flex gap-1 overflow-x-auto border-b border-line"
+    >
       {REPORT_TYPES.map((t, i) => {
         const selected = t === value
         return (
@@ -39,7 +52,9 @@ export function ReportTabs({ value, onChange }: { value: ReportType; onChange: (
             onKeyDown={(e) => move(e, i)}
             className={cn(
               'h-11 shrink-0 whitespace-nowrap border-b-2 px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-              selected ? 'border-primary text-ink' : 'border-transparent text-muted-foreground hover:text-ink',
+              selected
+                ? 'border-primary text-ink'
+                : 'border-transparent text-muted-foreground hover:text-ink',
             )}
           >
             {REPORT_TITLES[t]}

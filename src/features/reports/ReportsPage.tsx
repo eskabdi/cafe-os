@@ -65,7 +65,12 @@ export function ReportsPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <h1 className="text-2xl font-semibold text-ink">Reports</h1>
         {canExport && view && meta && q.data && canExportView(type, q.data.restricted) && (
-          <ExportBar busy={exporter.busy} error={exporter.error} note={exporter.note} onExport={(f) => void exporter.run(f, view, meta)} />
+          <ExportBar
+            busy={exporter.busy}
+            error={exporter.error}
+            note={exporter.note}
+            onExport={(f) => void exporter.run(f, view, meta)}
+          />
         )}
       </div>
       <PeriodPicker value={period} today={today} onChange={setPeriod} />
@@ -74,7 +79,11 @@ export function ReportsPage() {
         <PageSkeleton label="Loading the report" />
       ) : q.isError ? (
         <ErrorState
-          title={periodError ? 'This period cannot be reported (at most 366 days).' : 'The report could not be loaded'}
+          title={
+            periodError
+              ? 'This period cannot be reported (at most 366 days).'
+              : 'The report could not be loaded'
+          }
           onRetry={() => void q.refetch()}
         />
       ) : (

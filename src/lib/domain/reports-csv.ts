@@ -35,15 +35,32 @@ export function csvLine(cells: readonly CsvCell[]): string {
 }
 
 /** A table as CSV text (header row first). `bom` prepends the UTF-8 byte-order mark (once per file). */
-export function toCsv<T>(rows: readonly T[], columns: readonly CsvColumn<T>[], opts: { bom?: boolean } = {}): string {
-  const lines = [csvLine(columns.map((c) => c.header)), ...rows.map((r) => csvLine(columns.map((c) => c.value(r))))]
+export function toCsv<T>(
+  rows: readonly T[],
+  columns: readonly CsvColumn<T>[],
+  opts: { bom?: boolean } = {},
+): string {
+  const lines = [
+    csvLine(columns.map((c) => c.header)),
+    ...rows.map((r) => csvLine(columns.map((c) => c.value(r)))),
+  ]
   return `${opts.bom === false ? '' : CSV_BOM}${lines.join('\r\n')}\r\n`
 }
 
 const SAFE_PART = /[^a-z0-9-]+/g
 
 /** "<slug>-<report>-<from>_<to>.csv" with every part reduced to [a-z0-9-] (no path or header injection). */
-export function exportFilename(slug: string, report: string, from: string, to: string, ext: 'csv' | 'pdf'): string {
-  const clean = (s: string) => s.toLowerCase().replace(SAFE_PART, '-').replace(/^-+|-+$/g, '') || 'x'
+export function exportFilename(
+  slug: string,
+  report: string,
+  from: string,
+  to: string,
+  ext: 'csv' | 'pdf',
+): string {
+  const clean = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(SAFE_PART, '-')
+      .replace(/^-+|-+$/g, '') || 'x'
   return `${clean(slug)}-${clean(report)}-${clean(from)}_${clean(to)}.${ext}`
 }

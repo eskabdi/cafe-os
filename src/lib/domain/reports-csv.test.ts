@@ -43,7 +43,11 @@ describe('toCsv', () => {
 
 describe('exportFilename', () => {
   it('<slug>-<report>-<from>_<to>.<ext> with safe characters only', () => {
-    expect(exportFilename('demo-cafe', 'payments', '2026-10-12', '2026-10-18', 'csv')).toBe('demo-cafe-payments-2026-10-12_2026-10-18.csv')
-    expect(exportFilename('../Evil Name', 'x/y', '2026-10-12', '2026-10-12', 'pdf')).toBe('evil-name-x-y-2026-10-12_2026-10-12.pdf')
+    expect(exportFilename('demo-cafe', 'payments', '2026-10-12', '2026-10-18', 'csv')).toBe(
+      'demo-cafe-payments-2026-10-12_2026-10-18.csv',
+    )
+    expect(exportFilename('../Evil Name', 'x/y', '2026-10-12', '2026-10-12', 'pdf')).toBe(
+      'evil-name-x-y-2026-10-12_2026-10-12.pdf',
+    )
   })
 })

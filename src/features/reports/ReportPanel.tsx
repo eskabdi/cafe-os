@@ -19,7 +19,12 @@ function ReportChart({ type, r, trend }: { type: ReportType; r: PeriodReport; tr
         <DayTrendChart
           title="Sales trend"
           valueLabel={formatEtb}
-          rows={r.by_day.map((d) => ({ key: d.day_session_id, date: d.date, ethiopian: isIsoDate(d.date) ? ethiopianDateLabel(d.date) : d.date, value: d.sales }))}
+          rows={r.by_day.map((d) => ({
+            key: d.day_session_id,
+            date: d.date,
+            ethiopian: isIsoDate(d.date) ? ethiopianDateLabel(d.date) : d.date,
+            value: d.sales,
+          }))}
         />
       )
     case 'hourly':
@@ -30,7 +35,12 @@ function ReportChart({ type, r, trend }: { type: ReportType; r: PeriodReport; tr
         <RankedBars
           title="Payment method ranking"
           valueLabel={formatEtb}
-          rows={r.by_payment_method.map((m) => ({ key: m.payment_method_id, label: m.name, value: m.amount, detail: `×${m.count}` }))}
+          rows={r.by_payment_method.map((m) => ({
+            key: m.payment_method_id,
+            label: m.name,
+            value: m.amount,
+            detail: `×${m.count}`,
+          }))}
         />
       )
     case 'staff':
@@ -39,7 +49,14 @@ function ReportChart({ type, r, trend }: { type: ReportType; r: PeriodReport; tr
         <RankedBars
           title="Staff ranking"
           valueLabel={formatEtb}
-          rows={top(r.by_waiter.map((w, i) => ({ key: w.user_id ?? `none-${i}`, label: w.name ?? 'Unknown', value: w.sales, detail: `${w.orders} orders` })))}
+          rows={top(
+            r.by_waiter.map((w, i) => ({
+              key: w.user_id ?? `none-${i}`,
+              label: w.name ?? 'Unknown',
+              value: w.sales,
+              detail: `${w.orders} orders`,
+            })),
+          )}
         />
       )
     case 'expenses':
@@ -48,7 +65,12 @@ function ReportChart({ type, r, trend }: { type: ReportType; r: PeriodReport; tr
         <RankedBars
           title="Expense ranking"
           valueLabel={formatEtb}
-          rows={r.by_expense_category.map((e) => ({ key: e.expense_category_id, label: e.name ?? '—', value: e.amount, detail: `×${e.count}` }))}
+          rows={r.by_expense_category.map((e) => ({
+            key: e.expense_category_id,
+            label: e.name ?? '—',
+            value: e.amount,
+            detail: `×${e.count}`,
+          }))}
         />
       )
     case 'items':
@@ -57,7 +79,14 @@ function ReportChart({ type, r, trend }: { type: ReportType; r: PeriodReport; tr
         <RankedBars
           title="Top items"
           valueLabel={formatEtb}
-          rows={top(r.by_item.map((i, n) => ({ key: i.menu_item_id ?? `none-${n}`, label: i.name ?? '—', value: i.amount, detail: `${i.qty} sold` })))}
+          rows={top(
+            r.by_item.map((i, n) => ({
+              key: i.menu_item_id ?? `none-${n}`,
+              label: i.name ?? '—',
+              value: i.amount,
+              detail: `${i.qty} sold`,
+            })),
+          )}
         />
       )
     default:
@@ -66,9 +95,23 @@ function ReportChart({ type, r, trend }: { type: ReportType; r: PeriodReport; tr
 }
 
 /** One report type: KPIs, an optional chart and its tables, inside the tabpanel of the selected tab. */
-export function ReportPanel({ view, report, trend }: { view: ReportView; report: PeriodReport; trend: boolean }) {
+export function ReportPanel({
+  view,
+  report,
+  trend,
+}: {
+  view: ReportView
+  report: PeriodReport
+  trend: boolean
+}) {
   return (
-    <div role="tabpanel" id={PANEL_ID} aria-labelledby={tabId(view.type)} tabIndex={0} className="space-y-4 focus-visible:outline-none">
+    <div
+      role="tabpanel"
+      id={PANEL_ID}
+      aria-labelledby={tabId(view.type)}
+      tabIndex={0}
+      className="space-y-4 focus-visible:outline-none"
+    >
       <h2 className="sr-only">{REPORT_TITLES[view.type]}</h2>
       <KpiGrid kpis={view.kpis} />
       <ReportChart type={view.type} r={report} trend={trend} />

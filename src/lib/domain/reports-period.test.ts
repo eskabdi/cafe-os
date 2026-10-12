@@ -80,17 +80,45 @@ describe('weeks and days', () => {
 
 describe('periods', () => {
   it('default periods around today', () => {
-    expect(periodRange(defaultPeriod('daily', '2026-10-14'))).toEqual({ from: '2026-10-14', to: '2026-10-14' })
-    expect(periodRange(defaultPeriod('weekly', '2026-10-14'))).toEqual({ from: '2026-10-12', to: '2026-10-18' })
+    expect(periodRange(defaultPeriod('daily', '2026-10-14'))).toEqual({
+      from: '2026-10-14',
+      to: '2026-10-14',
+    })
+    expect(periodRange(defaultPeriod('weekly', '2026-10-14'))).toEqual({
+      from: '2026-10-12',
+      to: '2026-10-18',
+    })
     expect(defaultPeriod('monthly', '2026-10-14')).toEqual({ kind: 'monthly', year: 2019, month: 2 })
-    expect(defaultPeriod('custom', '2026-10-14')).toEqual({ kind: 'custom', from: '2026-10-12', to: '2026-10-14' })
+    expect(defaultPeriod('custom', '2026-10-14')).toEqual({
+      kind: 'custom',
+      from: '2026-10-12',
+      to: '2026-10-14',
+    })
   })
   it('previous / next', () => {
-    expect(shiftPeriod({ kind: 'daily', date: '2026-10-01' }, -1)).toEqual({ kind: 'daily', date: '2026-09-30' })
-    expect(periodRange(shiftPeriod({ kind: 'weekly', date: '2026-10-14' }, 1))).toEqual({ from: '2026-10-19', to: '2026-10-25' })
-    expect(shiftPeriod({ kind: 'monthly', year: 2018, month: 12 }, 1)).toEqual({ kind: 'monthly', year: 2018, month: 13 })
-    expect(shiftPeriod({ kind: 'monthly', year: 2018, month: 13 }, 1)).toEqual({ kind: 'monthly', year: 2019, month: 1 })
-    expect(shiftPeriod({ kind: 'monthly', year: 2019, month: 1 }, -1)).toEqual({ kind: 'monthly', year: 2018, month: 13 })
+    expect(shiftPeriod({ kind: 'daily', date: '2026-10-01' }, -1)).toEqual({
+      kind: 'daily',
+      date: '2026-09-30',
+    })
+    expect(periodRange(shiftPeriod({ kind: 'weekly', date: '2026-10-14' }, 1))).toEqual({
+      from: '2026-10-19',
+      to: '2026-10-25',
+    })
+    expect(shiftPeriod({ kind: 'monthly', year: 2018, month: 12 }, 1)).toEqual({
+      kind: 'monthly',
+      year: 2018,
+      month: 13,
+    })
+    expect(shiftPeriod({ kind: 'monthly', year: 2018, month: 13 }, 1)).toEqual({
+      kind: 'monthly',
+      year: 2019,
+      month: 1,
+    })
+    expect(shiftPeriod({ kind: 'monthly', year: 2019, month: 1 }, -1)).toEqual({
+      kind: 'monthly',
+      year: 2018,
+      month: 13,
+    })
     expect(shiftPeriod({ kind: 'custom', from: '2026-10-01', to: '2026-10-03' }, 1)).toEqual({
       kind: 'custom',
       from: '2026-10-04',
@@ -98,17 +126,32 @@ describe('periods', () => {
     })
   })
   it('labels: Ethiopian first (Arabic numerals), Gregorian second', () => {
-    expect(periodLabel({ kind: 'daily', date: '2026-09-23' })).toEqual({ ethiopian: '13 መስከረም 2019', gregorian: '2026-09-23' })
-    expect(periodLabel({ kind: 'monthly', year: 2018, month: 13 })).toEqual({ ethiopian: 'ጳጉሜ 2018', gregorian: '2026-09-06 – 2026-09-10' })
+    expect(periodLabel({ kind: 'daily', date: '2026-09-23' })).toEqual({
+      ethiopian: '13 መስከረም 2019',
+      gregorian: '2026-09-23',
+    })
+    expect(periodLabel({ kind: 'monthly', year: 2018, month: 13 })).toEqual({
+      ethiopian: 'ጳጉሜ 2018',
+      gregorian: '2026-09-06 – 2026-09-10',
+    })
     const w = periodLabel({ kind: 'weekly', date: '2026-09-23' })
     expect(w.ethiopian).toBe('11 መስከረም 2019 – 17 መስከረም 2019')
     expect(w.ethiopian).not.toMatch(/[፩-፼]/) // no Ge'ez numerals
   })
   it('custom range: both dates, in order, at most 366 days', () => {
-    expect(parseCustomRange('2026-01-01', '2026-12-31')).toEqual({ ok: true, range: { from: '2026-01-01', to: '2026-12-31' } })
+    expect(parseCustomRange('2026-01-01', '2026-12-31')).toEqual({
+      ok: true,
+      range: { from: '2026-01-01', to: '2026-12-31' },
+    })
     expect(parseCustomRange('2027-01-01', '2028-01-01')).toMatchObject({ ok: true }) // 366 days
-    expect(parseCustomRange('2027-01-01', '2028-01-02')).toEqual({ ok: false, error: 'A report covers at most 366 days.' })
-    expect(parseCustomRange('2026-05-02', '2026-05-01')).toEqual({ ok: false, error: 'The end date must not be before the start date.' })
+    expect(parseCustomRange('2027-01-01', '2028-01-02')).toEqual({
+      ok: false,
+      error: 'A report covers at most 366 days.',
+    })
+    expect(parseCustomRange('2026-05-02', '2026-05-01')).toEqual({
+      ok: false,
+      error: 'The end date must not be before the start date.',
+    })
     expect(parseCustomRange('', '2026-05-01')).toEqual({ ok: false, error: 'Choose both dates.' })
   })
   it('today in the tenant time zone', () => {

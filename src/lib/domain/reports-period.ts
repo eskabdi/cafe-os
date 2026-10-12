@@ -29,7 +29,15 @@ function gregorianToJdn(y: number, m: number, d: number): number {
   const a = Math.floor((14 - m) / 12)
   const yy = y + 4800 - a
   const mm = m + 12 * a - 3
-  return d + Math.floor((153 * mm + 2) / 5) + 365 * yy + Math.floor(yy / 4) - Math.floor(yy / 100) + Math.floor(yy / 400) - 32045
+  return (
+    d +
+    Math.floor((153 * mm + 2) / 5) +
+    365 * yy +
+    Math.floor(yy / 4) -
+    Math.floor(yy / 100) +
+    Math.floor(yy / 400) -
+    32045
+  )
 }
 
 function jdnToIso(jdn: number): string {
@@ -90,8 +98,12 @@ export function ethiopianToIso(year: number, month: number, day: number): string
 
 /** The Gregorian from/to (inclusive) of an Ethiopian month, Pagume included (5 days, 6 in a leap year). */
 export function ethiopianMonthRange(year: number, month: number): DateRange {
-  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 13) throw new Error('invalid month')
-  return { from: ethiopianToIso(year, month, 1), to: ethiopianToIso(year, month, ethiopianMonthLength(year, month)) }
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 13)
+    throw new Error('invalid month')
+  return {
+    from: ethiopianToIso(year, month, 1),
+    to: ethiopianToIso(year, month, ethiopianMonthLength(year, month)),
+  }
 }
 
 export function isoToEthiopian(iso: string): { year: number; month: number; day: number } {
@@ -101,7 +113,11 @@ export function isoToEthiopian(iso: string): { year: number; month: number; day:
 }
 
 /** Next / previous Ethiopian month (Pagume is followed by Meskerem of the next year). */
-export function shiftEthiopianMonth(year: number, month: number, delta: number): { year: number; month: number } {
+export function shiftEthiopianMonth(
+  year: number,
+  month: number,
+  delta: number,
+): { year: number; month: number } {
   const index = year * 13 + (month - 1) + delta
   return { year: Math.floor(index / 13), month: (((index % 13) + 13) % 13) + 1 }
 }
@@ -175,8 +191,12 @@ export interface PeriodLabel {
 export function periodLabel(p: Period): PeriodLabel {
   const r = periodRange(p)
   const gregorian = r.from === r.to ? r.from : `${r.from} – ${r.to}`
-  if (p.kind === 'monthly') return { ethiopian: `${ETHIOPIAN_MONTHS[p.month - 1] ?? ''} ${p.year}`, gregorian }
-  const ethiopian = r.from === r.to ? ethiopianDateLabel(r.from) : `${ethiopianDateLabel(r.from)} – ${ethiopianDateLabel(r.to)}`
+  if (p.kind === 'monthly')
+    return { ethiopian: `${ETHIOPIAN_MONTHS[p.month - 1] ?? ''} ${p.year}`, gregorian }
+  const ethiopian =
+    r.from === r.to
+      ? ethiopianDateLabel(r.from)
+      : `${ethiopianDateLabel(r.from)} – ${ethiopianDateLabel(r.to)}`
   return { ethiopian, gregorian }
 }
 
@@ -190,10 +210,14 @@ export const customRangeSchema = z
     }
     const n = spanDays(v.from, v.to)
     if (n < 1) ctx.addIssue({ code: 'custom', message: 'The end date must not be before the start date.' })
-    else if (n > MAX_PERIOD_DAYS) ctx.addIssue({ code: 'custom', message: `A report covers at most ${MAX_PERIOD_DAYS} days.` })
+    else if (n > MAX_PERIOD_DAYS)
+      ctx.addIssue({ code: 'custom', message: `A report covers at most ${MAX_PERIOD_DAYS} days.` })
   })
 
-export function parseCustomRange(from: string, to: string): { ok: true; range: DateRange } | { ok: false; error: string } {
+export function parseCustomRange(
+  from: string,
+  to: string,
+): { ok: true; range: DateRange } | { ok: false; error: string } {
   const r = customRangeSchema.safeParse({ from, to })
   if (r.success) return { ok: true, range: { from: r.data.from, to: r.data.to } }
   return { ok: false, error: r.error.issues[0]?.message ?? 'Invalid range.' }
@@ -202,7 +226,12 @@ export function parseCustomRange(from: string, to: string): { ok: true; range: D
 /** Today's calendar date "YYYY-MM-DD" in a time zone (falls back to Addis Ababa for an unknown zone). */
 export function todayIn(timeZone: string, now: Date = new Date()): string {
   const fmt = (tz: string) =>
-    new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now)
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(now)
   try {
     return fmt(timeZone)
   } catch {
