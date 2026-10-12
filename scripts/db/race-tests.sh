@@ -11,6 +11,8 @@
 #   * Phase 4 orders (0030): 8 submits racing for the last unit of stock -> exactly 1 order; 10 concurrent retries of ONE
 #     idempotency key -> exactly 1 order; 20 submits with opposite cart line order + concurrent receipts -> no deadlock, ledger
 #     consistent; cancel vs KDS start in both orders of arrival -> exactly one wins, no half state
+#   * MFA reset (0036): two reset rows of ONE Tenant Admin claimed at the same time (two Super Admin tabs) -> exactly one claim,
+#     the other reset_in_progress (only one password rotation can be in flight per user)
 # Needs PGHOST / PGPORT / PGUSER=postgres / PGDATABASE in the environment (db-test.sh exports them) and the seeded
 # schema. NEVER run it against a real project: it provisions throwaway tenants (race-*) and leaves them behind.
 set -uo pipefail
@@ -242,6 +244,23 @@ for scenario in start_first cancel_first; do
   fi
 done
 check "ledger consistent at the end" 0 "$(q "$LEDGER_GAP")"
+
+echo "== 0036: two resets of one Tenant Admin claimed concurrently"
+MA=00000000-0000-4000-8000-0000000ff001; MS=00000000-0000-4000-8000-0000000ff002
+new_tenant race-mfa $MA race-mfa@race.example.com
+new_user $MS race-mfa-su@race.example.com
+q "insert into public.platform_admins (id, full_name, role) values ('$MS', 'Race MFA Super', 'platform_super_admin')" >/dev/null
+RA=$(q "insert into public.mfa_resets (user_id, restaurant_id, requested_by, reason, expires_at) select '$MA', restaurant_id, '$MS', 'race tab one', now() + interval '5 minutes' from public.profiles where id = '$MA' returning id")
+RB=$(q "insert into public.mfa_resets (user_id, restaurant_id, requested_by, reason, expires_at) select '$MA', restaurant_id, '$MS', 'race tab two', now() + interval '5 minutes' from public.profiles where id = '$MA' returning id")
+printf "begin;\n%s\nselect public.fn_platform_claim_mfa_reset('%s') ->> 'reset_id';\nselect pg_sleep(1.5);\ncommit;\n" "$SVC" "$RA" | "${PSQL[@]}" >/tmp/race.$$.1 2>&1 &
+p1=$!
+sleep 0.4
+printf "begin;\n%s\nselect public.fn_platform_claim_mfa_reset('%s') ->> 'reset_id';\ncommit;\n" "$SVC" "$RB" | "${PSQL[@]}" >/tmp/race.$$.2 2>&1 &
+p2=$!
+wait $p1 $p2
+check "exactly one of the two resets is claimed" 1 "$(q "select count(*) from public.mfa_resets where user_id = '$MA' and claimed_at is not null")"
+check "and it is the first one" "$RA" "$(q "select id from public.mfa_resets where user_id = '$MA' and claimed_at is not null")"
+grep -q reset_in_progress /tmp/race.$$.2 && pass "the late claim got reset_in_progress" || fail "late claim: $(cat /tmp/race.$$.2)"
 
 [ -n "${RACE_KEEP:-}" ] || rm -f /tmp/race.$$.*
 if [ "$FAILS" -ne 0 ]; then echo "race tests: $FAILS failure(s)"; exit 1; fi

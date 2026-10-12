@@ -34,9 +34,11 @@ brute-forced offline without the pepper. Rules:
 | `staff-roster` | PIN-staff tiles for a registered kiosk (token + `<slug>.cafeos.et`) | service-role key |
 | `staff-pin-reset` | a `users.manage` caller sets a new PIN for a PIN staff member of its tenant (`fn_prepare_pin_reset` as the caller, then `fn_set_user_pin`) | service-role key, `PIN_PEPPER` |
 | `tenant-admin-invite` | invite / resend / revoke a Tenant Admin invitation (Super Admin for a named tenant, or a tenant_admin for its own tenant; authorisation by the database as the caller) | service-role key, `INVITE_REDIRECT_URL` |
+| `tenant-admin-mfa-reset` | a Super Admin (recent TOTP) removes a Tenant Admin's lost authenticator and forces credential re-proof: `fn_platform_prepare_mfa_reset` as the caller (single-use reset row), GoTrue `mfa.deleteFactor` per factor, password rotated to a random value, `fn_platform_complete_mfa_reset(reset_id, late_factors)` (service role: claimed + signed-out rows only, devices revoked, sessions deleted, audited with the late factors; a stop after the claim is audited by `fn_platform_mfa_reset_abort`), then a recovery e-mail | service-role key, `RECOVERY_REDIRECT_URL` |
 
 `INVITE_REDIRECT_URL`: absolute https URL of the Tenant Portal's accept-invitation page (http only for localhost); must also be listed in the
 Auth redirect allow-list (`additional_redirect_urls` locally, Authentication > URL Configuration on the hosted project). Missing or unsafe = function disabled.
+`RECOVERY_REDIRECT_URL` (tenant-admin-mfa-reset): same rules, the Tenant Portal's set-new-password page; missing or unsafe = function disabled.
 
 
 `ALLOWED_ORIGINS` accepts exactly one wildcard form for tenant subdomains, e.g. `https://*.cafeos.et` (one valid non-reserved label; `platform.cafeos.et`

@@ -2,6 +2,7 @@
 // permission code (the same codes the server checks in RLS / RPCs) and stations by UUID. All of it is UX only.
 
 import type { PinChangeStatus } from './pin-change'
+import { hasPlanFeature, type PlanFeatureKey, type PlanFeaturesHolder } from './plan-features'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -17,6 +18,11 @@ export interface ModuleNavSpec {
   segment: string
   permission: string
   group: 'operations' | 'management' | 'settings'
+  /**
+   * Plan feature the module sells (platform plan catalogue key, never a tenant domain name). Without it the entry stays visible
+   * but is marked "Upgrade" and opens the module's explanatory locked state; the server refuses the gated commands anyway.
+   */
+  planFeature?: PlanFeatureKey
 }
 
 export type Can = (permission: string) => boolean
@@ -24,6 +30,11 @@ export type Can = (permission: string) => boolean
 /** Modules the user may open, in catalogue order. A module whose permission is not held is omitted (not disabled). */
 export function visibleModules<T extends ModuleNavSpec>(modules: readonly T[], can: Can): T[] {
   return modules.filter((m) => can(m.permission))
+}
+
+/** Is the module marked as not included in the tenant's plan? Modules without a planFeature are never locked. */
+export function isModuleLocked(module: Pick<ModuleNavSpec, 'planFeature'>, ctx: PlanFeaturesHolder | null | undefined) {
+  return module.planFeature !== undefined && !hasPlanFeature(ctx, module.planFeature)
 }
 
 /** Groups visible modules, keeping catalogue order and dropping empty groups. */

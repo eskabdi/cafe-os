@@ -37,7 +37,7 @@ reused for the two portals (execution prompt §34A). Migrations: `20261003003000
 | endpoint | class | parameters | returns |
 |---|---|---|---|
 | `fn_platform_list_tenants` | Private | `p_search text?` (≤100, name/slug, case-insensitive), `p_status text?` (`trialing|active|past_due|suspended|cancelled`), `p_plan_id uuid?`, `p_limit int = 50` (1..100), `p_offset int = 0` | `{ total, limit, offset, items: [{ id, name, slug, status, created_at, suspended_at, plan: {id, name}, subscription_status, trial_ends_at, current_period_end }] }` (newest first) |
-| `fn_platform_get_tenant` | Private | `p_restaurant_id uuid` | tenant metadata (`id, name, slug, status, custom_domain, timezone, phone, address, tin, onboarded_at, suspended_at, suspension_reason, created_at, updated_at`), `subscription {.., plan}`, `limits`, `usage`, `over_quota`, `invitations[]` (last 20), `recent_invoices[]` (last 5) |
+| `fn_platform_get_tenant` | Private | `p_restaurant_id uuid` | tenant metadata (`id, name, slug, status, custom_domain, timezone, phone, address, tin, onboarded_at, suspended_at, suspension_reason, created_at, updated_at`), `subscription {.., plan}`, `limits`, `usage`, `over_quota`, `invitations[]` (last 20), `recent_invoices[]` (last 5), `tenant_admins[]` (0036: `{ profile_id, first_name, middle_name, last_name, email, is_active, mfa_enrolled, trusted_devices }` for every profile holding the system tenant_admin role, oldest first; `mfa_enrolled` = a verified factor exists, `trusted_devices` = live count; no operational data) |
 | `fn_platform_create_tenant` | Private | `p_name`, `p_slug`, `p_plan_id`, `p_trial_days int = 14` (0..90; 0 = active), `p_timezone = 'Africa/Addis_Ababa'` | `{ restaurant_id, slug, status, day_session_id }` — default roles/stations/categories/payment methods/areas/expense categories seeded as rows, day 1 open, **no owner** (invite one) |
 | `fn_provision_tenant` (reused) | Private + Internal | unchanged signature (owner must already exist with a confirmed e-mail) | unchanged; platform callers now need aal2 (`fn_platform_guard`), service_role unchanged |
 | `fn_platform_change_plan` | Private | `p_restaurant_id`, `p_plan_id` (active), `p_reason` (3..500) | `{ restaurant_id, plan_id, changed, over_quota: ["staff"|"menu_items"|"stations"|"kiosks"|"storage"|"orders"] }` (a downgrade below usage is allowed and reported) |
@@ -69,6 +69,64 @@ Errors: `invalid_input` (`name|trial_days|reason|status|search|limit|offset|conf
 | `fn_platform_set_plan_active` | Private | `p_plan_id`, `p_active boolean` | `plan` (no delete: subscriptions reference plans with RESTRICT) |
 
 Errors: `invalid_input` (`patch` for an unknown key, else the field), `duplicate_name` (detail = the name), `not_found`.
+
+Plan features (0036): a submitted `features` object without `installments` is stored with `"installments": false`; `create_plan` without
+`features` stores `{"installments": false}`; `installments`, when present, must be a boolean (`invalid_input/features`). Absent always meant
+"not entitled"; existing plans were backfilled with `false`, and any legacy non-boolean value was coerced to a boolean (true only for
+`true`/`t`/`yes`/`on`/`1`, case-insensitive). Entitlement is enforced by the RPCs; the tenant's features are also returned to tenant users as
+`plan_features` by `fn_get_session_context` (UX only).
+
+Plan editor default (owner decision, "best experience"): a NEW plan starts with **Installment vouchers switched on** in the Platform Admin
+Portal and the editor always submits `installments` explicitly (with the other known switches, unknown keys preserved). The database default
+(`false` when absent) only applies to API callers that omit the key.
+
+### Tenant Admin MFA reset (0036; owner decision 2026-10-11)
+
+A Super Admin removes the authenticator of a Tenant Admin who lost it and forces credential re-proof (the password is replaced with a random
+value and a recovery e-mail goes to the registered address). Every step is bound by a single-use reset row behind one Edge Function; the
+Super Admin needs a real TOTP verification at most 12 h old (a trusted-device session is not enough). Order (nothing irreversible before
+the claim, the authenticator goes last): prepare (caller) -> claim (service) -> password rotation (GoTrue; on failure abort (service,
+audited) and stop, factors untouched) -> sign-out (service; on failure abort and stop) -> delete the prepared factors, re-list and delete
+every factor still there (GoTrue) -> complete (service; refuses a row that was not claimed and signed out; records the late factors) ->
+recovery e-mail. A completed reset whose recovery link was never used can have its e-mail sent again (action `resend_recovery`).
+
+| endpoint | class | parameters | returns / rules |
+|---|---|---|---|
+| `tenant-admin-mfa-reset` (Edge Function) | Private, recent TOTP | `{ restaurant_id, profile_id, reason, action? }` (`action`: `reset` (default) \| `resend_recovery`; no other key, ≤2048 bytes, reason 3..500 chars) | reset: `200 { profile_id, mfa_reset: true, factors_removed, sessions_revoked (int or null, totals), devices_revoked, password_rotated: true, recovery_sent }`; resend: `200 { profile_id, action: "resend_recovery", recovery_sent }`; errors `400 invalid_request`, `401 unauthorized`, `403 forbidden \| mfa_required \| step_up_required`, `404 not_found`, `409 no_factor \| reset_expired \| reset_in_progress \| recovery_not_available \| tenant_suspended`, `429 try_later`, `503 server_error` (not completed; run again). Disabled (503) without a safe `RECOVERY_REDIRECT_URL`. See its README |
+| `fn_platform_prepare_mfa_reset` | Private (step 1, AS THE CALLER) | `p_restaurant_id uuid`, `p_profile_id uuid`, `p_reason text` | `{ reset_id, profile_id, user_id, factor_ids: [uuid] }` (every factor of the user, any status; EMPTY when finishing a half-done reset). Inserts a `mfa_resets` row (expires in 5 min). `fn_platform_guard` (`permission_denied`, `mfa_required`), `step_up_required`, `invalid_input` (`restaurant_id\|profile_id\|reason`), `permission_denied` (own id), `not_found` (unknown / other tenant / not a tenant_admin / inactive: one answer), `tenant_suspended` (suspended / cancelled tenant), `invalid_state/no_factor` (no verified factor and no half-done reset pending). Audit: admin_audit_log `tenant_admin.mfa_reset_requested` `{profile_id, reset_id, reason, finishing}` |
+| `fn_platform_claim_mfa_reset` | Internal (service_role only, BEFORE the rotation) | `p_reset_id uuid` | `{ reset_id, profile_id, user_id, created_at, factor_ids }`; stamps `claimed_at`. Locks the row and the target profile. Raises `permission_denied` (not service role; requester no longer an active Super Admin), `invalid_input/reset_id`, `not_found` (unknown reset; target no longer an active tenant_admin of that tenant), `tenant_suspended`, `invalid_state/reset_completed \| reset_expired \| reset_superseded` (a newer reset of the user completed after this one was requested) `\| reset_in_progress` (already claimed, or another claimed, unexpired, uncompleted reset of the user). Audit: admin_audit_log `tenant_admin.mfa_reset_claimed` |
+| `fn_platform_mfa_reset_sign_out` | Internal (service_role only, after the rotation, before the factors are deleted) | `p_reset_id uuid` | `{ profile_id, sessions_revoked (int or null), devices_revoked }`; claimed, uncompleted rows only (`invalid_state/reset_not_claimed \| reset_completed`). Revokes live trusted devices (`mfa_reset`), deletes session attestations and `auth.sessions`; counts recorded on the row. Audit: admin_audit_log `tenant_admin.mfa_reset_signed_out` |
+| `fn_platform_prepare_recovery_resend` | Private (AS THE CALLER) | `p_restaurant_id uuid`, `p_profile_id uuid`, `p_reason text` | `{ profile_id, user_id }`. Same guard / recent TOTP / input / target / `tenant_suspended` rules as prepare; `invalid_state/recovery_not_available` unless the admin has no verified factor, a reset of the admin was completed, nothing is pending or in flight (an older uncompleted reset that was superseded or expired unclaimed does not count, even when it was requested after the completed one). Deliberately not gated on `last_sign_in_at` (opening the recovery link signs the user in; gating would re-create the lockout). Enrolling a factor ends availability. Audit: admin_audit_log `tenant_admin.recovery_resent` `{profile_id, reason}` + tenant audit_logs `auth.recovery_resent_by_platform` `{profile_id, reason}` (actor = the Super Admin). The Edge Function then sends the recovery e-mail to the registered address |
+| `fn_platform_mfa_reset_abort` | Internal (service_role only, after the claim) | `p_reset_id uuid`, `p_stage text` (`rotate` \| `sign_out`) | `{ reset_id, profile_id, stage }`. The Edge Function stopped because the password rotation or the sign-out step failed. Claimed, uncompleted rows only (`invalid_state/reset_not_claimed \| reset_completed`); `invalid_input/reset_id \| stage`, `not_found`, `permission_denied` (not service role). Changes nothing on the row: it STAYS claimed (keeps cutting the older sessions off, blocks other claims until it expires). Audit: admin_audit_log `tenant_admin.mfa_reset_aborted` `{profile_id, reset_id, stage, signed_out}` (actor = requester) |
+| `fn_platform_complete_mfa_reset` | Internal (service_role only) | `p_reset_id uuid`, `p_late_factors integer default 0` (0..100: factors the Edge Function's re-list found enrolled after the request) | `{ profile_id, sessions_revoked (null when auth.sessions is not writable by the DB role), devices_revoked }`, or `{ profile_id, refused: permission_denied \| not_found \| tenant_suspended }` (requester no longer an active Super Admin / target no longer an active tenant_admin of that tenant / tenant suspended or cancelled, AFTER the factors were deleted: returned so the admin audit `tenant_admin.mfa_reset_incomplete` and the tenant audit `auth.mfa_reset_incomplete_by_platform` `{profile_id, reason, refused}` persist). Raises `permission_denied` (not service role), the refusals above while a verified factor remains, `invalid_input/reset_id \| late_factors`, `not_found` (unknown reset), `invalid_state/reset_completed` (replay), `invalid_state/reset_expired`, `invalid_state/reset_superseded` (older than the user's latest completed reset), `invalid_state/reset_not_claimed` (never claimed), `invalid_state/reset_not_signed_out` (the sign-out step never ran), `invalid_state/factors_remain`. Actor, target, tenant and reason come from the row. Revokes live trusted devices (`revoke_reason = 'mfa_reset'`, `revoked_by` = requester), deletes session attestations and every `auth.sessions` row of the user again (anything since the sign-out step; the counts returned are totals with it), stamps `completed_at`. Audit: admin_audit_log `tenant_admin.mfa_reset` `{profile_id, reset_id, reason, sessions_revoked, devices_revoked, late_factors}` + tenant audit_logs `auth.mfa_reset_by_platform` `{profile_id, reason, sessions_revoked, devices_revoked, late_factors}` (actor = requester, `actor_type = platform_admin`); the two `incomplete` rows carry `late_factors` too |
+
+`fn_session_after_mfa_reset()` (used by `fn_mfa_session_ok()`, `fn_require_recent_totp()` and, first of all, `fn_require_step_up()`, which
+raises `mfa_required` whatever `app.tenant_admin_mfa_required` says) accepts a session of a reset user only when the JWT `session_id` names an
+`auth.sessions` row created after the cut-off: the latest `completed_at`, and the `created_at` of every reset that is not completed and either
+unexpired (a pending reset cuts old sessions off at once) or claimed (the password may already be rotated). No row: refused. Sessions that
+survived the reset (hosted Supabase, stolen password) can never pass an MFA gate again, even after enrolling a new factor.
+
+`fn_platform_get_tenant` → `tenant_admins[]`: `{ profile_id, first_name, middle_name, last_name, email, is_active, mfa_enrolled,
+mfa_reset_pending, recovery_resend_available, trusted_devices }`. `mfa_reset_pending` = a half-done reset (factors deleted, completion
+missing); the portal then offers "Finish reset" (same Edge Function call). `recovery_resend_available` = an active admin of a tenant that is
+neither suspended nor cancelled, no verified factor, a completed reset, nothing pending or in flight, no sign-in since the latest
+completion; the portal then offers "Resend recovery email"
+(same Edge Function, `action: "resend_recovery"`).
+
+Example:
+```http
+POST /functions/v1/tenant-admin-mfa-reset
+{ "restaurant_id": "2b1e…", "profile_id": "7c40…", "reason": "Lost phone, identity confirmed by call" }
+200 { "profile_id": "7c40…", "mfa_reset": true, "factors_removed": 1, "sessions_revoked": 2, "devices_revoked": 1, "password_rotated": true, "recovery_sent": true }
+403 { "error": "step_up_required" }
+409 { "error": "no_factor" }
+409 { "error": "reset_expired" }
+
+POST /functions/v1/tenant-admin-mfa-reset
+{ "restaurant_id": "2b1e…", "profile_id": "7c40…", "reason": "Recovery link expired, identity confirmed by call", "action": "resend_recovery" }
+200 { "profile_id": "7c40…", "action": "resend_recovery", "recovery_sent": true }
+409 { "error": "recovery_not_available" }
+```
 
 ### Invoices
 

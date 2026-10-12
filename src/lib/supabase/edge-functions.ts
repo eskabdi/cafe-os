@@ -133,6 +133,69 @@ export async function resetStaffPin(profileId: string, pin: string): Promise<voi
   )
 }
 
+// ── tenant-admin-mfa-reset (Platform Admin Portal) ─────────────────────────────────────────────────────────────────────
+export interface ResetTenantAdminMfaInput {
+  /** The target tenant (a Super Admin names it; the server re-checks the profile belongs to it and is a Tenant Admin). */
+  restaurantId: string
+  profileId: string
+  /** Audited reason, 3..500 characters (re-validated by the server). */
+  reason: string
+}
+
+const mfaResetSchema = z.object({
+  profile_id: uuid,
+  factors_removed: z.number().int().nonnegative(),
+  sessions_revoked: z.number().int().nonnegative().nullable(),
+  devices_revoked: z.number().int().nonnegative(),
+  /** Always true: the server never completes a reset without replacing the password with a random one. */
+  password_rotated: z.literal(true),
+  /** Whether the password-recovery e-mail to the Tenant Admin's registered address was accepted. */
+  recovery_sent: z.boolean(),
+})
+export type TenantAdminMfaReset = z.infer<typeof mfaResetSchema>
+
+/**
+ * Super Admin only: removes a Tenant Admin's authenticator factors and trusted devices, signs them out, replaces their password with
+ * a random one and e-mails them a password-recovery link (audited). Also finishes a half-done reset (mfa_reset_pending). The server
+ * requires a TOTP verified within 12 h (step_up_required, handled by the step-up runner) and rate-limits the call. Error codes:
+ * invalid_request, unauthorized, forbidden, mfa_required, step_up_required, not_found, no_factor, reset_expired, reset_in_progress,
+ * tenant_suspended, try_later, server_error.
+ */
+export async function resetTenantAdminMfa(i: ResetTenantAdminMfaInput): Promise<TenantAdminMfaReset> {
+  return mfaResetSchema.parse(
+    await invokeEdge('tenant-admin-mfa-reset', {
+      restaurant_id: i.restaurantId,
+      profile_id: i.profileId,
+      reason: i.reason.trim(),
+    }),
+  )
+}
+
+const recoveryResendSchema = z.object({
+  profile_id: uuid,
+  action: z.literal('resend_recovery'),
+  /** Whether GoTrue accepted the password-recovery e-mail to the Tenant Admin's registered address. */
+  recovery_sent: z.boolean(),
+})
+export type TenantAdminRecoveryResend = z.infer<typeof recoveryResendSchema>
+
+/**
+ * Super Admin only: sends the password-recovery e-mail again to a Tenant Admin whose authenticator reset completed but who never
+ * used the link (expired / lost), so they are never locked out for good. Same Edge Function (action 'resend_recovery'), same audited
+ * reason and fresh-TOTP rule; the e-mail goes to the registered address only. Extra error codes: recovery_not_available (the admin
+ * has an authenticator again or a reset is pending), tenant_suspended.
+ */
+export async function resendTenantAdminRecovery(i: ResetTenantAdminMfaInput): Promise<TenantAdminRecoveryResend> {
+  return recoveryResendSchema.parse(
+    await invokeEdge('tenant-admin-mfa-reset', {
+      restaurant_id: i.restaurantId,
+      profile_id: i.profileId,
+      reason: i.reason.trim(),
+      action: 'resend_recovery',
+    }),
+  )
+}
+
 // ── reachability (Platform Admin Portal, System health) ───────────────────────────────────────────────────────────────
 /** The Edge Functions the portals depend on. */
 export const EDGE_FUNCTIONS = [
@@ -142,6 +205,7 @@ export const EDGE_FUNCTIONS = [
   'staff-roster',
   'staff-pin-reset',
   'tenant-admin-invite',
+  'tenant-admin-mfa-reset',
   'tenant-logo',
 ] as const
 

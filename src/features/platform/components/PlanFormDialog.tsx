@@ -9,10 +9,22 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/select'
 import { parseDecimal } from '@/lib/domain/decimal'
 import { formatFeatures, MIB, parseFeatures, parseLimit } from '@/lib/domain/portal'
+import {
+  isKnownPlanFeature,
+  mergePlanFeatures,
+  PLAN_FEATURE_KEYS,
+  PLAN_FEATURES,
+  splitPlanFeatures,
+  type PlanFeatureKey,
+} from '@/lib/domain/plan-features'
 import type { Plan, PlanInput } from '@/lib/supabase/platform'
 
 const limit = (max?: number) =>
   z.string().refine((v) => parseLimit(v, max) !== undefined, 'Enter a positive whole number, or leave empty for unlimited.')
+
+const switchesSchema = z.object(
+  Object.fromEntries(PLAN_FEATURE_KEYS.map((k) => [k, z.boolean()])) as Record<PlanFeatureKey, z.ZodBoolean>,
+)
 
 export const planFormSchema = z.object({
   name: z.string().trim().min(1, 'Enter a name.').max(60, 'At most 60 characters.'),
@@ -29,14 +41,28 @@ export const planFormSchema = z.object({
   max_kiosks: limit(),
   max_orders_per_month: limit(),
   max_storage_mib: limit(1024 * 1024),
-  features: z.string().refine((v) => parseFeatures(v) !== null, 'One "key = value" per line; keys a-z, 0-9, _ (at most 50).'),
+  /** Known features as explicit on/off switches (always written as true or false). */
+  switches: switchesSchema,
+  /** Any other (unknown) feature keys, preserved as "key = value" lines. */
+  features: z
+    .string()
+    .refine((v) => parseFeatures(v) !== null, 'One "key = value" per line; keys a-z, 0-9, _ (at most 50).')
+    .refine(
+      (v) => !Object.keys(parseFeatures(v) ?? {}).some(isKnownPlanFeature),
+      `Use the switches above for ${PLAN_FEATURE_KEYS.join(', ')}.`,
+    ),
   sort_order: z.string().regex(/^-?\d{1,6}$/, 'Whole number.'),
 })
 export type PlanFormValues = z.infer<typeof planFormSchema>
 
 const str = (n: number | null | undefined) => (n === null || n === undefined ? '' : String(n))
 
+/**
+ * A new plan starts with installments explicitly on (and every other known feature explicitly off); an existing plan shows a
+ * switch on only when its value is exactly true. Unknown keys go to the free-form list unchanged.
+ */
 export function planToForm(p: Plan | null): PlanFormValues {
+  const { switches, other } = splitPlanFeatures(p?.features ?? null)
   return {
     name: p?.name ?? '',
     description: p?.description ?? '',
@@ -47,7 +73,8 @@ export function planToForm(p: Plan | null): PlanFormValues {
     max_kiosks: str(p?.max_kiosks),
     max_orders_per_month: str(p?.max_orders_per_month),
     max_storage_mib: p?.max_storage_bytes ? String(Math.max(1, Math.round(p.max_storage_bytes / MIB))) : '',
-    features: formatFeatures(p?.features ?? null),
+    switches: p ? switches : { ...switches, installments: true },
+    features: formatFeatures(other),
     sort_order: String(p?.sort_order ?? 0),
   }
 }
@@ -64,7 +91,7 @@ export function formToPlan(v: PlanFormValues): PlanInput {
     max_kiosks: parseLimit(v.max_kiosks) ?? null,
     max_orders_per_month: parseLimit(v.max_orders_per_month) ?? null,
     max_storage_bytes: storage === null ? null : storage * MIB,
-    features: parseFeatures(v.features) ?? {},
+    features: mergePlanFeatures(parseFeatures(v.features) ?? {}, v.switches),
     sort_order: Number(v.sort_order),
   }
 }
@@ -126,7 +153,40 @@ export function PlanFormDialog({
               </FormField>
             ))}
           </div>
-          <FormField id="plan-features" label="Features" hint="One per line, e.g. qr_ordering = true" error={e.features?.message}>
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium text-ink">Features</legend>
+            {PLAN_FEATURES.map((f) => (
+              <label
+                key={f.key}
+                htmlFor={`plan-feature-${f.key}`}
+                className="flex min-h-[44px] cursor-pointer items-start gap-3 rounded-md border border-line p-3 focus-within:ring-2 focus-within:ring-ring"
+              >
+                <input
+                  id={`plan-feature-${f.key}`}
+                  type="checkbox"
+                  role="switch"
+                  aria-labelledby={`plan-feature-${f.key}-label`}
+                  aria-describedby={`plan-feature-${f.key}-hint`}
+                  className="mt-0.5 h-5 w-5 shrink-0 accent-primary"
+                  {...form.register(`switches.${f.key}`)}
+                />
+                <span>
+                  <span id={`plan-feature-${f.key}-label`} className="block text-sm font-medium text-ink">
+                    {f.label}
+                  </span>
+                  <span id={`plan-feature-${f.key}-hint`} className="block text-xs text-muted-foreground">
+                    {f.hint}
+                  </span>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+          <FormField
+            id="plan-features"
+            label="Other features"
+            hint="Optional. One per line, e.g. qr_ordering = true. Kept as entered."
+            error={e.features?.message}
+          >
             {(a) => <Textarea {...a} {...form.register('features')} />}
           </FormField>
           <FormField id="plan-sort" label="Sort order" error={e.sort_order?.message}>

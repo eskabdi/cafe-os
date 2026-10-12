@@ -53,4 +53,21 @@ Do these BEFORE a hosted project takes real users. Items marked (manual) cannot 
       join auth.mfa_factors f on f.user_id = p.id and f.status = 'verified' and f.factor_type = 'totp'
       where p.restaurant_id = r.id and p.is_active);
     ```
+18. **Tenant Admin MFA reset (0036):** set the Edge Function secret `RECOVERY_REDIRECT_URL` on `tenant-admin-mfa-reset` to
+    `https://<app origin>/reset-password` (the set-new-password page, `src/features/password-reset`; http only for localhost; no credentials, no fragment;
+    same rule as `INVITE_REDIRECT_URL`) and add the same URL to the Auth redirect allow-list (Authentication > URL Configuration; `additional_redirect_urls`
+    locally). Missing or unsafe = the function is disabled (every call 503). The page accepts only a `type=recovery` link (implicit flow, session in the
+    URL fragment, removed on arrival), sets the new password (`updateUser`; the client policy mirrors `password_requirements =
+    "lower_upper_letters_digits_symbols"` and 12..72: keep the hosted Auth setting identical), signs the account out everywhere (`signOut({ scope: 'global' })`;
+    if that fails the page signs out locally and shows a non-blocking warning) and sends the Tenant Admin to `/r/<slug>/admin-login`, where they sign in and set
+    up the authenticator again.
+    The function's order is: prepare (caller) -> `fn_platform_claim_mfa_reset` (service; every refusal happens here, before anything changes) -> password
+    rotation -> `fn_platform_mfa_reset_sign_out` (service) -> delete the factors, re-list them and delete any left -> `fn_platform_complete_mfa_reset` (service)
+    -> recovery e-mail. Action `resend_recovery` (portal button "Resend recovery email") re-sends the e-mail after a completed reset whose link was never used.
+    **Hosted check (required): the owner of the definer functions (the migration role, normally `postgres`) must be able to SELECT and DELETE `auth.sessions`.**
+    Run as that role: `select count(*) from auth.sessions;` and `begin; delete from auth.sessions where false; rollback;`. If SELECT fails, the post-reset
+    session rule (`fn_session_after_mfa_reset`) fails closed and EVERY session of a user with a reset is refused at every aal2 gate (the Tenant Admin is locked
+    out of aal2 for good); if DELETE fails, resets report `sessions_revoked: null` and old sessions are not signed out (they stay shut out of MFA-gated
+    actions only by the post-reset session rule). Fix the grants (`grant select, delete on auth.sessions to postgres`) before enabling the function.
+    Deploy the migration and the function together (an older function build calls neither the claim nor the sign-out step).
 - Amharic fonts: put `Tayitu.ttf` and `Jiret.ttf` in `public/fonts/` (owner-supplied; `src/index.css` `.font-amharic`, CSP `font-src 'self'`).

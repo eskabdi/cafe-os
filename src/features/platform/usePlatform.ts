@@ -1,7 +1,15 @@
-import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import {
   inviteTenantAdmin,
   resendTenantAdminInvitation,
+  resendTenantAdminRecovery,
+  resetTenantAdminMfa,
   revokeTenantAdminInvitation,
   type InviteTenantAdminInput,
 } from '@/lib/supabase/edge-functions'
@@ -46,7 +54,11 @@ export const PAGE_SIZE = 25
 export const LOG_PAGE_SIZE = 50
 
 export function useTenantList(f: TenantListFilter) {
-  return useQuery({ queryKey: platformKeys.tenants(f), queryFn: () => listTenants(f), placeholderData: keepPreviousData })
+  return useQuery({
+    queryKey: platformKeys.tenants(f),
+    queryFn: () => listTenants(f),
+    placeholderData: keepPreviousData,
+  })
 }
 
 export function useTenant(id: string) {
@@ -105,7 +117,10 @@ function useInvalidateTenant() {
 
 export function useCreateTenant() {
   const inv = useInvalidateTenant()
-  return useMutation({ mutationFn: (i: CreateTenantInput) => createTenant(i), onSuccess: (r) => inv(r.restaurant_id) })
+  return useMutation({
+    mutationFn: (i: CreateTenantInput) => createTenant(i),
+    onSuccess: (r) => inv(r.restaurant_id),
+  })
 }
 
 export type TenantAction =
@@ -144,7 +159,8 @@ export function useTenantAction(restaurantId: string) {
 export function useInviteTenantAdmin(restaurantId: string) {
   const inv = useInvalidateTenant()
   return useMutation({
-    mutationFn: (i: Omit<InviteTenantAdminInput, 'restaurantId'>) => inviteTenantAdmin({ ...i, restaurantId }),
+    mutationFn: (i: Omit<InviteTenantAdminInput, 'restaurantId'>) =>
+      inviteTenantAdmin({ ...i, restaurantId }),
     onSuccess: () => inv(restaurantId),
   })
 }
@@ -153,7 +169,28 @@ export function useInvitationCommand(restaurantId: string) {
   const inv = useInvalidateTenant()
   return useMutation({
     mutationFn: (a: { kind: 'resend' | 'revoke'; invitationId: string }) =>
-      a.kind === 'resend' ? resendTenantAdminInvitation(a.invitationId) : revokeTenantAdminInvitation(a.invitationId),
+      a.kind === 'resend'
+        ? resendTenantAdminInvitation(a.invitationId)
+        : revokeTenantAdminInvitation(a.invitationId),
+    onSuccess: () => inv(restaurantId),
+  })
+}
+
+/** Tenant-admin-mfa-reset Edge Function; refreshes the tenant detail (MFA posture) and the platform audit log. */
+export function useResetTenantAdminMfa(restaurantId: string) {
+  const inv = useInvalidateTenant()
+  return useMutation({
+    mutationFn: (a: { profileId: string; reason: string }) =>
+      resetTenantAdminMfa({ restaurantId, profileId: a.profileId, reason: a.reason }),
+    onSuccess: () => inv(restaurantId),
+  })
+}
+
+export function useResendTenantAdminRecovery(restaurantId: string) {
+  const inv = useInvalidateTenant()
+  return useMutation({
+    mutationFn: (a: { profileId: string; reason: string }) =>
+      resendTenantAdminRecovery({ restaurantId, profileId: a.profileId, reason: a.reason }),
     onSuccess: () => inv(restaurantId),
   })
 }
@@ -169,14 +206,18 @@ function useInvalidatePlans() {
 export function useSavePlan() {
   const inv = useInvalidatePlans()
   return useMutation({
-    mutationFn: (a: { id: string | null; plan: PlanInput }) => (a.id ? updatePlan(a.id, a.plan) : createPlan(a.plan)),
+    mutationFn: (a: { id: string | null; plan: PlanInput }) =>
+      a.id ? updatePlan(a.id, a.plan) : createPlan(a.plan),
     onSuccess: inv,
   })
 }
 
 export function useSetPlanActive() {
   const inv = useInvalidatePlans()
-  return useMutation({ mutationFn: (a: { id: string; active: boolean }) => setPlanActive(a.id, a.active), onSuccess: inv })
+  return useMutation({
+    mutationFn: (a: { id: string; active: boolean }) => setPlanActive(a.id, a.active),
+    onSuccess: inv,
+  })
 }
 
 function useInvalidateInvoices() {
@@ -209,7 +250,8 @@ export function useSetInvoiceStatus() {
 export function useSetAdminActive() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (a: { id: string; active: boolean; reason: string }) => setAdminActive(a.id, a.active, a.reason),
+    mutationFn: (a: { id: string; active: boolean; reason: string }) =>
+      setAdminActive(a.id, a.active, a.reason),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: platformKeys.admins })
       void qc.invalidateQueries({ queryKey: ['platform', 'audit'] })

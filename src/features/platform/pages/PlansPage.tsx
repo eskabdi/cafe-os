@@ -9,6 +9,7 @@ import { useStepUp } from '@/features/auth'
 import { EmptyState, ErrorState, PageSkeleton } from '@/features/shell/states'
 import { formatEtb } from '@/lib/domain/decimal'
 import { formatBytes, formatCount } from '@/lib/domain/portal'
+import { PLAN_FEATURES, splitPlanFeatures } from '@/lib/domain/plan-features'
 import type { Plan, PlanInput } from '@/lib/supabase/platform'
 import { portalErrorMessage } from '@/lib/supabase/portal-errors'
 import { PlanFormDialog } from '../components/PlanFormDialog'
@@ -91,6 +92,13 @@ export function PlansPage() {
                 <li>Terminals: {lim(p.max_kiosks)}</li>
                 <li>Orders / month: {lim(p.max_orders_per_month)}</li>
                 <li>Storage: {lim(p.max_storage_bytes, true)}</li>
+              </ul>
+              <ul aria-label={`${p.name} features`} className="space-y-0.5 text-sm text-ink">
+                {PLAN_FEATURES.map((f) => (
+                  <li key={f.key}>
+                    {f.label}: {splitPlanFeatures(p.features).switches[f.key] ? 'included' : 'not included'}
+                  </li>
+                ))}
               </ul>
               <p className="text-xs text-muted-foreground">Subscribers: {formatCount(p.subscriber_count)}</p>
               <div className="flex flex-wrap gap-2">

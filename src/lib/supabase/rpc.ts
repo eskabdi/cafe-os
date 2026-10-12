@@ -124,6 +124,10 @@ const sessionContextSchema = z
       .nullable()
       .optional()
       .catch(undefined),
+    // The tenant's plan features (migration 0036), e.g. {"installments": true}. Null / absent for platform admins and older
+    // payloads; a malformed value never blocks sign-in. UX only (hasPlanFeature): entitled only when a key is exactly true,
+    // and the server refuses an unentitled command with plan_feature_unavailable.
+    plan_features: z.record(z.string(), z.unknown()).nullable().optional().catch(undefined),
   })
   .nullable()
 export type SessionContext = NonNullable<z.infer<typeof sessionContextSchema>>

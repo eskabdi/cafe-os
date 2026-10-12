@@ -1,10 +1,11 @@
 import { useEffect, useRef } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { PLATFORM_SUPER_ADMIN, portalOf } from '@/lib/domain/portal'
 import { getSessionContext, resolveTenantSlug } from '@/lib/supabase/rpc'
 import { fetchTenantLogoUrl } from '@/lib/supabase/tenant-logo'
 import { AdminLoginForm } from './AdminLoginForm'
+import { loginNoticeFromState } from './login-notice'
 import { StaffLogin } from './StaffLogin'
 import { useAuth } from './useAuth'
 
@@ -99,9 +100,16 @@ export function TenantLoginPage() {
 export function TenantAdminLoginPage() {
   const { slug = '' } = useParams<{ slug: string }>()
   const navigate = useNavigate()
+  // e.g. after /reset-password: a fixed notice chosen by key (never text from the URL or navigation state)
+  const notice = loginNoticeFromState(useLocation().state)
   useRedirectIfAlreadySignedIn(`/r/${slug}`)
   return (
     <AuthShell title="Admin sign-in" subtitle="Owners and managers use email and password" logoSlug={slug}>
+      {notice && (
+        <p role="status" className="mb-4 rounded-card border border-status-success/40 bg-status-success/10 p-3 text-sm text-ink">
+          {notice}
+        </p>
+      )}
       <AdminLoginForm onSignedIn={() => navigate(`/r/${slug}`, { replace: true })} />
       <p className="mt-4 text-center text-sm">
         <Link className="text-primary underline-offset-4 hover:underline" to={`/r/${slug}/login`}>

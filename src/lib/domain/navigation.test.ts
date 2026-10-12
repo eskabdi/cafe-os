@@ -3,6 +3,7 @@ import {
   accountLinkIds,
   canOpenStation,
   groupModules,
+  isModuleLocked,
   isUuid,
   visibleModules,
   visibleStations,
@@ -107,5 +108,28 @@ describe('canOpenStation / isUuid', () => {
     expect(canOpenStation(undefined, access)).toBe(false)
     expect(canOpenStation(S1, { stationIds: [S1], can: can([]) })).toBe(false)
     expect(isUuid('x')).toBe(false)
+  })
+})
+
+describe('isModuleLocked (plan entitlement marking)', () => {
+  const gated: ModuleNavSpec = { id: 'g', label: 'G', segment: 'g', permission: 'p.g', group: 'operations', planFeature: 'installments' }
+  const plain = MODULES[0] as ModuleNavSpec
+
+  it('never locks a module without a plan feature', () => {
+    expect(isModuleLocked(plain, null)).toBe(false)
+    expect(isModuleLocked(plain, { plan_features: {} })).toBe(false)
+  })
+
+  it('locks a gated module unless the plan feature is exactly true', () => {
+    expect(isModuleLocked(gated, { plan_features: { installments: true } })).toBe(false)
+    expect(isModuleLocked(gated, { plan_features: { installments: false } })).toBe(true)
+    expect(isModuleLocked(gated, { plan_features: { installments: 'true' } })).toBe(true)
+    expect(isModuleLocked(gated, { plan_features: {} })).toBe(true)
+    expect(isModuleLocked(gated, { plan_features: null })).toBe(true)
+    expect(isModuleLocked(gated, null)).toBe(true)
+  })
+
+  it('keeps a locked module visible (permission filtering is unchanged)', () => {
+    expect(visibleModules([gated], can(['p.g'])).map((m) => m.id)).toEqual(['g'])
   })
 })

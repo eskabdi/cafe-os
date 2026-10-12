@@ -100,6 +100,23 @@ const invitationSchema = z.object({
 })
 export type Invitation = z.infer<typeof invitationSchema>
 
+/** A Tenant Admin of the tenant (fn_platform_get_tenant, migration 0036): identity and MFA posture only, never a secret. */
+const tenantAdminSchema = z.object({
+  profile_id: uuid,
+  first_name: z.string(),
+  middle_name: z.string().nullable().optional(),
+  last_name: z.string().nullable().optional(),
+  email: z.string().nullable().optional(),
+  is_active: z.boolean(),
+  mfa_enrolled: z.boolean(),
+  /** A half-done authenticator reset (factors deleted, completion missing): the portal offers "Finish reset". */
+  mfa_reset_pending: z.boolean().optional().default(false),
+  /** A completed reset whose recovery link was never used (no authenticator, nothing pending): "Resend recovery email". */
+  recovery_resend_available: z.boolean().optional().default(false),
+  trusted_devices: count,
+})
+export type TenantAdminRow = z.infer<typeof tenantAdminSchema>
+
 const tenantDetailSchema = z.object({
   id: uuid,
   name: z.string(),
@@ -131,6 +148,8 @@ const tenantDetailSchema = z.object({
   limits: usageSchema,
   over_quota: z.array(z.string()),
   invitations: z.array(invitationSchema),
+  // absent on backends before migration 0036
+  tenant_admins: z.array(tenantAdminSchema).optional().default([]),
   recent_invoices: z.array(
     z.object({
       id: uuid,

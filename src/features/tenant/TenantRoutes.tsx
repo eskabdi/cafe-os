@@ -1,9 +1,18 @@
+import { useId } from 'react'
 import { Link } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/features/auth'
 import { tenantHomePath } from '@/features/pin-change/pin-paths'
-import { EmptyState, MODULE_NAV, NotFoundState, modulePath } from '@/features/shell'
-import { visibleModules } from '@/lib/domain/navigation'
+import {
+  EmptyState,
+  MODULE_NAV,
+  NotFoundState,
+  PlanLockDescription,
+  UpgradeBadge,
+  modulePath,
+  type ModuleNavItem,
+} from '@/features/shell'
+import { isModuleLocked, visibleModules } from '@/lib/domain/navigation'
 
 function NoRestaurantAccess() {
   const { signOut } = useAuth()
@@ -16,6 +25,28 @@ function NoRestaurantAccess() {
         Sign out
       </Button>
     </main>
+  )
+}
+
+/** One overview card; a module whose plan feature is missing is marked "Upgrade" and opens its locked state. */
+function ModuleCard({ slug, module: m, locked }: { slug: string; module: ModuleNavItem; locked: boolean }) {
+  const descriptionId = useId()
+  return (
+    <>
+      <Link
+        to={modulePath(slug, m.segment)}
+        aria-describedby={locked ? descriptionId : undefined}
+        className="flex min-h-[44px] items-start gap-3 rounded-card border border-line bg-white p-4 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      >
+        <m.icon aria-hidden="true" className="mt-0.5 h-6 w-6 shrink-0 text-primary" />
+        <span className="min-w-0 flex-1">
+          <span className="block font-medium text-ink">{m.label}</span>
+          <span className="block text-sm text-muted-foreground">{m.summary}</span>
+        </span>
+        {locked && <UpgradeBadge />}
+      </Link>
+      {locked && <PlanLockDescription id={descriptionId} />}
+    </>
   )
 }
 
@@ -48,16 +79,7 @@ export default function TenantHome() {
         <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" aria-label="Modules">
           {modules.map((m) => (
             <li key={m.id}>
-              <Link
-                to={modulePath(slug, m.segment)}
-                className="flex min-h-[44px] items-start gap-3 rounded-card border border-line bg-white p-4 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-              >
-                <m.icon aria-hidden="true" className="mt-0.5 h-6 w-6 shrink-0 text-primary" />
-                <span>
-                  <span className="block font-medium text-ink">{m.label}</span>
-                  <span className="block text-sm text-muted-foreground">{m.summary}</span>
-                </span>
-              </Link>
+              <ModuleCard slug={slug} module={m} locked={isModuleLocked(m, context)} />
             </li>
           ))}
         </ul>

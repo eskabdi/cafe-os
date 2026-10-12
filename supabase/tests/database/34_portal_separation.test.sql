@@ -52,6 +52,8 @@ insert into public.platform_invoices (restaurant_id, subscription_id, amount, pe
   select b, b_sub, 990, current_date, current_date + 30, 'pending' from _f;
 insert into public.tenant_admin_invitations (restaurant_id, email, first_name, username, invited_by, invited_by_type, expires_at)
   select b, 'invitee@secondcafe.example.com', 'Invitee', 'invitee', b_admin, 'tenant_admin', now() + interval '7 days' from _f;
+insert into public.mfa_resets (user_id, restaurant_id, requested_by, reason, expires_at)
+  select b_admin, b, '00000000-0000-4000-8000-0000000000c1', 'fixture reset', now() + interval '5 minutes' from _f;
 insert into public.platform_backup_runs (kind, status, finished_at, size_bytes) values ('supabase_daily', 'succeeded', now(), 1024);
 insert into storage.objects (bucket_id, name, metadata) select 'menu-images', 'restaurants/' || b || '/menu/secret.png', '{"size": 2048}'::jsonb from _f;
 insert into storage.objects (bucket_id, name, metadata) select 'tenant-branding', 'restaurants/' || b || '/branding/logo.png', '{"size": 512}'::jsonb from _f;
@@ -135,8 +137,8 @@ select ok(not public.has_permission('orders.view') and public.current_restaurant
 -- the platform tenant detail: metadata + aggregates only
 create temp table _detail on commit drop as select public.fn_platform_get_tenant((select b from _f)) d;
 select is((select string_agg(k, ',' order by k) from _detail, jsonb_object_keys(d) k),
-          'address,cancelled_at,created_at,custom_domain,id,invitations,limits,name,onboarded_at,over_quota,phone,recent_invoices,slug,status,subscription,suspended_at,suspension_reason,timezone,tin,updated_at,usage',
-          'fn_platform_get_tenant returns exactly the metadata / subscription / usage / invitation / invoice keys');
+          'address,cancelled_at,created_at,custom_domain,id,invitations,limits,name,onboarded_at,over_quota,phone,recent_invoices,slug,status,subscription,suspended_at,suspension_reason,tenant_admins,timezone,tin,updated_at,usage',
+          'fn_platform_get_tenant returns exactly the metadata / subscription / usage / invitation / invoice / tenant admin keys');
 select ok(not ((select d::text from _detail) ~* '(ORD-7777|Secret|RCT-0001|VCH-0001|waiter|opening_float|vat_rate)'),
           'and no operational content: no order / receipt / voucher number, item, customer, ingredient or staff name, no money settings');
 select ok((select (d -> 'usage' ->> 'orders_last_30_days')::int >= 1 and (d -> 'usage' ->> 'storage_bytes')::bigint >= 2560 from _detail),

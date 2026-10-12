@@ -55,6 +55,9 @@ insert into public.platform_invoices (restaurant_id, subscription_id, amount, pe
   select b, b_sub, 990, current_date, current_date + 30, 'pending' from _f;
 insert into public.tenant_admin_invitations (restaurant_id, email, first_name, username, invited_by, invited_by_type, expires_at)
   select b, 'invitee@secondcafe.example.com', 'Invitee', 'invitee', b_admin, 'tenant_admin', now() + interval '7 days' from _f;
+-- expired and never claimed: a row for the tenant-table checks that does not cut b_admin's sessions off (a pending reset would, 0036)
+insert into public.mfa_resets (user_id, restaurant_id, requested_by, reason, created_at, expires_at)
+  select b_admin, b, '00000000-0000-4000-8000-0000000000c1', 'fixture reset', now() - interval '10 minutes', now() - interval '5 minutes' from _f;
 
 insert into public.orders (restaurant_id, day_session_id, order_no, created_by, subtotal, vat_rate_snapshot, vat_amount, total)
   select a, (select id from public.day_sessions where restaurant_id = a and status = 'open'), 'ORD-0007', tests.user_id('meron', 'central-cafe'), 10, 15, 1.5, 11.5 from _f;

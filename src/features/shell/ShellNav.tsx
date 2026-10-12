@@ -12,13 +12,20 @@ import {
 import { useStations } from '@/features/stations/useStations'
 import { iconForSlug } from '@/features/terminal/tile-icons'
 import { usesSupabaseAuthSignIn } from '@/lib/domain/authenticator'
-import { accountLinkIds, groupModules, visibleModules, type AccountLinkId } from '@/lib/domain/navigation'
+import {
+  accountLinkIds,
+  groupModules,
+  isModuleLocked,
+  visibleModules,
+  type AccountLinkId,
+} from '@/lib/domain/navigation'
 import { pinChangeStatusOf } from '@/lib/domain/pin-change'
 import { tileStyle } from '@/lib/domain/tile-style'
 import { cn } from '@/lib/utils/cn'
-import { DEFAULT_STATION_ICON, GROUP_LABELS, MODULE_NAV } from './nav-config'
+import { DEFAULT_STATION_ICON, GROUP_LABELS, MODULE_NAV, type ModuleNavItem } from './nav-config'
 import { modulePath, stationPath } from './paths'
 import { NavSkeleton } from './states'
+import { PlanLockDescription, UpgradeBadge } from './UpgradeBadge'
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
   cn(
@@ -104,6 +111,37 @@ function StationLinks({ slug, onNavigate }: { slug: string; onNavigate?: () => v
   )
 }
 
+/** One module link. A module whose plan feature is missing stays visible (marked "Upgrade") and opens its locked state. */
+function ModuleLink({
+  slug,
+  module: m,
+  locked,
+  onNavigate,
+}: {
+  slug: string
+  module: ModuleNavItem
+  locked: boolean
+  onNavigate?: () => void
+}) {
+  const descriptionId = useId()
+  return (
+    <>
+      <NavLink
+        to={modulePath(slug, m.segment)}
+        end
+        className={linkClass}
+        onClick={onNavigate}
+        aria-describedby={locked ? descriptionId : undefined}
+      >
+        <m.icon aria-hidden="true" className="h-5 w-5 shrink-0" />
+        {m.label}
+        {locked && <UpgradeBadge />}
+      </NavLink>
+      {locked && <PlanLockDescription id={descriptionId} />}
+    </>
+  )
+}
+
 /**
  * The tenant navigation, generated from MODULE_NAV (permission-keyed) plus the tenant's station rows. Rendered in the
  * desktop sidebar and in the mobile drawer. UX only: every page re-checks on the server.
@@ -128,10 +166,12 @@ export function ShellNav({ slug, onNavigate }: { slug: string; onNavigate?: () =
         <Section key={group} title={GROUP_LABELS[group]}>
           {items.map((m) => (
             <li key={m.id}>
-              <NavLink to={modulePath(slug, m.segment)} end className={linkClass} onClick={onNavigate}>
-                <m.icon aria-hidden="true" className="h-5 w-5 shrink-0" />
-                {m.label}
-              </NavLink>
+              <ModuleLink
+                slug={slug}
+                module={m}
+                locked={isModuleLocked(m, context)}
+                onNavigate={onNavigate}
+              />
             </li>
           ))}
         </Section>

@@ -169,6 +169,32 @@ describe('permission-driven navigation', () => {
     }
   })
 
+  it('marks a module whose plan feature is missing with "Upgrade" but keeps it reachable', () => {
+    renderAt('/r/demo-cafe', auth(ctx(['vouchers.view', 'orders.create'], [], { plan_features: { installments: false } })))
+    const link = within(mainNav()).getByRole('link', { name: 'Installments' })
+    expect(link).toHaveAttribute('href', '/r/demo-cafe/installments')
+    expect(link).toHaveAccessibleDescription('Not included in your plan')
+    expect(within(link).getByTestId('upgrade-badge')).toHaveTextContent('Upgrade')
+    // modules without a plan feature are never marked
+    const pos = within(mainNav()).getByRole('link', { name: 'POS' })
+    expect(within(pos).queryByTestId('upgrade-badge')).toBeNull()
+    // the home overview card carries the same marker
+    const card = within(screen.getByRole('list', { name: 'Modules' })).getByRole('link', { name: /Installments/ })
+    expect(card).toHaveAccessibleDescription('Not included in your plan')
+  })
+
+  it('does not mark the module when the plan feature is exactly true', () => {
+    renderAt('/r/demo-cafe', auth(ctx(['vouchers.view'], [], { plan_features: { installments: true } })))
+    const link = within(mainNav()).getByRole('link', { name: 'Installments' })
+    expect(link).not.toHaveAccessibleDescription()
+    expect(within(link).queryByTestId('upgrade-badge')).toBeNull()
+  })
+
+  it('treats a non-boolean or absent plan value as not included', () => {
+    renderAt('/r/demo-cafe', auth(ctx(['vouchers.view'], [], { plan_features: { installments: 'true' } })))
+    expect(within(within(mainNav()).getByRole('link', { name: 'Installments' })).getByTestId('upgrade-badge')).toBeInTheDocument()
+  })
+
   it('keeps the account link rules (Security only for Supabase Auth sessions)', () => {
     renderAt('/r/demo-cafe', auth(ctx(['users.manage', 'settings.session_timers']), ADMIN_SESSION))
     const nav = within(mainNav())
