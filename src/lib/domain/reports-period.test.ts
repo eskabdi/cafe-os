@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  MAX_ETH_YEAR,
+  MIN_ETH_YEAR,
+  parseEthiopianYear,
   addDays,
   defaultPeriod,
   ethiopianMonthLength,
@@ -162,8 +165,7 @@ describe('periods', () => {
 })
 
 describe('parseEthiopianYear (the month picker year field)', () => {
-  it('accepts whole 4-digit years in range only', async () => {
-    const { parseEthiopianYear, MIN_ETH_YEAR, MAX_ETH_YEAR } = await import('./reports-period')
+  it('accepts whole 4-digit years in range only', () => {
     expect(parseEthiopianYear(' 2018 ')).toBe(2018)
     expect(parseEthiopianYear(String(MIN_ETH_YEAR))).toBe(MIN_ETH_YEAR)
     expect(parseEthiopianYear(String(MAX_ETH_YEAR))).toBe(MAX_ETH_YEAR)
