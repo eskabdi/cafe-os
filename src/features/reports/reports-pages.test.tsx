@@ -17,6 +17,8 @@ const h = vi.hoisted(() => ({
   renderReportPdf: vi.fn(),
   subscribeToActivity: vi.fn(),
   unsubscribe: vi.fn(),
+  fetchTenantTimezone: vi.fn(),
+  fetchTenantLogoUrl: vi.fn(),
 }))
 vi.mock('@/lib/supabase/client', () => ({ supabase: {} }))
 vi.mock('@/lib/supabase/reports', async (importOriginal) => {
@@ -29,7 +31,11 @@ vi.mock('@/lib/supabase/reports', async (importOriginal) => {
     subscribeToActivity: h.subscribeToActivity,
   }
 })
-vi.mock('@/lib/supabase/tenant-logo', () => ({ fetchTenantLogoUrl: vi.fn().mockResolvedValue(null) }))
+vi.mock('@/lib/supabase/tenant-logo', () => ({ fetchTenantLogoUrl: h.fetchTenantLogoUrl }))
+vi.mock('@/lib/supabase/payments', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  fetchTenantTimezone: h.fetchTenantTimezone,
+}))
 // the lazily imported PDF module (jsPDF) is replaced: only the export flow is under test here
 vi.mock('./report-pdf', () => ({
   renderReportPdf: h.renderReportPdf,
@@ -283,8 +289,42 @@ describe('ReportsPage', () => {
     URL.revokeObjectURL = vi.fn()
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
     window.print = vi.fn()
+    h.fetchTenantTimezone.mockReset().mockResolvedValue('Africa/Addis_Ababa')
+    h.fetchTenantLogoUrl.mockReset().mockResolvedValue(null)
   })
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+  })
+
+  it("'today' is the tenant-local date from restaurants.timezone (not a hardcoded zone)", async () => {
+    // 20:00 UTC on 12 Oct: still the 12th in Addis Ababa, already 10:00 on the 13th in Pacific/Kiritimati (UTC+14)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-12T20:00:00Z'))
+    h.fetchTenantTimezone.mockResolvedValue('Pacific/Kiritimati')
+    h.fetchReportPeriod.mockResolvedValue(PERIOD_REPORT)
+    renderWith(<ReportsPage />, ['reports.view'])
+    await screen.findByTestId('report-kpis')
+    expect(h.fetchTenantTimezone).toHaveBeenCalled()
+    // the first (and only) request already uses the tenant zone: the page waits for it
+    expect(h.fetchReportPeriod.mock.calls).toEqual([['2026-10-13', '2026-10-13']])
+  })
+
+  it("'today' moves on after local midnight (re-read on focus / visibility, no server polling)", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-12T20:59:00Z')) // 23:59 in Addis Ababa
+    h.fetchReportPeriod.mockResolvedValue(PERIOD_REPORT)
+    renderWith(<ReportsPage />, ['reports.view'])
+    await screen.findByTestId('report-kpis')
+    expect(h.fetchReportPeriod).toHaveBeenLastCalledWith('2026-10-12', '2026-10-12')
+    vi.setSystemTime(new Date('2026-10-12T21:01:00Z')) // 00:01 on the 13th
+    fireEvent.focus(window)
+    await waitFor(() => expect(h.fetchReportPeriod).toHaveBeenLastCalledWith('2026-10-13', '2026-10-13'))
+    vi.setSystemTime(new Date('2026-10-13T21:01:00Z'))
+    fireEvent(document, new Event('visibilitychange'))
+    await waitFor(() => expect(h.fetchReportPeriod).toHaveBeenLastCalledWith('2026-10-14', '2026-10-14'))
+    expect(h.fetchTenantTimezone).toHaveBeenCalledTimes(1)
+  })
 
   it("loads today's daily summary for the tenant from the server (no tenant id sent) and renders its KPIs and table", async () => {
     h.fetchReportPeriod.mockResolvedValue(PERIOD_REPORT)
@@ -305,6 +345,7 @@ describe('ReportsPage', () => {
     await screen.findByTestId('report-kpis')
     await user.click(screen.getByRole('button', { name: 'Monthly' }))
     fireEvent.change(screen.getByLabelText('Ethiopian year'), { target: { value: '2015' } })
+    fireEvent.blur(screen.getByLabelText('Ethiopian year'))
     await user.selectOptions(screen.getByLabelText('Ethiopian month'), '13')
     await waitFor(() => expect(h.fetchReportPeriod).toHaveBeenLastCalledWith('2023-09-06', '2023-09-11'))
     expect(screen.getByTestId('period-label')).toHaveTextContent('ጳጉሜ 2015')
@@ -315,6 +356,43 @@ describe('ReportsPage', () => {
     await waitFor(() => expect(h.fetchReportPeriod).toHaveBeenLastCalledWith('2026-10-12', '2026-10-18'))
     // a weekly summary shows the by-day trend (sr-only table of the chart)
     expect(await screen.findByRole('table', { name: 'Sales trend' })).toBeInTheDocument()
+  })
+
+  it('the Ethiopian year is local text: partial input is not sent; a valid year commits on blur or Enter', async () => {
+    const user = userEvent.setup()
+    h.fetchReportPeriod.mockResolvedValue(PERIOD_REPORT)
+    renderWith(<ReportsPage />, ['reports.view'])
+    await screen.findByTestId('report-kpis')
+    await user.click(screen.getByRole('button', { name: 'Monthly' }))
+    await screen.findByTestId('report-kpis')
+    const calls = h.fetchReportPeriod.mock.calls.length
+    const year = screen.getByLabelText('Ethiopian year')
+    await user.clear(year)
+    await user.type(year, '20')
+    expect(year).toHaveValue(20)
+    expect(h.fetchReportPeriod).toHaveBeenCalledTimes(calls)
+    await user.type(year, '15')
+    expect(h.fetchReportPeriod).toHaveBeenCalledTimes(calls) // typing alone commits nothing
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(screen.getByTestId('period-label')).toHaveTextContent('2015'))
+    expect(h.fetchReportPeriod).toHaveBeenCalledTimes(calls + 1)
+    // out of range: an error, the period is kept
+    await user.clear(year)
+    await user.type(year, '1800')
+    await user.tab()
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter a year from 1990 to 2100.')
+    expect(year).toHaveAttribute('aria-invalid', 'true')
+    expect(h.fetchReportPeriod).toHaveBeenCalledTimes(calls + 1)
+    // blur commits a valid year; the error clears
+    await user.clear(year)
+    await user.type(year, '2016')
+    await user.tab()
+    await waitFor(() => expect(screen.getByTestId('period-label')).toHaveTextContent('2016'))
+    expect(screen.queryByRole('alert')).toBeNull()
+    // prev / next moving into another year updates the field
+    await user.selectOptions(screen.getByLabelText('Ethiopian month'), '1')
+    await user.click(screen.getByRole('button', { name: 'Previous period' }))
+    await waitFor(() => expect(year).toHaveValue(2015))
   })
 
   it('a custom range is validated locally before any call', async () => {
@@ -510,6 +588,26 @@ describe('ReportsPage', () => {
     expect(printed).toContain('13 መስከረም 2019, 1:05 ማታ (2026-09-23 19:05)')
     expect(printed).toContain('ETB 364.00')
     await waitFor(() => expect(document.querySelector('.report-print')).toBeNull())
+  })
+
+  it('Print waits for the logo to load (or fail) before opening the dialog', async () => {
+    const user = userEvent.setup()
+    h.fetchTenantLogoUrl.mockResolvedValue('https://cdn.example.test/logo.png')
+    h.fetchReportPeriod.mockResolvedValue(PERIOD_REPORT)
+    h.logReportExport.mockResolvedValue({ exported_at: '2026-09-23T16:05:00Z' })
+    renderWith(<ReportsPage />, ['reports.view', 'reports.export'])
+    await screen.findByTestId('report-kpis')
+    await waitFor(() => expect(h.fetchTenantLogoUrl).toHaveBeenCalled())
+    await user.click(screen.getByRole('button', { name: 'Print' }))
+    const img = await waitFor(() => {
+      const el = document.querySelector<HTMLImageElement>('.report-print img.report-print-logo')
+      expect(el).not.toBeNull()
+      return el as HTMLImageElement
+    })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(window.print).not.toHaveBeenCalled() // still loading
+    fireEvent.error(img)
+    await waitFor(() => expect(window.print).toHaveBeenCalledTimes(1))
   })
 
   it('a cashier-like role: withheld sections show the notice and their export is hidden; allowed types still export', async () => {
