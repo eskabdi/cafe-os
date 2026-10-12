@@ -27,6 +27,7 @@ const rowSchema = z.object({
     order_type: z.string(),
     status: z.string(),
     created_at: z.string(),
+    created_by: uuid.nullish(),
     day_session_id: uuid,
   }),
 })
@@ -38,7 +39,7 @@ const rowSchema = z.object({
 export async function fetchStationLines(stationId: string, dayId: string): Promise<{ lines: KdsLine[]; truncated: boolean }> {
   const { data, error } = await supabase
     .from('order_items')
-    .select('id,order_id,line_no,name_snapshot,qty,note,item_status,orders!inner(order_no,table_label_snapshot,order_type,status,created_at,day_session_id)')
+    .select('id,order_id,line_no,name_snapshot,qty,note,item_status,orders!inner(order_no,table_label_snapshot,order_type,status,created_at,created_by,day_session_id)')
     .eq('station_id', stationId)
     .eq('orders.day_session_id', dayId)
     .in('item_status', ['pending', 'preparing', 'ready'])
@@ -61,6 +62,7 @@ export async function fetchStationLines(stationId: string, dayId: string): Promi
       orderType: r.orders.order_type,
       orderCreatedAt: r.orders.created_at,
       orderStatus: r.orders.status,
+      orderCreatedBy: r.orders.created_by ?? null,
       lineNo: r.line_no,
       name: r.name_snapshot,
       qty: r.qty,

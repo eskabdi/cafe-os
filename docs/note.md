@@ -1,6 +1,6 @@
 # Notes: future TODO tasks
 
-Owner requests recorded on 2026-10-12. Task 1 is done; tasks 2 and 3 are **not implemented yet. Do not start them without picking them up as a planned task.**
+Owner requests recorded on 2026-10-12. Tasks 1 and 2 are done; task 3 is **not implemented yet. Do not start them without picking them up as a planned task.**
 
 ## 1. Orders page scoped to the signed-in user
 
@@ -12,6 +12,8 @@ Owner requests recorded on 2026-10-12. Task 1 is done; tasks 2 and 3 are **not i
 - Enforce the rule in the database (RLS policies and the RPCs such as `fn_cancel_order`), not only in the UI filter.
 
 ## 2. Staff-specific dashboard KPIs
+
+**Done 2026-10-12** (migration `20261003004200_my_dashboard.sql`, pgTAP `54_my_dashboard`, E2E in `reports.spec.ts`): new `fn_my_dashboard(from, to)` (own orders / own stations only); variant chosen by permission in `src/lib/domain/dashboard.ts` (`reports.view` or `orders.view_all` keeps the main dashboard; otherwise `orders.create` gives the own-orders section and station access the station section, both when both). Also fixed: `fn_dashboard.orders_by_status` is now scoped like `recent`, and the KDS Cancel is decided per ticket (own order, or `orders.cancel_any`). See `docs/api/reports.md`.
 
 - The dashboard shows KPIs for the signed-in staff member's own role and work:
   - **Waiter:** their own orders, sales, average order value, served and cancelled counts, and performance.

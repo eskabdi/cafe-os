@@ -9,6 +9,8 @@ import { numericValue, uuid } from './schemas'
 
 export const reportsKeys = {
   dashboard: (rid: string) => ['dashboard', rid] as const,
+  /** the personal dashboard (fn_my_dashboard); the prefix ['my-dashboard', rid] invalidates every period */
+  mine: (rid: string, from?: string, to?: string) => (from && to ? (['my-dashboard', rid, from, to] as const) : (['my-dashboard', rid] as const)),
 }
 
 const kpisSchema = z.object({
@@ -188,17 +190,68 @@ export async function fetchDashboard(): Promise<Dashboard> {
   return dashboardSchema.parse(await callRpc('fn_dashboard'))
 }
 
+// ── Personal dashboard (fn_my_dashboard, migration 0042): the caller's OWN figures only ─────────────────────────────────
+const minutes = numericValue.nullish().transform((v) => v ?? null)
+export const myDashboardSchema = z.object({
+  timezone,
+  period: z.object({ from: isoDay, to: isoDay }),
+  day_count: z.number().int(),
+  // null without orders.view + orders.create
+  own_orders: z
+    .object({
+      order_count: z.number().int(),
+      sales_total: numericValue,
+      avg_order_value: numericValue,
+      unpaid_total: numericValue,
+      open_count: z.number().int(),
+      served_count: z.number().int(),
+      cancelled_count: z.number().int(),
+      served_rate: minutes,
+      avg_serve_minutes: minutes,
+      by_hour: z.array(hourSchema),
+    })
+    .nullable(),
+  // null without orders.view + station access (role_station_access); stations are runtime rows keyed by UUID
+  stations: z
+    .array(
+      z.object({
+        station_id: uuid,
+        name: z.string(),
+        color: z.string().nullable(),
+        queue: z.number().int(),
+        in_progress: z.number().int(),
+        ready: z.number().int(),
+        completed: z.number().int(),
+        avg_prep_minutes: minutes,
+        avg_wait_minutes: minutes,
+      }),
+    )
+    .nullable(),
+})
+export type MyDashboard = z.infer<typeof myDashboardSchema>
+
+/** dashboard.view. Tenant-local dates "YYYY-MM-DD" (at most 366 days); no tenant or user id is sent (derived from the session). */
+export async function fetchMyDashboard(from: string, to: string): Promise<MyDashboard> {
+  return myDashboardSchema.parse(await callRpc('fn_my_dashboard', { p_from: from, p_to: to }))
+}
+
 /**
  * Realtime: orders and payments of the tenant (RLS-filtered) refresh the live figures. Unique topic per mount (two tabs or a
  * remount never share a channel). onChange also fires once on SUBSCRIBED so a change made while connecting is not missed.
  */
-export function subscribeToActivity(restaurantId: string, onChange: () => void): () => void {
+export function subscribeToActivity(
+  restaurantId: string,
+  onChange: () => void,
+  opts: { items?: boolean } = {},
+): () => void {
   const filter = `restaurant_id=eq.${restaurantId}`
-  const channel = supabase
+  let channel = supabase
     .channel(`activity-${restaurantId}-${crypto.randomUUID()}`)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter }, onChange)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'payments', filter }, onChange)
-    .subscribe((status) => {
+  // the station figures move with line status (start / ready), which does not always change the order row
+  if (opts.items) channel = channel.on('postgres_changes', { event: '*', schema: 'public', table: 'order_items', filter }, onChange)
+  channel = channel.subscribe((status) => {
       if (status === 'SUBSCRIBED') onChange()
     })
   return () => {

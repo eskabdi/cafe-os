@@ -15,6 +15,7 @@ database, so the client never adds money up. The tenant comes from the JWT / pro
 | `fn_report_period(p_from date, p_to date)` | `reports.view` | the same document over tenant-local calendar dates, plus `period` |
 | `fn_log_report_export(p_report, p_from, p_to, p_format)` | `reports.view` + `reports.export` (+ the section permission) | `{ok, exported_at}`; audits the export |
 | `fn_dashboard()` | `dashboard.view` (money also needs `reports.view` and `payments.view`) | the open day's floor figures and live activity |
+| `fn_my_dashboard(p_from date, p_to date)` | `dashboard.view` (+ `orders.view`; own orders also `orders.create`) | the caller's OWN figures: own orders and own stations (migration 0042) |
 
 ## Report types and periods (UI contract)
 
@@ -181,7 +182,8 @@ POST /rest/v1/rpc/fn_dashboard
 }
 ```
 
-- `orders_by_status` is floor-wide and contains counts only.
+- `orders_by_status` contains counts only, under the SAME visibility rule as `recent` (since 0042; before, it was floor-wide for
+  every `dashboard.view` holder): a waiter counts only own orders, a station only orders routed to it, `orders.view_all` the floor.
 - `recent` holds the last 15 orders of the open day that the caller can see under the `fn_order_visible` rule (`orders.view` plus
   view_all, own or station). The permissions are resolved once, not per row.
 - Money (`money`, `by_hour`, `by_payment_method`, `recent[].total`) needs `reports.view` **and** `payments.view`. Otherwise `money`,
@@ -191,6 +193,41 @@ POST /rest/v1/rpc/fn_dashboard
 - `low_stock_count` needs `inventory.view` and is station-scoped like `ingredients_select`; otherwise it is null.
 - The dashboard uses the light builder, so it has no inventory, category, waiter or voucher lists.
 - With no open day, `open_day` is null and there are no money keys.
+
+## fn_my_dashboard (personal dashboard, Private)
+
+```http
+POST /rest/v1/rpc/fn_my_dashboard
+{ "p_from": "2026-10-12", "p_to": "2026-10-12" }
+```
+
+```json
+{
+  "timezone": "Africa/Addis_Ababa",
+  "period": { "from": "2026-10-12", "to": "2026-10-12" },
+  "day_count": 1,
+  "own_orders": { "order_count": 2, "sales_total": 724.50, "avg_order_value": 362.25, "unpaid_total": 563.50, "open_count": 1,
+                  "served_count": 1, "cancelled_count": 1, "served_rate": 33.3, "avg_serve_minutes": 12.5, "by_hour": [] },
+  "stations": [{ "station_id": "66b5…", "name": "Grill", "color": "#16a34a", "queue": 3, "in_progress": 1, "ready": 2,
+                 "completed": 2, "avg_prep_minutes": 6.0, "avg_wait_minutes": 1.0 }]
+}
+```
+
+- No tenant or user id is sent: the tenant comes from `fn_tenant_status_guard(false)` and every figure is the caller's own.
+- Period: the business days whose `opened_at` falls on a tenant-local date in `[from, to]` (the `fn_report_period` rule); a null
+  bound, `to < from` or more than 366 days -> `invalid_input|period`.
+- `own_orders` (null without `orders.view` + `orders.create`): orders **created by the caller** in the period. Counts and money
+  exclude cancelled orders except `cancelled_count`; `served_rate` = served / every order taken (%, 1 decimal, null with none);
+  `avg_serve_minutes` = created -> served of served orders; `by_hour` = own live orders per tenant-local hour. Money is `numeric`.
+- `stations` (null without `orders.view` or without a `role_station_access` row): only the stations of the caller's role (never
+  tenant_admin's implicit all-stations), active ones, ordered by `sort_order`. `queue` / `in_progress` / `ready` are item
+  quantities pending / preparing / ready on the **open** day (the live board); `completed`, `avg_prep_minutes` (started -> ready)
+  and `avg_wait_minutes` (line created -> started) cover the period.
+- **Which dashboard the web client shows** (`src/lib/domain/dashboard.ts`, permission-keyed, never a role or station name):
+  `reports.view` or `orders.view_all` -> the main dashboard (`fn_dashboard`, unchanged); otherwise `orders.create` -> the own-orders
+  section and station access (`station_ids` of the session context) -> the station section, both when both apply; neither -> the
+  main dashboard. This is UX only; the RPC never returns foreign figures. Station staff need `dashboard.view` in the matrix (the
+  seeded station roles do not hold it). Realtime: orders, payments and (station section) `order_items` invalidate the query.
 
 ## Errors
 

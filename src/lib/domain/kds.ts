@@ -12,6 +12,8 @@ export interface KdsLine {
   orderCreatedAt: string
   /** The whole order's status (submitted / preparing / ready): cancel is possible only while it is 'submitted'. */
   orderStatus: string
+  /** The order's creator (null for a QR order): cancel without orders.cancel_any is offered only on own orders. */
+  orderCreatedBy: string | null
   lineNo: number | null
   name: string
   qty: number
@@ -26,6 +28,7 @@ export interface Ticket {
   orderType: string
   createdAt: string
   orderStatus: string
+  createdBy: string | null
   lines: KdsLine[]
   /** The ticket's state at this station: pending until any line starts, ready only when every line is ready. */
   status: LineStatus
@@ -36,7 +39,17 @@ export function groupTickets(lines: readonly KdsLine[]): Ticket[] {
   for (const l of lines) {
     let t = byOrder.get(l.orderId)
     if (!t) {
-      t = { orderId: l.orderId, orderNo: l.orderNo, tableLabel: l.tableLabel, orderType: l.orderType, createdAt: l.orderCreatedAt, orderStatus: l.orderStatus, lines: [], status: 'pending' }
+      t = {
+        orderId: l.orderId,
+        orderNo: l.orderNo,
+        tableLabel: l.tableLabel,
+        orderType: l.orderType,
+        createdAt: l.orderCreatedAt,
+        orderStatus: l.orderStatus,
+        createdBy: l.orderCreatedBy,
+        lines: [],
+        status: 'pending',
+      }
       byOrder.set(l.orderId, t)
     }
     t.lines.push(l)
@@ -44,7 +57,11 @@ export function groupTickets(lines: readonly KdsLine[]): Ticket[] {
   const out = [...byOrder.values()]
   for (const t of out) {
     t.lines.sort((a, b) => (a.lineNo ?? 99) - (b.lineNo ?? 99) || a.id.localeCompare(b.id))
-    t.status = t.lines.every((l) => l.status === 'ready') ? 'ready' : t.lines.some((l) => l.status !== 'pending') ? 'preparing' : 'pending'
+    t.status = t.lines.every((l) => l.status === 'ready')
+      ? 'ready'
+      : t.lines.some((l) => l.status !== 'pending')
+        ? 'preparing'
+        : 'pending'
   }
   return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.orderNo.localeCompare(b.orderNo))
 }

@@ -163,8 +163,10 @@ export function StationTickets({ stationId }: { stationId: string }) {
 
   // the server is the authority (has_station_access); the buttons appear only where they can succeed
   const operates = (context?.station_ids ?? []).includes(stationId) || isTenantAdminRole(context?.role)
-  // station tickets are other users' orders: cancelling them needs orders.cancel_any as well (fn_cancel_order decides)
-  const canCancel = can('orders.cancel') && can('orders.cancel_any')
+  // per ticket: own orders with orders.cancel, anyone's with orders.cancel_any as well (fn_cancel_order decides)
+  const uid = context?.user?.id ?? ''
+  const canCancel = (t: Ticket) =>
+    can('orders.cancel') && (can('orders.cancel_any') || (uid !== '' && t.createdBy === uid))
   return (
     <section aria-label="Tickets" className="space-y-4">
       <div className="flex items-center justify-between gap-2">
@@ -251,7 +253,7 @@ export function StationTickets({ stationId }: { stationId: string }) {
                       </Button>
                     )}
                     {/* the server cancels only a whole, untouched order: offer it only then */}
-                    {canCancel && t.orderStatus === 'submitted' && t.status === 'pending' && (
+                    {canCancel(t) && t.orderStatus === 'submitted' && t.status === 'pending' && (
                       <Button variant="outline" disabled={isBusy} onClick={() => setConfirmCancel(t)}>
                         Cancel
                       </Button>
