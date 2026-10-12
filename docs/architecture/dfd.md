@@ -241,3 +241,19 @@ flowchart LR
     UI -->|"fn_list_days()"| D
 ```
 
+
+## Level 1: settings and dynamic configuration (Phase 10)
+```mermaid
+flowchart LR
+    UI["Settings SPA /r/<slug>/settings/<domain> (config.manage / tables.manage)"] -->|"select / insert / update (RLS, column grants)"| T[("stations / categories / payment_methods / table_areas / expense_categories / tables")]
+    T -->|"payment_methods BEFORE UPDATE OF is_active: trg_guard_deactivation"| G["in_use last_active_method"]
+    T -->|trg_audit| AUD[("audit_logs")]
+    UI -->|"fn_config_usage(domain, id)"| U["definer RPC: closed domain list, tenant from JWT"]
+    UI -->|"fn_delete_config_row(domain, id)"| X["definer RPC: refuse in_use, delete, audit config.row_deleted"]
+    U --> C["internal fn_config_usage_counts"]
+    X --> C
+    C -->|"read, tenant-filtered"| REF[("menu_items / ingredients / order_items / stock_movements / role_station_access / payments / expenses / vouchers / orders / table_sessions / qr_credentials")]
+    X --> T
+    X --> AUD
+    T -.->|"Realtime stations -> nav + StationKDS; query invalidation -> POS / cashier"| APP["generated nav, POS, KDS, cashier"]
+```

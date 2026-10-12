@@ -2817,6 +2817,18 @@ export type Database = {
         Args: { p_profile_id: string }
         Returns: Json
       }
+      fn_config_domain_check: {
+        Args: { p_domain: string }
+        Returns: undefined
+      }
+      fn_config_usage: {
+        Args: { p_domain: string; p_id: string }
+        Returns: Json
+      }
+      fn_config_usage_counts: {
+        Args: { p_rid: string; p_domain: string; p_id: string }
+        Returns: Json
+      }
       fn_confirm_installment: {
         Args: {
           p_voucher_id: string
@@ -2891,6 +2903,10 @@ export type Database = {
       }
       fn_decide_pin_change: {
         Args: { p_profile_id: string; p_approve: boolean }
+        Returns: Json
+      }
+      fn_delete_config_row: {
+        Args: { p_domain: string; p_id: string }
         Returns: Json
       }
       fn_delete_role: {

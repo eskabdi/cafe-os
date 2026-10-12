@@ -9,6 +9,7 @@ export function ConfirmDialog({
   description,
   confirmLabel,
   busy,
+  confirmDisabled,
   error,
   onConfirm,
   onCancel,
@@ -18,6 +19,8 @@ export function ConfirmDialog({
   description: ReactNode
   confirmLabel: string
   busy?: boolean
+  /** Confirm is unavailable (e.g. a blocking dependency is shown) while Cancel stays usable. */
+  confirmDisabled?: boolean
   error?: string | null
   onConfirm: () => void
   onCancel: () => void
@@ -38,7 +41,7 @@ export function ConfirmDialog({
           <Button type="button" variant="outline" onClick={onCancel} disabled={busy}>
             Cancel
           </Button>
-          <Button type="button" onClick={onConfirm} disabled={busy}>
+          <Button type="button" onClick={onConfirm} disabled={busy || confirmDisabled}>
             {busy ? 'Working…' : confirmLabel}
           </Button>
         </DialogFooter>

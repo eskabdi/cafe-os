@@ -1,0 +1,1 @@
+export { ConfigDomainPage } from './ConfigDomainPage'
