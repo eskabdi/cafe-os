@@ -71,6 +71,23 @@ const report = (from: number | null, to: number | null) => ({
 const periodReport = (from: string, to: string, permissions: string[]) => {
   const base = report(9, 11)
   const staff = permissions.includes('reports.staff')
+  if (permissions.includes('cashier-like')) {
+    // a cashier-like role: payments yes; expenses, inventory and staff withheld (null + restricted), like the server
+    return {
+      ...base,
+      period: { from, to },
+      kpis: { ...KPIS, subtotal_total: '360.00', vat_total: '54.00', expenses_total: null, net_position: null },
+      by_day: [{ day_session_id: DAY, day_no: 11, date: from, orders: 2, sales: '414.00', collected: '414.00', expenses: null }],
+      by_item: [],
+      by_waiter: null,
+      by_expense_category: null,
+      inventory: null,
+      cancellations: { count: 0, amount: '0.00', items: [] },
+      reversals: { count: 0, amount: '0.00', items: [] },
+      installments: { issued_count: 0, issued_total: 0, down_total: 0, collected_total: 0, outstanding_total: 0, overdue_count: 0 },
+      restricted: ['expenses', 'inventory', 'staff'],
+    }
+  }
   return {
     ...base,
     period: { from, to },
@@ -400,4 +417,24 @@ test('Waiter performance with reports.staff shows the names; PDF export is audit
   expect(download.suggestedFilename()).toMatch(/^demo-cafe-staff-\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}\.pdf$/)
   const fs = await import('node:fs')
   expect(fs.readFileSync(await download.path()).subarray(0, 5).toString('latin1')).toBe('%PDF-')
+})
+
+test('a cashier-like role (expenses, inventory, staff withheld) sees notices, and export only for the types it may see', async ({ page }) => {
+  const m = await setup(page, ['dashboard.view', 'reports.view', 'reports.export', 'payments.view', 'cashier-like'])
+  await page.goto('/r/demo-cafe/reports')
+  const kpis = page.getByTestId('report-kpis')
+  await expect(kpis.getByText('Collected', { exact: true })).toBeVisible()
+  await expect(kpis.getByText('Not available with your permissions')).toHaveCount(2) // expenses, net position
+  for (const name of ['Expenses', 'Inventory', 'Waiter performance']) {
+    await page.getByRole('tab', { name, exact: true }).click()
+    await expect(page.getByTestId('restricted-notice').first()).toHaveText('Not available with your permissions')
+    await expect(page.getByRole('button', { name: 'Export CSV' })).toHaveCount(0)
+  }
+  await expect(page.getByText('Milk')).toHaveCount(0)
+  await expect(page.getByText('Purchases')).toHaveCount(0)
+  await page.getByRole('tab', { name: 'Payments by method' }).click()
+  await expect(page.getByRole('table', { name: 'Collected by payment method' }).getByRole('rowheader', { name: 'Amole' })).toBeVisible()
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export CSV' }).click()])
+  expect(m.exportBodies.at(-1)).toMatchObject({ p_report: 'payments', p_format: 'csv' })
+  expect(download.suggestedFilename()).toMatch(/^demo-cafe-payments-/)
 })
