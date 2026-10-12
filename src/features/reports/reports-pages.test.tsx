@@ -1,24 +1,37 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthContext, type AuthValue } from '@/features/auth/useAuth'
 import { DashboardPage } from './DashboardPage'
 import { ReportsPage } from './ReportsPage'
 import type * as ReportsApi from '@/lib/supabase/reports'
+import { RpcError } from '@/lib/supabase/rpc'
+import { todayIn } from '@/lib/domain/reports-period'
 
 const h = vi.hoisted(() => ({
   fetchDashboard: vi.fn(),
-  fetchReport: vi.fn(),
+  fetchReportPeriod: vi.fn(),
+  logReportExport: vi.fn(),
+  renderReportPdf: vi.fn(),
   subscribeToActivity: vi.fn(),
   unsubscribe: vi.fn(),
 }))
 vi.mock('@/lib/supabase/client', () => ({ supabase: {} }))
 vi.mock('@/lib/supabase/reports', async (importOriginal) => {
   const orig = await importOriginal<typeof ReportsApi>()
-  return { ...orig, fetchDashboard: h.fetchDashboard, fetchReport: h.fetchReport, subscribeToActivity: h.subscribeToActivity }
+  return {
+    ...orig,
+    fetchDashboard: h.fetchDashboard,
+    fetchReportPeriod: h.fetchReportPeriod,
+    logReportExport: h.logReportExport,
+    subscribeToActivity: h.subscribeToActivity,
+  }
 })
+vi.mock('@/lib/supabase/tenant-logo', () => ({ fetchTenantLogoUrl: vi.fn().mockResolvedValue(null) }))
+// the lazily imported PDF module (jsPDF) is replaced: only the export flow is under test here
+vi.mock('./report-pdf', () => ({ renderReportPdf: h.renderReportPdf, FALLBACK_NOTE: 'Helvetica fallback note' }))
 
 beforeAll(() => {
   // recharts' ResponsiveContainer needs a ResizeObserver (jsdom has none)
@@ -91,7 +104,9 @@ function renderWith(ui: React.ReactNode, perms: string[]) {
 
 beforeEach(() => {
   h.fetchDashboard.mockReset()
-  h.fetchReport.mockReset()
+  h.fetchReportPeriod.mockReset()
+  h.logReportExport.mockReset()
+  h.renderReportPdf.mockReset()
   h.unsubscribe.mockReset()
   h.subscribeToActivity.mockReset().mockReturnValue(h.unsubscribe)
 })
@@ -155,69 +170,247 @@ describe('DashboardPage', () => {
   })
 })
 
-const REPORT = {
+const ITEM = '77777777-7777-4777-8777-777777777777'
+
+const PERIOD_REPORT = {
   timezone: 'Africa/Addis_Ababa',
-  days: [{ id: RID, day_no: 99, status: 'open', opened_at: '2026-09-23T06:00:00Z', closed_at: null }],
-  kpis: KPIS,
+  period: { from: '2026-09-21', to: '2026-09-27' },
+  days: [{ id: RID, day_no: 99, status: 'closed', opened_at: '2026-09-23T06:00:00Z', closed_at: '2026-09-23T18:00:00Z' }],
+  kpis: { ...KPIS, subtotal_total: 360, vat_total: 54 },
+  by_day: [{ day_session_id: RID, day_no: 99, date: '2026-09-23', orders: 2, sales: 414, collected: 414, expenses: 50 }],
   by_payment_method: [
     { payment_method_id: PM_B, name: 'Telebirr', amount: 253, count: 1 },
     { payment_method_id: PM_A, name: 'Cash', amount: 161, count: 1 },
   ],
   by_category: [{ category_id: CAT, name: 'Desserts', qty: 2, amount: 140 }],
-  by_waiter: [{ user_id: USER, name: 'Yonas Tesfaye', orders: 2, sales: 414 }],
+  by_item: [{ menu_item_id: ITEM, name: 'ቡና', qty: 3, amount: 90 }],
+  by_waiter: [{ user_id: USER, name: 'Yonas Tesfaye Bekele', orders: 2, sales: 414 }],
   by_expense_category: [{ expense_category_id: EXP, name: 'Purchases', amount: 50, count: 1 }],
   by_hour: hours(9, 2, 414),
   inventory: {
     low_stock: [{ ingredient_id: CAT, name: 'Milk', unit: 'l', stock: 1.5, min_level: 5 }],
     consumption: [{ ingredient_id: EXP, name: 'Coffee beans', unit: 'kg', qty: 0.25 }],
   },
+  cancellations: { count: 1, amount: 70, items: [{ order_no: 'A-0007', total: 70, reason: 'Guest left', cancelled_at: '2026-09-23T16:05:00Z', by_name: 'Hana Girma' }] },
+  reversals: { count: 0, amount: 0, items: [] },
+  installments: { issued_count: 1, issued_total: 500, down_total: 100, collected_total: 150, outstanding_total: 350, overdue_count: 0 },
+  restricted: [],
 }
 
+const RESTRICTED_REPORT = {
+  ...PERIOD_REPORT,
+  kpis: { ...PERIOD_REPORT.kpis, expenses_total: null, net_position: null, vouchers_outstanding: null },
+  by_payment_method: null,
+  by_waiter: null,
+  by_expense_category: null,
+  inventory: null,
+  installments: null,
+  reversals: null,
+  restricted: ['payments', 'staff', 'expenses', 'inventory', 'installments'],
+}
+
+const tab = (name: string) => screen.getByRole('tab', { name })
+
 describe('ReportsPage', () => {
-  it('renders the KPIs and one table per chart from the server figures (names from the data)', async () => {
-    h.fetchReport.mockResolvedValue(REPORT)
+  const created: Blob[] = []
+  beforeEach(() => {
+    created.length = 0
+    URL.createObjectURL = vi.fn((b: Blob) => {
+      created.push(b)
+      return 'blob:report'
+    })
+    URL.revokeObjectURL = vi.fn()
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    window.print = vi.fn()
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('loads today\'s daily summary for the tenant from the server (no tenant id sent) and renders its KPIs and table', async () => {
+    h.fetchReportPeriod.mockResolvedValue(PERIOD_REPORT)
     renderWith(<ReportsPage />, ['reports.view'])
     const kpis = await screen.findByTestId('report-kpis')
-    expect(h.fetchReport).toHaveBeenCalledWith(null, null)
+    const today = todayIn('Africa/Addis_Ababa')
+    expect(h.fetchReportPeriod).toHaveBeenCalledWith(today, today)
     expect(within(kpis).getByText('Net position').nextSibling).toHaveTextContent('ETB 364.00')
-    expect(within(kpis).getByText('Expenses').nextSibling).toHaveTextContent('ETB 50.00')
-    expect(screen.getByTestId('report-days')).toHaveTextContent('Business day 99 (open), opened 13 መስከረም 2019, 3:00 ጠዋት')
-    for (const [table, row] of [
-      ['Orders by hour', '09:00'],
-      ['Collected by payment method', 'Telebirr'],
-      ['Sales by category (before VAT)', 'Desserts'],
-      ['Sales by staff', 'Yonas Tesfaye'],
-      ['Expenses by category', 'Purchases'],
-    ] as const) {
-      expect(within(screen.getByRole('table', { name: table })).getByRole('rowheader', { name: row })).toBeInTheDocument()
-    }
-    expect(within(screen.getByRole('list', { name: 'Low stock now' })).getByText('1.5 / 5 l')).toBeInTheDocument()
+    expect(tab('Summary')).toHaveAttribute('aria-selected', 'true')
+    const byDay = screen.getByRole('table', { name: 'By business day' })
+    expect(within(byDay).getByRole('rowheader', { name: '13 መስከረም 2019' })).toBeInTheDocument()
   })
 
-  it('the day-range picker sends the parsed range; an invalid range is refused before any call', async () => {
+  it('switching period kinds sends the matching Gregorian range; monthly is the Ethiopian month (Pagume included)', async () => {
     const user = userEvent.setup()
-    h.fetchReport.mockResolvedValue(REPORT)
+    h.fetchReportPeriod.mockResolvedValue(PERIOD_REPORT)
     renderWith(<ReportsPage />, ['reports.view'])
     await screen.findByTestId('report-kpis')
-    await user.type(screen.getByLabelText('From day'), '5')
-    await user.type(screen.getByLabelText('To day'), '2')
+    await user.click(screen.getByRole('button', { name: 'Monthly' }))
+    fireEvent.change(screen.getByLabelText('Ethiopian year'), { target: { value: '2015' } })
+    await user.selectOptions(screen.getByLabelText('Ethiopian month'), '13')
+    await waitFor(() => expect(h.fetchReportPeriod).toHaveBeenLastCalledWith('2023-09-06', '2023-09-11'))
+    expect(screen.getByTestId('period-label')).toHaveTextContent('ጳጉሜ 2015')
+    await user.click(screen.getByRole('button', { name: 'Next period' }))
+    await waitFor(() => expect(h.fetchReportPeriod).toHaveBeenLastCalledWith('2023-09-12', '2023-10-11'))
+    await user.click(screen.getByRole('button', { name: 'Weekly' }))
+    fireEvent.change(screen.getByLabelText('A date in the week'), { target: { value: '2026-10-14' } })
+    await waitFor(() => expect(h.fetchReportPeriod).toHaveBeenLastCalledWith('2026-10-12', '2026-10-18'))
+    // a weekly summary shows the by-day trend (sr-only table of the chart)
+    expect(await screen.findByRole('table', { name: 'Sales trend' })).toBeInTheDocument()
+  })
+
+  it('a custom range is validated locally before any call', async () => {
+    const user = userEvent.setup()
+    h.fetchReportPeriod.mockResolvedValue(PERIOD_REPORT)
+    renderWith(<ReportsPage />, ['reports.view'])
+    await screen.findByTestId('report-kpis')
+    await user.click(screen.getByRole('button', { name: 'Custom' }))
+    await screen.findByTestId('report-kpis')
+    const calls = h.fetchReportPeriod.mock.calls.length
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2025-01-01' } })
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: '2026-10-01' } })
     await user.click(screen.getByRole('button', { name: 'Show' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('The last day must not be before the first day.')
-    expect(h.fetchReport).toHaveBeenCalledTimes(1)
-    await user.clear(screen.getByLabelText('To day'))
-    await user.type(screen.getByLabelText('To day'), '12')
+    expect(await screen.findByRole('alert')).toHaveTextContent('A report covers at most 366 days.')
+    expect(h.fetchReportPeriod).toHaveBeenCalledTimes(calls)
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-09-01' } })
     await user.click(screen.getByRole('button', { name: 'Show' }))
-    await waitFor(() => expect(h.fetchReport).toHaveBeenLastCalledWith(5, 12))
-    expect(screen.queryByRole('alert')).toBeNull()
-    await user.click(screen.getByRole('button', { name: 'Current day' }))
-    await waitFor(() => expect(h.fetchReport).toHaveBeenLastCalledWith(null, null))
+    await waitFor(() => expect(h.fetchReportPeriod).toHaveBeenLastCalledWith('2026-09-01', '2026-10-01'))
+  })
+
+  it('report tabs render their own tables with names from the data; arrow keys move between tabs', async () => {
+    const user = userEvent.setup()
+    h.fetchReportPeriod.mockResolvedValue(PERIOD_REPORT)
+    renderWith(<ReportsPage />, ['reports.view'])
+    await screen.findByTestId('report-kpis')
+    await user.click(tab('Payments by method'))
+    expect(within(screen.getByRole('table', { name: 'Collected by payment method' })).getByRole('rowheader', { name: 'Telebirr' })).toBeInTheDocument()
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'rep-tab-payments')
+    await user.keyboard('{ArrowRight}')
+    expect(tab('Waiter performance')).toHaveFocus()
+    expect(within(screen.getByRole('table', { name: 'Sales by staff' })).getByRole('rowheader', { name: 'Yonas Tesfaye Bekele' })).toBeInTheDocument()
+    await user.click(tab('Item & category sales'))
+    expect(within(screen.getByRole('table', { name: 'Sales by item' })).getByRole('rowheader', { name: 'ቡና' })).toBeInTheDocument()
+    await user.click(tab('Cancellations & reversals'))
+    const cancelled = screen.getByRole('table', { name: 'Cancelled orders' })
+    expect(within(cancelled).getByText('Guest left')).toBeInTheDocument()
+    expect(within(cancelled).getByText('13 መስከረም 2019, 1:05 ማታ (2026-09-23 19:05)')).toBeInTheDocument()
+    await user.click(tab('Hourly traffic'))
+    expect(within(screen.getByRole('table', { name: 'Orders by hour' })).getByRole('rowheader', { name: '09:00' })).toBeInTheDocument()
+    await user.click(tab('Installments & vouchers'))
+    expect(screen.getByText('Outstanding').nextSibling).toHaveTextContent('ETB 350.00')
+  })
+
+  it('sections the server withheld show the neutral notice instead of data', async () => {
+    const user = userEvent.setup()
+    h.fetchReportPeriod.mockResolvedValue(RESTRICTED_REPORT)
+    renderWith(<ReportsPage />, ['reports.view'])
+    const kpis = await screen.findByTestId('report-kpis')
+    expect(within(kpis).getByText('Expenses').nextSibling).toHaveTextContent('Not available with your permissions')
+    for (const name of ['Payments by method', 'Waiter performance', 'Expenses', 'Inventory']) {
+      await user.click(tab(name))
+      expect(screen.getAllByTestId('restricted-notice').length).toBeGreaterThan(0)
+      expect(screen.queryByText('Telebirr')).toBeNull()
+      expect(screen.queryByText('Yonas Tesfaye Bekele')).toBeNull()
+      expect(screen.queryByText('Milk')).toBeNull()
+    }
+    await user.click(tab('Installments & vouchers'))
+    expect(screen.getByText('Outstanding').nextSibling).toHaveTextContent('Not available with your permissions')
+    await user.click(tab('Cancellations & reversals'))
+    expect(screen.getByRole('region', { name: 'Payment reversals' })).toHaveTextContent('Not available with your permissions')
   })
 
   it('tenant names are rendered as text, never as markup', async () => {
-    h.fetchReport.mockResolvedValue({ ...REPORT, by_category: [{ category_id: CAT, name: '<img src=x onerror=alert(1)>', qty: 1, amount: 1 }] })
+    h.fetchReportPeriod.mockResolvedValue({ ...PERIOD_REPORT, by_category: [{ category_id: CAT, name: '<img src=x onerror=alert(1)>', qty: 1, amount: 1 }] })
+    const user = userEvent.setup()
     const { container } = renderWith(<ReportsPage />, ['reports.view'])
     await screen.findByTestId('report-kpis')
+    await user.click(tab('Revenue'))
     expect(container.querySelector('img')).toBeNull()
     expect(screen.getByRole('rowheader', { name: '<img src=x onerror=alert(1)>' })).toBeInTheDocument()
+  })
+
+  it('without reports.export there is no Print / CSV / PDF', async () => {
+    h.fetchReportPeriod.mockResolvedValue(PERIOD_REPORT)
+    renderWith(<ReportsPage />, ['reports.view'])
+    await screen.findByTestId('report-kpis')
+    expect(screen.queryByRole('button', { name: 'Export CSV' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Export PDF' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Print' })).toBeNull()
+  })
+
+  it('CSV: the export is logged first, then a BOM-prefixed file named <slug>-<report>-<from>_<to>.csv is downloaded', async () => {
+    const user = userEvent.setup()
+    h.fetchReportPeriod.mockResolvedValue({ ...PERIOD_REPORT, by_payment_method: [{ payment_method_id: PM_A, name: '=cmd|calc', amount: 161, count: 1 }] })
+    h.logReportExport.mockResolvedValue({ exported_at: '2026-09-23T16:05:00Z' })
+    const click = vi.mocked(HTMLAnchorElement.prototype.click)
+    let filename = ''
+    click.mockImplementation(function (this: HTMLAnchorElement) {
+      filename = this.download
+    })
+    renderWith(<ReportsPage />, ['reports.view', 'reports.export'])
+    await screen.findByTestId('report-kpis')
+    await user.click(tab('Payments by method'))
+    await user.click(screen.getByRole('button', { name: 'Export CSV' }))
+    await waitFor(() => expect(created).toHaveLength(1))
+    expect(h.logReportExport).toHaveBeenCalledWith('payments', '2026-09-21', '2026-09-27', 'csv')
+    expect(h.logReportExport.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(URL.createObjectURL).mock.invocationCallOrder[0] ?? 0)
+    expect(filename).toBe('demo-cafe-payments-2026-09-21_2026-09-27.csv')
+    const bytes = new Uint8Array(await created[0]!.arrayBuffer())
+    expect([...bytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf])
+    const text = new TextDecoder().decode(bytes)
+    expect(text).toContain('Report,Payments by method')
+    expect(text).toContain("Generated,\"13 መስከረም 2019, 1:05 ማታ\",2026-09-23 19:05")
+    expect(text).toContain("'=cmd|calc,1,161")
+  })
+
+  it('a refused export log (permission_denied) shows the error and produces nothing', async () => {
+    const user = userEvent.setup()
+    h.fetchReportPeriod.mockResolvedValue(PERIOD_REPORT)
+    h.logReportExport.mockRejectedValue(new RpcError('permission_denied'))
+    renderWith(<ReportsPage />, ['reports.view', 'reports.export'])
+    await screen.findByTestId('report-kpis')
+    await user.click(screen.getByRole('button', { name: 'Export CSV' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('You do not have permission to export reports. Nothing was exported.')
+    await user.click(screen.getByRole('button', { name: 'Export PDF' }))
+    await user.click(screen.getByRole('button', { name: 'Print' }))
+    await waitFor(() => expect(h.logReportExport).toHaveBeenCalledTimes(3))
+    expect(URL.createObjectURL).not.toHaveBeenCalled()
+    expect(h.renderReportPdf).not.toHaveBeenCalled()
+    expect(window.print).not.toHaveBeenCalled()
+  })
+
+  it('PDF: logged first, then the lazily loaded module renders it; the Helvetica fallback is announced', async () => {
+    const user = userEvent.setup()
+    h.fetchReportPeriod.mockResolvedValue(PERIOD_REPORT)
+    h.logReportExport.mockResolvedValue({ exported_at: '2026-09-23T16:05:00Z' })
+    h.renderReportPdf.mockResolvedValue({ blob: new Blob(['%PDF-1.7'], { type: 'application/pdf' }), amharicFont: false })
+    renderWith(<ReportsPage />, ['reports.view', 'reports.export'])
+    await screen.findByTestId('report-kpis')
+    await user.click(screen.getByRole('button', { name: 'Export PDF' }))
+    await waitFor(() => expect(created).toHaveLength(1))
+    expect(h.logReportExport).toHaveBeenCalledWith('summary', '2026-09-21', '2026-09-27', 'pdf')
+    expect(h.logReportExport.mock.invocationCallOrder[0]).toBeLessThan(h.renderReportPdf.mock.invocationCallOrder[0] ?? 0)
+    const [view, meta, generated] = h.renderReportPdf.mock.calls[0] as [{ title: string }, { restaurantName: string }, { international: string }]
+    expect(view.title).toBe('Summary')
+    expect(meta.restaurantName).toBe('Demo')
+    expect(generated.international).toBe('2026-09-23 19:05')
+    expect(await screen.findByText('Helvetica fallback note')).toHaveAttribute('role', 'status')
+  })
+
+  it('Print: logged first, then the print-only layout is mounted and printed', async () => {
+    const user = userEvent.setup()
+    h.fetchReportPeriod.mockResolvedValue(PERIOD_REPORT)
+    h.logReportExport.mockResolvedValue({ exported_at: '2026-09-23T16:05:00Z' })
+    let printed = ''
+    vi.mocked(window.print).mockImplementation(() => {
+      printed = document.querySelector('.report-print')?.textContent ?? ''
+    })
+    renderWith(<ReportsPage />, ['reports.view', 'reports.export'])
+    await screen.findByTestId('report-kpis')
+    await user.click(screen.getByRole('button', { name: 'Print' }))
+    await waitFor(() => expect(window.print).toHaveBeenCalledTimes(1))
+    expect(h.logReportExport).toHaveBeenCalledWith('summary', '2026-09-21', '2026-09-27', 'print')
+    expect(printed).toContain('Demo')
+    expect(printed).toContain('Summary')
+    expect(printed).toContain('13 መስከረም 2019, 1:05 ማታ (2026-09-23 19:05)')
+    expect(printed).toContain('ETB 364.00')
+    await waitFor(() => expect(document.querySelector('.report-print')).toBeNull())
   })
 })
