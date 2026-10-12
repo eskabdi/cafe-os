@@ -57,6 +57,10 @@ describe('public/_headers', () => {
     expect(all.get('x-content-type-options')).toBe('nosniff')
     expect(all.get('referrer-policy')).toBe('no-referrer')
     expect(all.get('permissions-policy')).toContain('camera=()')
+    // Phase 11 hardening
+    expect(all.get('strict-transport-security')).toMatch(/^max-age=(\d{8,}); includeSubDomains$/)
+    expect(all.get('cross-origin-opener-policy')).toBe('same-origin')
+    expect(all.get('x-frame-options')).toBe('DENY')
   })
 
   it('never caches the terminal', () => {

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { expectNoSeriousA11yViolations } from './a11y'
 
 // Cashier (Phase 6) against mocked Supabase (page.route). Payment method names (Amole, Cash Drawer) are runtime data only: the
 // code knows none of them; the flags on the row (requires_reference, affects_cash_drawer) drive the form. The payment call
@@ -335,4 +336,16 @@ test('reversal: a reason is required, the server gets the payment id and reason 
   expect(Object.keys(body).sort()).toEqual(['p_idempotency_key', 'p_payment_id', 'p_reason'])
   expect(body.p_payment_id).toBe(PAY)
   expect(body.p_reason).toBe('wrong table')
+})
+
+test('a11y: Cashier has no serious or critical axe violations', async ({ page }) => {
+  await setup(page)
+  await page.goto('/r/demo-cafe/cashier')
+  await expect(
+    page
+      .getByRole('list', { name: 'Unpaid orders' })
+      .getByRole('button', { name: /ORD-0042/ })
+      .first(),
+  ).toBeVisible()
+  await expectNoSeriousA11yViolations(page, 'Cashier')
 })

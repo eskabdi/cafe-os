@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { expectNoSeriousA11yViolations } from './a11y'
 
 test('app loads', async ({ page }) => {
   await page.goto('/')
@@ -20,5 +21,17 @@ for (const path of ['/r/demo-cafe/pos', '/r/demo-cafe/stations/11111111-1111-411
   test(`unauthenticated ${path} redirects to the slug login`, async ({ page }) => {
     await page.goto(path)
     await expect(page).toHaveURL(/\/r\/demo-cafe\/login$/)
+  })
+}
+
+// Phase 11 a11y smoke: the two sign-in surfaces (no session needed)
+for (const [path, label] of [
+  ['/r/demo-cafe/login', 'Tenant sign-in'],
+  ['/platform/login', 'Platform sign-in'],
+] as const) {
+  test(`a11y: ${label} has no serious or critical axe violations`, async ({ page }) => {
+    await page.goto(path)
+    await expect(page.getByRole('heading', { level: 1 }).first()).toBeVisible()
+    await expectNoSeriousA11yViolations(page, label)
   })
 }

@@ -18,17 +18,17 @@
     --border: 214 32% 91%;
     --input: 214 32% 91%;
     --muted: 210 40% 96%;
-    --muted-foreground: 215 16% 47%;
+    --muted-foreground: 215 19% 41%; /* #55657e, >= 4.5:1 on background and muted (was 47%: 4.48 on #f8fafc) */
     --popover: 0 0% 100%;
     --popover-foreground: 217 33% 17%;
     --radius: 0.5rem;
 
     /* Semantic status colours: fixed platform-wide, never tenant-branded. */
-    --status-success: 142 76% 36%;
-    --status-warning: 32 95% 44%;
+    --status-success: 142 72% 29%; /* #15803d, >= 4.5:1 on white (was #16a249: 3.33) */
+    --status-warning: 26 90% 37%; /* #b45309, >= 4.5:1 on white (was 44%: ~3:1) */
     --status-error: 0 72% 51%;
-    --status-cancelled: 215 16% 47%;
-    --status-overdue: 21 90% 48%;
+    --status-cancelled: 215 19% 41%;
+    --status-overdue: 17 88% 40%; /* #c2410c, >= 4.5:1 on white (was 48%: ~3.4:1) */
   }
 
   * {
@@ -153,5 +153,18 @@
   .report-print .num {
     text-align: right;
     font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Reduced motion (WCAG 2.3.3, Phase 11 a11y pass): CSS transitions/animations (Tailwind animate-*, Radix dialog fades,
+   skeleton pulses) collapse to an instant change; Framer Motion boards use useReducedMotion() themselves. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

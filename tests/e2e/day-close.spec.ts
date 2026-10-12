@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { expectNoSeriousA11yViolations } from './a11y'
 
 // Day close (Phase 9) against mocked Supabase. GATE (execution prompt E2E FLOW 3): open day -> expense -> count cash -> count station
 // stock -> close -> verify variance -> open a NEW day (a closed day never reopens) -> the closed day stays readable in the history.
@@ -439,4 +440,11 @@ test('a day.open-only role reaches the page to open a new day: no close UI, no h
   await expect(page.getByRole('button', { name: 'Close the day' })).toHaveCount(0)
   expect(calls.open).toHaveLength(1)
   expect(calls.list).toHaveLength(0)
+})
+
+test('a11y: Day close has no serious or critical axe violations', async ({ page }) => {
+  await setup(page)
+  await page.goto('/r/demo-cafe/day-close')
+  await expect(page.getByRole('heading', { level: 1, name: 'Day close' }).first()).toBeVisible()
+  await expectNoSeriousA11yViolations(page, 'Day close')
 })

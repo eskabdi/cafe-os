@@ -23,7 +23,13 @@ import { useAuth } from './useAuth'
  * Tenant Admin managing a user / a Super Admin managing another Super Admin. Revoking one or all takes effect at once on the
  * server: a revoked device's sessions lose their trust immediately and the next sign-in asks the code again.
  */
-export function TrustedDevicesCard({ userId, title = 'Trusted devices' }: { userId?: string; title?: string }) {
+export function TrustedDevicesCard({
+  userId,
+  title = 'Trusted devices',
+}: {
+  userId?: string
+  title?: string
+}) {
   const { session } = useAuth()
   const self = !userId || userId === session?.user?.id
   const qc = useQueryClient()
@@ -63,9 +69,14 @@ export function TrustedDevicesCard({ userId, title = 'Trusted devices' }: { user
       }
     >
       <p className="text-sm text-muted-foreground">
-        A trusted device skips the authenticator code at sign-in for 30 days. Very sensitive actions still ask for a code.
+        A trusted device skips the authenticator code at sign-in for 30 days. Very sensitive actions still ask
+        for a code.
       </p>
-      {devices.isPending && <p role="status" className="text-sm text-muted-foreground">Loading devices…</p>}
+      {devices.isPending && (
+        <p role="status" className="text-sm text-muted-foreground">
+          Loading devices…
+        </p>
+      )}
       {devices.isError && (
         <p role="alert" className="text-sm text-status-error">
           The devices could not be loaded.{' '}
@@ -83,10 +94,15 @@ export function TrustedDevicesCard({ userId, title = 'Trusted devices' }: { user
               <div className="min-w-0 flex-1">
                 <p className="font-medium text-ink">
                   {d.label || 'Unnamed device'}
-                  {d.current && <span className="ml-2 rounded-pill bg-primary/10 px-2 py-0.5 text-xs text-primary">this device</span>}
+                  {d.current && (
+                    <span className="ml-2 rounded-pill bg-primary/10 px-2 py-0.5 text-xs font-medium text-ink">
+                      this device
+                    </span>
+                  )}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  Trusted {formatDateTime(d.created_at)} · last used {formatDateTime(d.last_seen_at)} · until {formatDateTime(d.expires_at)}
+                  Trusted {formatDateTime(d.created_at)} · last used {formatDateTime(d.last_seen_at)} · until{' '}
+                  {formatDateTime(d.expires_at)}
                 </p>
               </div>
               <Button variant="ghost" onClick={() => setConfirm(d)}>
