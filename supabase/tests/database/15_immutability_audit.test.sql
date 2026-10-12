@@ -106,7 +106,7 @@ select is(tests.run($q$select public.fn_create_role('{"name": "Runner"}')$q$), '
 select is(tests.run($q$update public.stations set color = '#112233' where name = 'Wok'$q$), 'ok:1', 'admin edits a station');
 select is(tests.run($q$select public.fn_update_restaurant_profile('{"name": "Central Cafe & Bakery"}')$q$), 'ok:1', 'admin edits the restaurant (RPC)');
 select is(tests.run(format($q$select public.fn_update_role_permissions((select id from public.roles where name = 'Runner' and restaurant_id = %L), array['orders.view'], '{}')$q$, (select a from _f))), 'ok:1', 'admin edits a role matrix');
-select is(tests.run($q$delete from public.stations where name = 'Wok'$q$), 'ok:1', 'admin deletes an unused station');
+select is(tests.run($q$select public.fn_delete_config_row('stations', (select id from public.stations where name = 'Wok'))$q$), 'ok:1', 'admin deletes an unused station (RPC-only delete since 0039)');
 select tests.clear_auth();
 select is((select count(*)::int from public.audit_logs where event = 'stations.insert' and actor_id = (select admin from _f) and actor_type = 'user' and restaurant_id = (select a from _f) and table_name = 'stations'), 1, 'station insert audited: real actor, tenant and table');
 select is((select count(*)::int from public.audit_logs where event = 'categories.insert' and actor_id = (select admin from _f)), 1, 'category insert audited');
@@ -210,7 +210,7 @@ select is(tests.run(format($q$insert into public.expenses (restaurant_id, expens
 select is(tests.run($q$update public.stations set name = 'x'$q$), 'ok:0', 'no-permission user: station update changes nothing');
 select is(tests.run($q$update public.roles set name = 'x'$q$), '42501|permission denied for table roles|', 'no-permission user: role update denied');
 select is(tests.run($q$update public.restaurants set name = 'x'$q$), '42501|permission denied for table restaurants|', 'no-permission user: restaurant update denied');
-select is(tests.run($q$delete from public.payment_methods$q$), 'ok:0', 'no-permission user: payment method delete changes nothing');
+select is(tests.run($q$delete from public.payment_methods$q$), '42501|permission denied for table payment_methods|', 'no-permission user: payment method delete denied');
 select is(tests.run($q$delete from public.roles$q$), '42501|permission denied for table roles|', 'no-permission user: role delete denied');
 select tests.clear_auth();
 

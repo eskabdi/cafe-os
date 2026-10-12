@@ -7,10 +7,11 @@
 --
 --  * Deactivation stays the supported, always-available path even while rows depend on it (Phases 3–5 rely on it: the order
 --    pipeline answers item_unavailable for an inactive item / station / category, a station board still finishes its open tickets,
---    history keeps snapshots). One exception, fn_guard_payment_method_deactivation (BEFORE UPDATE OF is_active): the tenant's LAST
---    active payment method cannot be deactivated (in_use / 'last_active_method'), or the cashier could take no money at all.
+--    history keeps snapshots). One exception, fn_guard_payment_method_deactivation (BEFORE UPDATE OF is_active OR DELETE, under a
+--    per-tenant advisory lock): the tenant's LAST active payment method cannot be deactivated or deleted (in_use /
+--    'last_active_method'), or the cashier could take no money at all.
 --  * fn_config_usage(domain, id): every reference (active or historical) as counts, so the UI can say WHY a delete is refused.
---  * fn_delete_config_row(domain, id): the delete path the UI uses. Refused with in_use / '<what>:<n>,...' while anything refers to
+--  * fn_delete_config_row(domain, id): the ONLY client delete path (direct DELETE is revoked from authenticated). Refused with in_use / '<what>:<n>,...' while anything refers to
 --      the row (the FKs are ON DELETE RESTRICT anyway; this turns a raw 23503 into a structured, explainable answer). Audited.
 --
 --  The domain argument is one of six TABLE identifiers (a closed list checked before any dynamic SQL), never tenant data, and
@@ -53,22 +54,33 @@ as $$
 $$;
 revoke all on function public.fn_config_usage_counts(uuid, text, uuid) from public, anon, authenticated, service_role;
 
--- ── deactivation guard (trigger): the last active payment method ──────────────────────────────────────────────────────────
+-- ── deactivation / delete guard (trigger): the last active payment method ─────────────────────────────────────────────────
+-- Defence in depth under fn_delete_config_row (clients hold no DELETE privilege, below). A per-tenant transaction advisory lock
+-- serialises concurrent deactivations / deletes, so two of them can never each see "another active method" and leave none.
 create or replace function public.fn_guard_payment_method_deactivation()
 returns trigger
 language plpgsql security definer set search_path = ''
 as $$
 begin
-  if old.is_active and not new.is_active
-     and not exists (select 1 from public.payment_methods m where m.restaurant_id = new.restaurant_id and m.is_active and m.id <> new.id) then
-    perform public.fn_err('in_use', 'last_active_method');
+  if old.is_active and (tg_op = 'DELETE' or not new.is_active) then
+    perform pg_advisory_xact_lock(hashtext('pm_active:' || old.restaurant_id::text));
+    if not exists (select 1 from public.payment_methods m where m.restaurant_id = old.restaurant_id and m.is_active and m.id <> old.id) then
+      perform public.fn_err('in_use', 'last_active_method');
+    end if;
   end if;
+  if tg_op = 'DELETE' then return old; end if;
   return new;
 end;
 $$;
 revoke all on function public.fn_guard_payment_method_deactivation() from public, anon, authenticated, service_role;
-create trigger trg_guard_deactivation before update of is_active on public.payment_methods
+create trigger trg_guard_deactivation before update of is_active or delete on public.payment_methods
   for each row execute function public.fn_guard_payment_method_deactivation();
+
+-- ── delete is RPC-only ───────────────────────────────────────────────────────────────────────────────────────────────────────
+-- fn_delete_config_row is the single delete path (structured in_use, last-method rule, audit). The direct DELETE grants of 0009 /
+-- 0020 are withdrawn; the RLS delete policies stay as a second wall should a grant ever come back.
+revoke delete on public.stations, public.categories, public.payment_methods, public.table_areas, public.expense_categories, public.tables
+  from authenticated;
 
 -- ── domain → permission (internal; closed list) ──────────────────────────────────────────────────────────────────────────────
 create or replace function public.fn_config_domain_check(p_domain text)
@@ -112,18 +124,23 @@ as $$
 declare
   v_rid uuid := public.fn_tenant_status_guard(true);
   v_name text;
+  v_active boolean;
   v_detail text;
 begin
   perform public.fn_config_domain_check(p_domain);
   if p_id is null then perform public.fn_err('invalid_input', 'id'); end if;
-  execute format('select coalesce(to_jsonb(t) ->> ''name'', to_jsonb(t) ->> ''label'') from public.%I t where t.id = $1 and t.restaurant_id = $2 for update',
-                 p_domain) into v_name using p_id, v_rid;
+  execute format('select coalesce(to_jsonb(t) ->> ''name'', to_jsonb(t) ->> ''label''), t.is_active from public.%I t where t.id = $1 and t.restaurant_id = $2 for update',
+                 p_domain) into v_name, v_active using p_id, v_rid;
   if v_name is null then perform public.fn_err('not_found'); end if;
   select string_agg(k.key || ':' || k.value, ',' order by k.key) into v_detail
     from jsonb_each_text(public.fn_config_usage_counts(v_rid, p_domain, p_id)) k
    where k.key not like 'active\_%' and k.value::int > 0;
   if v_detail is not null then perform public.fn_err('in_use', v_detail); end if;
-  if p_domain = 'payment_methods'
+  if p_domain = 'payment_methods' and v_active then
+    -- same per-tenant lock as the trigger: concurrent deletes / deactivations cannot both pass the check
+    perform pg_advisory_xact_lock(hashtext('pm_active:' || v_rid::text));
+  end if;
+  if p_domain = 'payment_methods' and v_active
      and not exists (select 1 from public.payment_methods m where m.restaurant_id = v_rid and m.is_active and m.id <> p_id) then
     perform public.fn_err('in_use', 'last_active_method');
   end if;

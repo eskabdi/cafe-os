@@ -3,7 +3,7 @@
 -- dependency, allowed when unused, audited), closed domain list, permission denial, cross-tenant denial, anon denial.
 -- Every fixture row is created here (names are test data only; no code knows them).
 begin;
-select plan(42);
+select plan(57);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -43,6 +43,25 @@ begin
   insert into _n values ('i1', v);
   insert into public.tables (restaurant_id, table_area_id, label) values (v_a, tests.cv('ta1'), 'P10-T1') returning id into v; insert into _n values ('t1', v);
   insert into public.stations (restaurant_id, name) values (v_b, 'P10 Other Tenant Station') returning id into v; insert into _n values ('sb', v);
+  insert into public.payment_methods (restaurant_id, name) values (v_a, 'P10 Last Method') returning id into v; insert into _n values ('pm3', v);
+  insert into public.payment_methods (restaurant_id, name, is_active) values (v_a, 'P10 Retired Method', false) returning id into v;
+  insert into _n values ('pm4', v);
+  insert into public.table_areas (restaurant_id, name) values (v_a, 'P10 Split Area') returning id into v; insert into _n values ('ta3', v);
+  insert into public.tables (restaurant_id, table_area_id, label) values (v_a, tests.cv('ta3'), 'P10-T2') returning id into v; insert into _n values ('t2', v);
+end $$;
+-- split permissions: one custom role with tables.manage only, one with config.manage only
+do $$
+declare v_a uuid := tests.tenant_id('central-cafe'); v_t uuid; v_c uuid;
+begin
+  insert into public.roles (restaurant_id, name) values (v_a, 'P10 Tables Only') returning id into v_t;
+  insert into public.roles (restaurant_id, name) values (v_a, 'P10 Config Only') returning id into v_c;
+  insert into public.role_permissions (role_id, permission_id, restaurant_id) select v_t, id, v_a from public.permissions where key = 'tables.manage';
+  insert into public.role_permissions (role_id, permission_id, restaurant_id) select v_c, id, v_a from public.permissions where key = 'config.manage';
+  perform tests.create_auth_user('00000000-0000-4000-8000-0000000051a1', 'p10tables@central-cafe.staff.cafeos.invalid');
+  perform tests.create_auth_user('00000000-0000-4000-8000-0000000051a2', 'p10config@central-cafe.staff.cafeos.invalid');
+  insert into public.profiles (id, restaurant_id, first_name, username, role_id, auth_method) values
+    ('00000000-0000-4000-8000-0000000051a1', v_a, 'Tigist', 'p10tables', v_t, 'pin'),
+    ('00000000-0000-4000-8000-0000000051a2', v_a, 'Dawit', 'p10config', v_c, 'pin');
 end $$;
 
 -- structure
@@ -62,6 +81,10 @@ select ok(not exists (select 1 from pg_constraint c where c.contype = 'f' and c.
 -- anon
 select ok(not has_function_privilege('anon', 'public.fn_config_usage(text, uuid)', 'execute')
           and not has_function_privilege('anon', 'public.fn_delete_config_row(text, uuid)', 'execute'), 'anon cannot execute either RPC');
+select ok(not has_function_privilege('service_role', 'public.fn_config_usage(text, uuid)', 'execute')
+          and not has_function_privilege('service_role', 'public.fn_delete_config_row(text, uuid)', 'execute'), 'service_role cannot execute either RPC');
+select ok(not exists (select 1 from unnest(array['stations', 'categories', 'payment_methods', 'table_areas', 'expense_categories', 'tables']) t
+                      where has_table_privilege('authenticated', 'public.' || t, 'delete')), 'no client DELETE privilege on any configuration table');
 select tests.as_anon();
 select matches(tests.run(format($q$select public.fn_config_usage('stations', %L)$q$, tests.cv('s2'))), '^42501\|', 'anon: usage refused');
 select matches(tests.run(format($q$select public.fn_delete_config_row('stations', %L)$q$, tests.cv('s2'))), '^42501\|', 'anon: delete refused');
@@ -127,13 +150,43 @@ select tests.authenticate_as((select b_admin from _f));
 select is(tests.run(format($q$select public.fn_delete_config_row('stations', %L)$q$, tests.cv('s1'))), 'P0001|not_found|', 'B cannot delete A row');
 select tests.clear_auth();
 
--- the last active payment method can neither be deactivated nor deleted
-update public.payment_methods set is_active = false
- where restaurant_id = (select a from _f) and id <> (select min(id::text)::uuid from public.payment_methods where restaurant_id = (select a from _f) and is_active);
+-- direct DELETE is refused outright: fn_delete_config_row is the only client delete path
+select tests.authenticate_as((select a_admin from _f));
+select is(tests.run(format($q$delete from public.payment_methods where id = %L$q$, tests.cv('pm3'))), '42501|permission denied for table payment_methods|',
+          'direct DELETE of a payment method: 42501');
+select is(tests.run(format($q$delete from public.tables where id = %L$q$, tests.cv('t2'))), '42501|permission denied for table tables|', 'direct DELETE of a table: 42501');
+select tests.clear_auth();
+
+-- split permissions: config.manage does not cover tables, tables.manage does not cover the configuration domains
+select tests.authenticate_as('00000000-0000-4000-8000-0000000051a2');
+select is(public.fn_config_usage('stations', tests.cv('s1')) ->> 'menu_items', '1', 'config.manage only: station usage');
+select is(tests.run(format($q$select public.fn_delete_config_row('tables', %L)$q$, tests.cv('t2'))), 'P0001|permission_denied|', 'config.manage only: tables refused');
+select tests.clear_auth();
+select tests.authenticate_as('00000000-0000-4000-8000-0000000051a1');
+select is(tests.run(format($q$select public.fn_config_usage('stations', %L)$q$, tests.cv('s1'))), 'P0001|permission_denied|', 'tables.manage only: stations refused');
+select is(tests.run(format($q$select public.fn_delete_config_row('table_areas', %L)$q$, tests.cv('ta3'))), 'P0001|permission_denied|', 'tables.manage only: table areas refused');
+select is(public.fn_delete_config_row('tables', tests.cv('t2')) ->> 'deleted', 'true', 'tables.manage only: an unused table is deleted');
+select tests.clear_auth();
+
+-- the last active payment method can neither be deactivated nor deleted; an inactive one is not subject to the rule
+update public.payment_methods set is_active = false where restaurant_id = (select a from _f) and id <> tests.cv('pm3');
 select tests.authenticate_as((select a_admin from _f));
 select is(tests.run($q$update public.payment_methods set is_active = false where is_active$q$), 'P0001|in_use|last_active_method',
           'the last active payment method cannot be deactivated');
+select is(tests.run(format($q$select public.fn_delete_config_row('payment_methods', %L)$q$, tests.cv('pm3'))), 'P0001|in_use|last_active_method',
+          'the last active payment method cannot be deleted through the RPC');
+select is(public.fn_delete_config_row('payment_methods', tests.cv('pm4')) ->> 'deleted', 'true', 'an unused INACTIVE method is deleted while one other is active');
 select tests.clear_auth();
+select ok(tests.cfg_active('payment_methods', tests.cv('pm3')), 'the last method is still active');
+select throws_ok(format($q$delete from public.payment_methods where id = %L$q$, tests.cv('pm3')), 'P0001', 'in_use',
+                 'even at owner level the delete trigger keeps the last active method');
+
+-- a suspended tenant cannot delete
+update public.restaurants set status = 'suspended' where id = (select b from _f);
+select tests.authenticate_as((select b_admin from _f));
+select is(tests.run(format($q$select public.fn_delete_config_row('stations', %L)$q$, tests.cv('sb'))), 'P0001|tenant_suspended|', 'suspended tenant: delete refused');
+select tests.clear_auth();
+select ok(tests.cfg_exists('stations', tests.cv('sb')), 'and nothing was deleted');
 
 select * from finish();
 rollback;

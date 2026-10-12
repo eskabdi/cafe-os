@@ -12,7 +12,7 @@ redeploy.
 | create | `POST /rest/v1/<table>` | `config.manage` (`tables.manage` for `tables`) + writable tenant | RLS `with check restaurant_id = current_restaurant_id()`; column grants limit the writable columns; row-audited (`trg_audit`) |
 | edit / activate / deactivate | `PATCH /rest/v1/<table>?id=eq.<uuid>` | same | deactivation runs the guard below; zero rows touched = refused (the client reports `permission_denied`) |
 | usage | `POST /rest/v1/rpc/fn_config_usage` `{p_domain, p_id}` | same | **Private**. Counts of every reference |
-| delete | `POST /rest/v1/rpc/fn_delete_config_row` `{p_domain, p_id}` | same | **Private**. The UI's only delete path; audit `config.row_deleted` |
+| delete | `POST /rest/v1/rpc/fn_delete_config_row` `{p_domain, p_id}` | same | **Private**. The ONLY client delete path: 0039 revokes direct `DELETE` on the six tables from `authenticated` (a REST `DELETE` answers 42501); audit `config.row_deleted` |
 
 `p_domain` is a closed list of table identifiers: `stations`, `categories`, `payment_methods`, `table_areas`, `expense_categories`,
 `tables`; anything else is `invalid_input|domain` before any SQL is built. Both RPCs are `security definer`, `search_path = ''`, take the
@@ -22,8 +22,10 @@ one). `fn_config_usage_counts`, `fn_config_domain_check` and the trigger functio
 ## Dependency guards
 Deactivation is the supported, always-available path, even while rows depend on the row (Phases 3–5 rely on it: the order pipeline
 answers `item_unavailable` for an inactive item / station / category, a station board still finishes its open tickets, history keeps
-name snapshots). The one exception is `trg_guard_deactivation` (BEFORE UPDATE OF `is_active`, payment_methods only): the tenant's
-LAST active payment method cannot be deactivated (`in_use|last_active_method`), or the cashier could take no money.
+name snapshots). The one exception is `trg_guard_deactivation` (BEFORE UPDATE OF `is_active` OR DELETE, payment_methods only): the
+tenant's LAST active payment method cannot be deactivated or deleted (`in_use|last_active_method`), or the cashier could take no money.
+The check applies only when the target row is active, and both the trigger and `fn_delete_config_row` take a per-tenant transaction
+advisory lock (`pm_active:<restaurant_id>`) first, so two concurrent deactivations / deletes cannot leave zero active methods.
 
 Delete is refused with `in_use|<key>:<n>,...` while ANY row (active or historical) refers to it (FKs are `ON DELETE RESTRICT`; history
 keeps name snapshots, so the answer is "deactivate instead"). A reference that appears between the count and the delete is still answered

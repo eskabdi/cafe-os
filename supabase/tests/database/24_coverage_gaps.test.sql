@@ -218,8 +218,8 @@ select is(tests.run(format($q$delete from public.ingredients where id = (select 
           '42501|permission denied for table ingredients|', 'ingredient cannot be deleted by a client (no DELETE grant; deactivate via fn_set_ingredient_active)');
 select is(tests.run(format($q$delete from public.menu_items where id = (select menu_item_id from public.order_items where restaurant_id = %L limit 1)$q$, (select b from _f))),
           '42501|permission denied for table menu_items|', 'menu item cannot be deleted by a client (no DELETE grant; deactivate via fn_set_menu_item_active)');
-select matches(tests.run(format($q$delete from public.tables where id = (select table_id from public.table_sessions where restaurant_id = %L limit 1)$q$, (select b from _f))),
-               '^23503\|update or delete on table "tables" violates foreign key constraint', 'table with sessions / QR credentials cannot be deleted');
+select matches(tests.run(format($q$select public.fn_delete_config_row('tables', (select table_id from public.table_sessions where restaurant_id = %L limit 1))$q$, (select b from _f))),
+               '^P0001\|in_use\|.*table_sessions:', 'table with sessions / QR credentials cannot be deleted (RPC-only delete since 0039)');
 select tests.clear_auth();
 select is((select count(*)::int from public.ingredients where restaurant_id = (select b from _f)), 1, 'the blocked ingredient still exists');
 select matches(tests.run(format($q$delete from public.restaurants where id = %L$q$, (select b from _f))), '^23503\|update or delete on table "restaurants" violates foreign key constraint', 'a tenant with data cannot be deleted (even by the owner)');
@@ -262,15 +262,15 @@ select is(tests.col_grants('anon', 'insert') || tests.col_grants('anon', 'update
 select is(tests.tbl_grants('anon'), 'plans: SELECT', 'anon: table privileges are exactly SELECT on plans');
 select is(tests.tbl_grants('authenticated'), $m$admin_audit_log: SELECT
 audit_logs: SELECT
-categories: DELETE,SELECT
+categories: SELECT
 day_sessions: SELECT
-expense_categories: DELETE,SELECT
+expense_categories: SELECT
 expenses: DELETE,SELECT
 ingredients: SELECT
 installments: SELECT
 menu_items: SELECT
 order_items: SELECT
-payment_methods: DELETE,SELECT
+payment_methods: SELECT
 payments: SELECT
 permissions: SELECT
 plans: SELECT
@@ -281,12 +281,12 @@ recipe_lines: SELECT
 role_permissions: SELECT
 role_station_access: SELECT
 roles: SELECT
-stations: DELETE,SELECT
+stations: SELECT
 stock_movements: SELECT
 subscriptions: SELECT
-table_areas: DELETE,SELECT
+table_areas: SELECT
 table_sessions: SELECT
-tables: DELETE,SELECT
+tables: SELECT
 vouchers: SELECT$m$,
   'authenticated: table-level privileges are exactly the reviewed set (no TRUNCATE / REFERENCES / TRIGGER; ledgers, orders, secrets, credentials have none beyond SELECT)');
 

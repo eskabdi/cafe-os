@@ -239,7 +239,7 @@ select is(tests.oracle($q$select public.fn_update_role({id}, '{"name": "pwn"}')$
 select is(tests.oracle($q$select public.fn_set_role_active({id}, false)$q$, (select b_admin_role from _f)), 'P0001|not_found|', 'fn_set_role_active(B tenant_admin role): not_found (no system-role oracle)');
 select is(tests.oracle($q$delete from public.menu_items where id = {id}$q$, (select b_menu from _f)), '42501|permission denied for table menu_items|', 'delete B menu item by id: no client DELETE at all (same answer as unknown id)');
 select is(tests.oracle($q$select public.fn_delete_role({id})$q$, (select b_waiter_role from _f)), 'P0001|not_found|', 'fn_delete_role(B role): not_found, same as unknown');
-select is(tests.oracle($q$delete from public.tables where id = {id}$q$, (select b_table from _f)), 'ok:0', 'delete B table by id = unknown id');
+select is(tests.oracle($q$select public.fn_delete_config_row('tables', {id})$q$, (select b_table from _f)), 'P0001|not_found|', 'delete B table by id (RPC-only delete since 0039) = unknown id');
 select is(tests.oracle($q$select 1 from public.orders where id = {id}$q$, (select b_order from _g)), 'ok:0', 'select B order by id = unknown id');
 select is(tests.oracle($q$select 1 from public.payments where id = {id}$q$, (select b_payment from _g)), 'ok:0', 'select B payment by id = unknown id');
 select is(tests.oracle($q$select 1 from public.audit_logs where id = {id}$q$, (select b_audit from _g)), 'ok:0', 'select B audit row by id = unknown id');

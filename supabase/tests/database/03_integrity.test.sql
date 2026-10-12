@@ -35,7 +35,7 @@ insert into public.payments (restaurant_id, day_session_id, order_id, kind, amou
 select o.restaurant_id, o.day_session_id, o.id, 'order_payment', 115, pm.id, pm.name, pm.affects_cash_drawer, 'RCT-0001'
 from public.orders o join public.payment_methods pm on pm.restaurant_id = o.restaurant_id and pm.affects_cash_drawer
 where o.order_no = 'ORD-0100' and o.restaurant_id = (select a from _f);
-select throws_ok(format($q$delete from public.payment_methods where restaurant_id = %L$q$, (select a from _f)),
+select throws_ok(format($q$delete from public.payment_methods where restaurant_id = %L and id in (select payment_method_id from public.payments)$q$, (select a from _f)),
                  '23503', null, 'payment methods referenced elsewhere cannot be deleted');
 select throws_ok($q$update public.payments set amount = 1$q$, 'P0001', 'immutable_record', 'payments cannot be updated (owner)');
 select throws_ok($q$delete from public.payments$q$, 'P0001', 'immutable_record', 'payments cannot be deleted (owner)');
