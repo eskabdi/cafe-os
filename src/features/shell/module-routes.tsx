@@ -12,7 +12,7 @@ export function placeholderModuleRoutes(modules: readonly ModuleNavItem[] = MODU
   return modules
     .filter((m) => !m.implemented)
     .map((m) => ({
-      element: <RequireNavPermission permission={m.permission} />,
+      element: <RequireNavPermission permission={m.permission} anyOf={m.alsoPermissions} />,
       children: [{ path: m.segment, element: <ComingSoonPage module={m} /> }],
     }))
 }

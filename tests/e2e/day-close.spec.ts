@@ -69,13 +69,16 @@ const closedOld = {
   close_note: null,
 }
 
-async function setup(page: Page, opts: { permissions?: string[]; unpaid?: number } = {}) {
-  const calls: Record<string, Array<Record<string, unknown>>> = { close: [], open: [], expense: [] }
+async function setup(
+  page: Page,
+  opts: { permissions?: string[]; unpaid?: number; noOpenDay?: boolean } = {},
+) {
+  const calls: Record<string, Array<Record<string, unknown>>> = { close: [], open: [], expense: [], list: [] }
   const state: {
     open: { id: string; day_no: number; opened_at: string } | null
     days: Array<Record<string, unknown>>
   } = {
-    open: { id: DAY, day_no: 12, opened_at: '2026-10-10T05:00:00Z' },
+    open: opts.noOpenDay ? null : { id: DAY, day_no: 12, opened_at: '2026-10-10T05:00:00Z' },
     days: [{ ...closedOld }],
   }
   const user = {
@@ -169,6 +172,7 @@ async function setup(page: Page, opts: { permissions?: string[]; unpaid?: number
         return r.fulfill(json(200, preview()))
       }
       if (name === 'fn_list_days') {
+        calls.list?.push({})
         const open = state.open
           ? [
               {
@@ -415,4 +419,24 @@ test('without day_close.execute: no nav entry and the route is forbidden', async
   await expect(
     page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Day close' }),
   ).toHaveCount(0)
+})
+
+test('a day.open-only role reaches the page to open a new day: no close UI, no history call', async ({
+  page,
+}) => {
+  const calls = await setup(page, { permissions: ['day.open'], noOpenDay: true })
+  await page.goto('/r/demo-cafe/day-close')
+  await expect(page.getByRole('heading', { level: 1, name: 'Day close' })).toBeVisible()
+  await expect(
+    page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Day close' }),
+  ).toBeVisible()
+  const open = page.getByRole('region', { name: 'Open a new business day' })
+  await expect(open).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Past days' })).toHaveCount(0)
+  await open.getByLabel('Opening float (ETB)').fill('500')
+  await open.getByRole('button', { name: 'Open day' }).click()
+  await expect(page.getByText('Business day 13 is open.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Close the day' })).toHaveCount(0)
+  expect(calls.open).toHaveLength(1)
+  expect(calls.list).toHaveLength(0)
 })

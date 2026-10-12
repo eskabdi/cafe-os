@@ -5,7 +5,7 @@
 -- Expected: gross 414.00, cash 161.00, cash expenses 50.00, expected 1000 + 161 - 50 = 1111.00, counted 1100.00 -> variance -11.00,
 -- net 364.00, orders 2.
 begin;
-select plan(48);
+select plan(60);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -32,6 +32,22 @@ create function tests.open_count(p_rid uuid) returns int language sql stable sec
 create function tests.ev(p_rid uuid, p_event text) returns int language sql stable security definer set search_path = '' as $$
   select count(*)::int from public.audit_logs a where a.restaurant_id = p_rid and a.event = p_event $$;
 grant execute on all functions in schema tests to public;
+-- a second tenant-A user allowed to close (custom role, not tenant_admin): for the cross-user idempotency check
+do $$ begin
+  declare v_a uuid := tests.tenant_id('central-cafe'); v_r uuid;
+  begin
+    insert into public.roles (restaurant_id, name) values (v_a, 'Closer') returning id into v_r;
+    insert into public.role_permissions (role_id, permission_id, restaurant_id)
+      select v_r, id, v_a from public.permissions where key in ('day_close.execute', 'day.open');
+    perform tests.create_auth_user('00000000-0000-4000-8000-0000000046c1', 'closer@central-cafe.staff.cafeos.invalid');
+    insert into public.profiles (id, restaurant_id, first_name, username, role_id, auth_method) values
+      ('00000000-0000-4000-8000-0000000046c1', v_a, 'Kebede', 'closer', v_r, 'pin');
+  end;
+end $$;
+select ok(not has_function_privilege('anon', 'public.fn_close_day(numeric, jsonb, text, text)', 'execute')
+          and not has_function_privilege('anon', 'public.fn_close_day_preview()', 'execute')
+          and not has_function_privilege('anon', 'public.fn_open_day(numeric, text)', 'execute')
+          and not has_function_privilege('anon', 'public.fn_list_days(integer)', 'execute'), 'anon cannot execute the four day RPCs');
 
 -- structure
 select is((select count(*)::int from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prosecdef and p.proconfig @> array['search_path=""']
@@ -88,6 +104,14 @@ select is(tests.run($q$select public.fn_close_day(1100, '[{"ingredient_id": "nop
 select is(tests.run(format($q$select public.fn_close_day(1100, '[{"ingredient_id": "%s", "counted": 1}]', null, 'day-close-key-004')$q$,
                           (select id from public.ingredients where restaurant_id = (select b from _f) limit 1))),
           'P0001|invalid_input|station_counts', 'another tenant''s ingredient refused');
+insert into _n select 'ing0', (select id from public.ingredients where restaurant_id = (select a from _f) limit 1)::text;
+select is(tests.run(format($q$select public.fn_close_day(1100, '[{"ingredient_id": "%s", "counted": 1}, {"ingredient_id": "%s", "counted": 2}]', null, 'day-close-key-005')$q$,
+                          lower(tests.nv('ing0')::text), upper(tests.nv('ing0')::text))),
+          'P0001|invalid_input|station_counts', 'case variants of one ingredient id are a duplicate');
+select is(tests.run(format($q$select public.fn_close_day(1100, '[{"ingredient_id": "%s", "counted": 1}]', null, 'day-close-key-006')$q$, repeat('-', 36))),
+          'P0001|invalid_input|station_counts', 'an id of 36 dashes is invalid_input (no raw cast error)');
+select is(tests.run($q$select public.fn_list_days(0)$q$), 'P0001|invalid_input|limit', 'fn_list_days: limit 0 refused');
+select is(tests.run($q$select public.fn_list_days(367)$q$), 'P0001|invalid_input|limit', 'fn_list_days: limit 367 refused');
 select tests.clear_auth();
 select tests.authenticate_as((select a_waiter from _f));
 select lives_ok(format($q$select public.fn_cancel_order(%L, 'left')$q$, tests.nv('o3')), 'o3 cancelled');
@@ -114,6 +138,11 @@ select is((select jsonb_agg(jsonb_build_array(x ->> 'name', (x ->> 'amount')::nu
 select is((public.fn_close_day(1100, jsonb_build_array(jsonb_build_object('ingredient_id', tests.nv('ing'), 'counted', (select v::numeric from _n where k = 'ing_stock') - 2)),
                                'short by 11', 'day-close-key-100') ->> 'replayed'), 'true', 'replay of the close: same result');
 select tests.clear_auth();
+select tests.authenticate_as('00000000-0000-4000-8000-0000000046c1'::uuid);
+select is(tests.run(format($q$select public.fn_close_day(1100, %L, 'short by 11', 'day-close-key-100')$q$,
+                          jsonb_build_array(jsonb_build_object('ingredient_id', tests.nv('ing'), 'counted', (select v::numeric from _n where k = 'ing_stock') - 2)))),
+          'P0001|idempotency_conflict|', 'another user replaying the same key gets idempotency_conflict');
+select tests.clear_auth();
 
 -- frozen + new day
 select is(tests.open_count((select a from _f)), 0, 'no open day after the close');
@@ -127,6 +156,14 @@ select tests.authenticate_as((select a_admin from _f));
 select is(tests.run($q$select public.fn_close_day(0, '[]', null, 'day-close-key-200')$q$), 'P0001|day_closed|no open business day',
           'a closed day cannot be closed again');
 select is(tests.run($q$select public.fn_close_day_preview()$q$), 'P0001|day_closed|no open business day', 'no preview without an open day');
+insert into _n select 'exp', (select id from public.expenses where restaurant_id = (select a from _f) and description = 'milk')::text;
+select is(tests.run($q$insert into public.expenses (restaurant_id, expense_category_id, payment_method_id, amount, description)
+                       select a, tests.ec(a, 'Purchases'), tests.pm(a, 'Cash'), 5, 'late' from _f$q$), 'P0001|day_closed|',
+          'no expense insert after the close');
+select is(tests.run(format($q$update public.expenses set amount = 1 where id = %L$q$, tests.nv('exp'))), 'P0001|day_closed|',
+          'an expense of the closed day cannot be updated');
+select is(tests.run(format($q$delete from public.expenses where id = %L$q$, tests.nv('exp'))), 'P0001|day_closed|',
+          'an expense of the closed day cannot be deleted');
 select tests.clear_auth();
 select tests.authenticate_as((select a_waiter from _f));
 select is(tests.run(format($q$select public.fn_cancel_order(%L, 'late')$q$, tests.nv('o1'))), 'P0001|day_closed|order business day is closed',
@@ -147,6 +184,22 @@ select is(tests.open_count((select a from _f)), 1, 'tenant A''s new day untouche
 select is((select count(*)::int from jsonb_array_elements(public.fn_list_days(366)) j where (j ->> 'id')::uuid = (tests.jv('d') ->> 'id')::uuid), 0,
           'another tenant does not see the day');
 select tests.clear_auth();
+-- tenant B closes its own day: tenant A's tables and sessions are untouched
+update public.tables set status = 'occupied'
+ where id = (select id from public.tables where restaurant_id = (select a from _f) order by label limit 1);
+create function tests.a_state(p_rid uuid) returns text language sql stable security definer set search_path = '' as $$
+  select format('%s|%s|%s|%s',
+    (select string_agg(id::text || status, ',' order by id) from public.tables where restaurant_id = p_rid),
+    (select count(*) from public.table_sessions where restaurant_id = p_rid and status = 'open'),
+    (select count(*) from public.customer_sessions where restaurant_id = p_rid and status = 'active'),
+    (select count(*) from public.day_sessions where restaurant_id = p_rid and status = 'open')) $$;
+grant execute on function tests.a_state(uuid) to public;
+insert into _n select 'astate', tests.a_state((select a from _f));
+select tests.authenticate_as((select b_admin from _f));
+select is(tests.run($q$select public.fn_close_day(0, '[]', null, 'day-close-key-b01')$q$), 'ok:1', 'tenant B closes its own day');
+select tests.clear_auth();
+select is(tests.a_state((select a from _f)), (select v from _n where k = 'astate'), 'tenant B''s close leaves tenant A''s tables and sessions untouched');
+select ok(tests.a_state((select a from _f)) like '%occupied%', 'tenant A''s occupied table is still occupied');
 select is(tests.ev((select a from _f), 'day.closed'), 1, 'audit: day.closed once (the replay wrote none)');
 select is(tests.ev((select a from _f), 'day.opened'), 2, 'audit: day.opened twice');
 select is((select (a.new_data ->> 'cash_variance')::numeric from public.audit_logs a where a.restaurant_id = (select a from _f) and a.event = 'day.closed'),

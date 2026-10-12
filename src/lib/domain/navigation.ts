@@ -17,6 +17,8 @@ export interface ModuleNavSpec {
   /** Path below `/r/<slug>/` (no leading slash). */
   segment: string
   permission: string
+  /** Further permission codes that also open the module (any of them; e.g. Day close: `day.open` alone may open a new day). */
+  alsoPermissions?: readonly string[]
   group: 'operations' | 'management' | 'settings'
   /**
    * Plan feature the module sells (platform plan catalogue key, never a tenant domain name). Without it the entry stays visible
@@ -27,13 +29,21 @@ export interface ModuleNavSpec {
 
 export type Can = (permission: string) => boolean
 
+/** May the user open the module? Its permission or any of `alsoPermissions`. */
+export function canOpenModule(m: Pick<ModuleNavSpec, 'permission' | 'alsoPermissions'>, can: Can): boolean {
+  return can(m.permission) || (m.alsoPermissions ?? []).some((p) => can(p))
+}
+
 /** Modules the user may open, in catalogue order. A module whose permission is not held is omitted (not disabled). */
 export function visibleModules<T extends ModuleNavSpec>(modules: readonly T[], can: Can): T[] {
-  return modules.filter((m) => can(m.permission))
+  return modules.filter((m) => canOpenModule(m, can))
 }
 
 /** Is the module marked as not included in the tenant's plan? Modules without a planFeature are never locked. */
-export function isModuleLocked(module: Pick<ModuleNavSpec, 'planFeature'>, ctx: PlanFeaturesHolder | null | undefined) {
+export function isModuleLocked(
+  module: Pick<ModuleNavSpec, 'planFeature'>,
+  ctx: PlanFeaturesHolder | null | undefined,
+) {
   return module.planFeature !== undefined && !hasPlanFeature(ctx, module.planFeature)
 }
 

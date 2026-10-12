@@ -51,6 +51,8 @@ const ReportsPage = lazy(() =>
 const DayClosePage = lazy(() =>
   import('@/features/day-close/DayClosePage').then((m) => ({ default: m.DayClosePage })),
 )
+// same codes as the Day close nav entry (day_close.execute or day.open)
+const DAY_CLOSE_ALSO = ['day.open'] as const
 const InventoryPage = lazy(() => import('@/features/inventory').then((m) => ({ default: m.InventoryPage })))
 const RestaurantSettingsPage = lazy(() =>
   import('@/features/tenant-admin/RestaurantSettingsPage').then((m) => ({
@@ -244,11 +246,11 @@ export const routes: RouteObject[] = [
                           </RequireNavPermission>
                         ),
                       },
-                      // Phase 9 Day close (day_close.execute, same code as the nav entry; fn_close_day / fn_open_day re-check server-side)
+                      // Phase 9 Day close (day_close.execute or day.open, same codes as the nav entry; fn_close_day / fn_open_day re-check server-side)
                       {
                         path: 'day-close',
                         element: (
-                          <RequireNavPermission permission="day_close.execute">
+                          <RequireNavPermission permission="day_close.execute" anyOf={DAY_CLOSE_ALSO}>
                             <DayClosePage />
                           </RequireNavPermission>
                         ),

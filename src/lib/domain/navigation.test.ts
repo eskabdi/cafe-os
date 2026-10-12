@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   accountLinkIds,
+  canOpenModule,
   canOpenStation,
   groupModules,
   isModuleLocked,
@@ -112,7 +113,14 @@ describe('canOpenStation / isUuid', () => {
 })
 
 describe('isModuleLocked (plan entitlement marking)', () => {
-  const gated: ModuleNavSpec = { id: 'g', label: 'G', segment: 'g', permission: 'p.g', group: 'operations', planFeature: 'installments' }
+  const gated: ModuleNavSpec = {
+    id: 'g',
+    label: 'G',
+    segment: 'g',
+    permission: 'p.g',
+    group: 'operations',
+    planFeature: 'installments',
+  }
   const plain = MODULES[0] as ModuleNavSpec
 
   it('never locks a module without a plan feature', () => {
@@ -131,5 +139,20 @@ describe('isModuleLocked (plan entitlement marking)', () => {
 
   it('keeps a locked module visible (permission filtering is unchanged)', () => {
     expect(visibleModules([gated], can(['p.g'])).map((m) => m.id)).toEqual(['g'])
+  })
+})
+
+describe('canOpenModule (alsoPermissions: any of)', () => {
+  const m = { permission: 'day_close.execute', alsoPermissions: ['day.open'] as const }
+  const has = (keys: string[]) => (p: string) => keys.includes(p)
+  it('opens with the primary code or any further code, not without', () => {
+    expect(canOpenModule(m, has(['day_close.execute']))).toBe(true)
+    expect(canOpenModule(m, has(['day.open']))).toBe(true)
+    expect(canOpenModule(m, has(['reports.view']))).toBe(false)
+    expect(canOpenModule({ permission: 'menu.view' }, has(['day.open']))).toBe(false)
+  })
+  it('visibleModules lists a module reachable only through alsoPermissions', () => {
+    const mod = { id: 'dc', label: 'Day close', segment: 'day-close', group: 'management' as const, ...m }
+    expect(visibleModules([mod], has(['day.open'])).map((x) => x.id)).toEqual(['dc'])
   })
 })

@@ -87,7 +87,13 @@ export function DayClosePage() {
     enabled: Boolean(rid),
     initialData: context?.open_day ?? null,
   })
-  const history = useQuery({ queryKey: dayKeys.history(rid), queryFn: fetchDays, enabled: Boolean(rid) })
+  // fn_list_days needs reports.view or day_close.execute: a day.open-only role never calls it
+  const canHistory = can('reports.view') || can('day_close.execute')
+  const history = useQuery({
+    queryKey: dayKeys.history(rid),
+    queryFn: fetchDays,
+    enabled: Boolean(rid) && canHistory,
+  })
   const [sheet, setSheet] = useState<Day | null>(null)
   const refreshAll = () => {
     void qc.invalidateQueries({ queryKey: ['day', rid] })
@@ -105,87 +111,96 @@ export function DayClosePage() {
           {(can('expenses.manage') || can('expenses.view')) && (
             <ExpensesCard dayId={openDayQ.data.id} canManage={can('expenses.manage')} />
           )}
-          {can('day_close.execute') && (
+          {can('day_close.execute') ? (
             <CloseCard
               onClosed={(d) => {
                 setSheet(d)
                 refreshAll()
               }}
             />
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Business day {openDayQ.data.day_no} is open. Closing it needs the &ldquo;Close the business
+              day&rdquo; permission.
+            </p>
           )}
         </>
       ) : (
         can('day.open') && <OpenDayCard onOpened={refreshAll} />
       )}
-      <section aria-labelledby="day-history" className="space-y-2">
-        <h2 id="day-history" className="text-lg font-semibold text-ink">
-          Past days
-        </h2>
-        {history.isPending ? (
-          <PageSkeleton label="Loading past days" />
-        ) : history.isError ? (
-          <ErrorState title="Past days could not be loaded" onRetry={() => void history.refetch()} />
-        ) : (
-          <div className="overflow-x-auto rounded-md border border-line bg-white">
-            <table className="w-full text-sm">
-              <caption className="sr-only">Business days</caption>
-              <thead className="bg-muted text-left">
-                <tr>
-                  <th scope="col" className="px-3 py-2">
-                    Day
-                  </th>
-                  <th scope="col" className="px-3 py-2">
-                    Closed
-                  </th>
-                  <th scope="col" className="px-3 py-2 text-right">
-                    Collected
-                  </th>
-                  <th scope="col" className="px-3 py-2 text-right">
-                    Expenses
-                  </th>
-                  <th scope="col" className="px-3 py-2 text-right">
-                    Cash variance
-                  </th>
-                  <th scope="col" className="px-3 py-2">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line">
-                {history.data.map((d) => (
-                  <tr key={d.id}>
-                    <td className="px-3 py-2 font-medium">
-                      {d.day_no}
-                      {d.status === 'open' && <span className="ml-2 text-xs text-status-success">open</span>}
-                    </td>
-                    <td className="px-3 py-2 font-amharic">
-                      {d.closed_at ? formatEthiopianDateTime(d.closed_at, tz) : '—'}
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      {d.gross_collected != null ? formatEtb(d.gross_collected) : '—'}
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      {d.expenses_total != null ? formatEtb(d.expenses_total) : '—'}
-                    </td>
-                    <td
-                      className={`px-3 py-2 text-right tabular-nums ${d.cash_variance != null ? TONE_CLASS[cashVarianceTone(d.cash_variance)] : ''}`}
-                    >
-                      {d.cash_variance != null ? signed(d.cash_variance) : '—'}
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      {d.status === 'closed' && (
-                        <Button type="button" size="sm" variant="outline" onClick={() => setSheet(d)}>
-                          Balance sheet
-                        </Button>
-                      )}
-                    </td>
+      {canHistory && (
+        <section aria-labelledby="day-history" className="space-y-2">
+          <h2 id="day-history" className="text-lg font-semibold text-ink">
+            Past days
+          </h2>
+          {history.isPending ? (
+            <PageSkeleton label="Loading past days" />
+          ) : history.isError ? (
+            <ErrorState title="Past days could not be loaded" onRetry={() => void history.refetch()} />
+          ) : (
+            <div className="overflow-x-auto rounded-md border border-line bg-white">
+              <table className="w-full text-sm">
+                <caption className="sr-only">Business days</caption>
+                <thead className="bg-muted text-left">
+                  <tr>
+                    <th scope="col" className="px-3 py-2">
+                      Day
+                    </th>
+                    <th scope="col" className="px-3 py-2">
+                      Closed
+                    </th>
+                    <th scope="col" className="px-3 py-2 text-right">
+                      Collected
+                    </th>
+                    <th scope="col" className="px-3 py-2 text-right">
+                      Expenses
+                    </th>
+                    <th scope="col" className="px-3 py-2 text-right">
+                      Cash variance
+                    </th>
+                    <th scope="col" className="px-3 py-2">
+                      <span className="sr-only">Actions</span>
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {history.data.map((d) => (
+                    <tr key={d.id}>
+                      <td className="px-3 py-2 font-medium">
+                        {d.day_no}
+                        {d.status === 'open' && (
+                          <span className="ml-2 text-xs text-status-success">open</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 font-amharic">
+                        {d.closed_at ? formatEthiopianDateTime(d.closed_at, tz) : '—'}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        {d.gross_collected != null ? formatEtb(d.gross_collected) : '—'}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        {d.expenses_total != null ? formatEtb(d.expenses_total) : '—'}
+                      </td>
+                      <td
+                        className={`px-3 py-2 text-right tabular-nums ${d.cash_variance != null ? TONE_CLASS[cashVarianceTone(d.cash_variance)] : ''}`}
+                      >
+                        {d.cash_variance != null ? signed(d.cash_variance) : '—'}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        {d.status === 'closed' && (
+                          <Button type="button" size="sm" variant="outline" onClick={() => setSheet(d)}>
+                            Balance sheet
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
     </div>
   )
 }

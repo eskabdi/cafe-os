@@ -36,10 +36,14 @@ Rules:
   nothing lands in the day while it closes. `fn_open_day` serialises on the tenant row; the one-open-day partial unique index is the backstop.
 - **Frozen**: once closed, `trg_guard_day_session` refuses any update/delete (`closed_day_immutable`), and the `trg_01_closed_day` guards
   refuse writes to the day's orders, items, payments, stock movements, vouchers, installments and sessions (`day_closed`).
+- **Expenses** (0038 replaces `fn_expense_context`, same signature / grants / trigger): insert, update and delete lock the expense's day
+  `FOR SHARE` and re-check `status = 'open'` after the lock, so no expense write can land in a day while or after it closes (`day_closed`).
+- **Counts validation**: ids must match a strict UUID pattern; duplicates are compared as `uuid` (case variants are one ingredient).
 - **No reopen**: a closed day is never reopened; the new-day workflow is the only way forward (execution prompt §29).
 
 Frontend: `src/lib/supabase/day.ts` (Zod-parsed wrappers), `src/lib/domain/day-close.ts` (display-only variance tones),
-`src/features/day-close/DayClosePage.tsx` at `/r/<slug>/day-close` (route + nav gated by `day_close.execute`; the open-day form by `day.open`;
-expenses by `expenses.view` / `expenses.manage`). Dates use the Ethiopian calendar and clock in the tenant time zone; Arabic numerals.
+`src/features/day-close/DayClosePage.tsx` at `/r/<slug>/day-close` (route + nav open with `day_close.execute` **or** `day.open`
+(`alsoPermissions` / `RequireNavPermission anyOf`); the close UI needs `day_close.execute`, the open-day form `day.open`, the history
+`reports.view` or `day_close.execute`; expenses `expenses.view` / `expenses.manage`). Dates use the Ethiopian calendar and clock in the tenant time zone; Arabic numerals.
 Tests: `supabase/tests/database/46_day_close.test.sql`, `src/lib/supabase/day.test.ts`, `src/lib/domain/day-close.test.ts`,
 `tests/e2e/day-close.spec.ts` (gate: close → new day).

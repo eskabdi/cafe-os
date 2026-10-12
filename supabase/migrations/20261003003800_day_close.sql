@@ -119,14 +119,19 @@ begin
     perform public.fn_err('invalid_input', 'counted_cash');
   end if;
   if v_note is not null and (char_length(v_note) > 500 or v_note ~ '[[:cntrl:]]') then perform public.fn_err('invalid_input', 'note'); end if;
-  if jsonb_typeof(v_counts) <> 'array' or jsonb_array_length(v_counts) > 2000
+  if jsonb_typeof(v_counts) <> 'array' then perform public.fn_err('invalid_input', 'station_counts'); end if;
+  if jsonb_array_length(v_counts) > 2000
      or exists (select 1 from jsonb_array_elements(v_counts) c
                 where jsonb_typeof(c) <> 'object'
-                   or (c ->> 'ingredient_id') !~ '^[0-9a-fA-F-]{36}$'
+                   or coalesce(c ->> 'ingredient_id', '') !~ '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$'
                    or jsonb_typeof(c -> 'counted') <> 'number'
                    or (c ->> 'counted')::numeric < 0 or (c ->> 'counted')::numeric > 999999999.999
                    or (c ->> 'counted')::numeric <> round((c ->> 'counted')::numeric, 3))
-     or (select count(*) <> count(distinct c ->> 'ingredient_id') from jsonb_array_elements(v_counts) c) then
+  then
+    perform public.fn_err('invalid_input', 'station_counts');
+  end if;
+  -- duplicates compared as uuid (after the strict format check), so case variants of one id are the same ingredient
+  if (select count(*) <> count(distinct (c ->> 'ingredient_id')::uuid) from jsonb_array_elements(v_counts) c) then
     perform public.fn_err('invalid_input', 'station_counts');
   end if;
 
@@ -260,3 +265,104 @@ revoke all on function public.fn_close_day_preview(), public.fn_close_day(numeri
   public.fn_list_days(integer) from public, anon;
 grant execute on function public.fn_close_day_preview(), public.fn_close_day(numeric, jsonb, text, text), public.fn_open_day(numeric, text),
   public.fn_list_days(integer) to authenticated;
+
+-- ── fn_expense_context: lock the business day (review M1) ───────────────────
+-- Same behaviour, signature, grants and trigger wiring as 0016, except that every branch now reads the day's status under
+-- FOR SHARE (insert, update and delete). Without the lock an expense write racing fn_close_day could land in the day after its
+-- figures were frozen, so the expense snapshot would no longer match the expenses. CREATE OR REPLACE keeps the existing trigger and
+-- the 0010 revoke (no client EXECUTE).
+create or replace function public.fn_expense_context()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_day uuid;
+  v_bdate date;
+  v_status text;
+begin
+  if tg_op = 'DELETE' then
+    if old.day_session_id is not null then
+      -- FOR SHARE: serialises against fn_close_day (FOR UPDATE); the status is read after the lock
+      select d.status into v_status from public.day_sessions d
+      where d.id = old.day_session_id and d.restaurant_id = old.restaurant_id for share;
+      if v_status is distinct from 'open' then perform public.fn_err('day_closed'); end if;
+    end if;
+    return old;
+  end if;
+
+  if tg_op = 'UPDATE' then
+    if old.day_session_id is not null then
+      select d.status into v_status from public.day_sessions d
+      where d.id = old.day_session_id and d.restaurant_id = old.restaurant_id for share;
+      if v_status is distinct from 'open' then perform public.fn_err('day_closed'); end if;
+    end if;
+    new.created_by := old.created_by;
+    new.day_session_id := old.day_session_id;
+    if new.expense_date is distinct from old.expense_date then
+      perform public.fn_err('invalid_expense_date');
+    end if;
+    if new.payment_method_id is not distinct from old.payment_method_id then
+      new.method_name_snapshot := old.method_name_snapshot;
+      new.method_affects_drawer_snapshot := old.method_affects_drawer_snapshot;
+    end if;
+    if new.expense_category_id is not distinct from old.expense_category_id then
+      new.category_name_snapshot := old.category_name_snapshot;
+    end if;
+  else
+    -- INSERT: a client may only insert into its own tenant. Checked BEFORE any lookup so the error cannot
+    -- distinguish another tenant's ids from unknown ones (same SQLSTATE/message as the RLS policy).
+    if (select auth.uid()) is not null then
+      if new.restaurant_id is distinct from (select public.current_restaurant_id()) then
+        raise exception using errcode = '42501',
+          message = 'new row violates row-level security policy for table "expenses"';
+      end if;
+      new.created_by := (select public.current_user_id());
+      new.day_session_id := null;
+    end if;
+    if new.day_session_id is null then
+      select d.id into v_day from public.day_sessions d
+      where d.restaurant_id = new.restaurant_id and d.status = 'open' for share;
+      new.day_session_id := v_day;
+    end if;
+    -- an expense always belongs to an OPEN business day of its own tenant: lock the day FOR SHARE (fn_close_day holds it FOR
+    -- UPDATE while it snapshots) and re-check the status after the lock
+    v_status := null;
+    if new.day_session_id is not null then
+      select d.status into v_status from public.day_sessions d
+      where d.id = new.day_session_id and d.restaurant_id = new.restaurant_id for share;
+    end if;
+    if v_status is distinct from 'open' then
+      perform public.fn_err('day_closed');
+    end if;
+    -- business date = the open day's opening date in the tenant's timezone
+    select (d.opened_at at time zone r.timezone)::date into v_bdate
+    from public.day_sessions d join public.restaurants r on r.id = d.restaurant_id
+    where d.id = new.day_session_id and d.restaurant_id = new.restaurant_id;
+    if v_bdate is null then perform public.fn_err('day_closed'); end if;
+    if new.expense_date is not null and new.expense_date is distinct from v_bdate then
+      perform public.fn_err('invalid_expense_date');
+    end if;
+    new.expense_date := v_bdate;
+  end if;
+
+  if tg_op = 'INSERT' or new.payment_method_id is distinct from old.payment_method_id then
+    select pm.name, pm.affects_cash_drawer into new.method_name_snapshot, new.method_affects_drawer_snapshot
+    from public.payment_methods pm
+    where pm.id = new.payment_method_id and pm.restaurant_id = new.restaurant_id;
+    if not found then
+      perform public.fn_err('invalid_reference', 'payment_method_id');
+    end if;
+  end if;
+  if tg_op = 'INSERT' or new.expense_category_id is distinct from old.expense_category_id then
+    select ec.name into new.category_name_snapshot
+    from public.expense_categories ec
+    where ec.id = new.expense_category_id and ec.restaurant_id = new.restaurant_id;
+    if not found then
+      perform public.fn_err('invalid_reference', 'expense_category_id');
+    end if;
+  end if;
+  return new;
+end;
+$$;
