@@ -1,94 +1,86 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@/features/auth'
 import { ErrorState, PageSkeleton } from '@/features/shell/states'
-import { formatEtb } from '@/lib/domain/decimal'
-import { describeDays, type DayRange } from '@/lib/domain/reports'
-import { fetchReport, reportsKeys, type Report } from '@/lib/supabase/reports'
-import { HourlyChart, KpiTile, RankedBars } from './charts'
-import { DayRangeForm } from './DayRangeForm'
-import { InventorySection } from './InventorySection'
+import { periodLabel, periodRange, todayIn, type Period } from '@/lib/domain/reports-period'
+import { fetchReportPeriod, periodReportKey, type ReportType } from '@/lib/supabase/reports'
+import { RpcError } from '@/lib/supabase/rpc'
+import { fetchTenantLogoUrl } from '@/lib/supabase/tenant-logo'
+import { ExportBar } from './ExportBar'
+import { PeriodPicker } from './PeriodPicker'
+import { buildReportView } from './report-model'
+import type { ExportMeta } from './report-export'
+import { ReportPanel } from './ReportPanel'
+import { ReportPrintLayout } from './ReportPrintLayout'
+import { ReportTabs } from './ReportTabs'
+import { useReportExport } from './useReportExport'
 
-function ReportKpis({ k }: { k: Report['kpis'] }) {
-  return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-4" data-testid="report-kpis">
-      <KpiTile label="Collected" value={formatEtb(k.gross_collected)} hint={`cash ${formatEtb(k.cash_collected)}`} />
-      <KpiTile label="Expenses" value={formatEtb(k.expenses_total)} />
-      <KpiTile label="Net position" value={formatEtb(k.net_position)} hint="collected minus expenses" />
-      <KpiTile label="Sales" value={formatEtb(k.sales_total)} hint={`${k.order_count} orders · ${k.items_sold} items`} />
-      <KpiTile label="Average order" value={formatEtb(k.avg_order_value)} />
-      <KpiTile label="Cancelled orders" value={String(k.cancelled_count)} />
-      <KpiTile label="Unpaid" value={formatEtb(k.unpaid_total)} />
-      <KpiTile label="Installments outstanding" value={formatEtb(k.vouchers_outstanding)} hint={`${k.vouchers_overdue} overdue vouchers`} />
-    </div>
-  )
-}
-
-function ReportBody({ r }: { r: Report }) {
-  return (
-    <>
-      <p className="text-sm text-muted-foreground" data-testid="report-days">
-        {describeDays(r.days, r.timezone)}
-      </p>
-      <ReportKpis k={r.kpis} />
-      <div className="grid gap-4 lg:grid-cols-2">
-        <HourlyChart data={r.by_hour} title="Orders by hour" />
-        <RankedBars
-          title="Collected by payment method"
-          rows={r.by_payment_method.map((m) => ({ key: m.payment_method_id, label: m.name, value: m.amount, detail: `×${m.count}` }))}
-          valueLabel={formatEtb}
-        />
-        <RankedBars
-          title="Sales by category (before VAT)"
-          rows={r.by_category.map((c, i) => ({
-            key: c.category_id ?? `none-${i}`,
-            label: c.name ?? 'Uncategorised',
-            value: c.amount,
-            detail: `${c.qty} sold`,
-          }))}
-          valueLabel={formatEtb}
-        />
-        <RankedBars
-          title="Sales by staff"
-          rows={r.by_waiter.map((w, i) => ({ key: w.user_id ?? `none-${i}`, label: w.name ?? 'Unknown', value: w.sales, detail: `${w.orders} orders` }))}
-          valueLabel={formatEtb}
-        />
-        <RankedBars
-          title="Expenses by category"
-          rows={r.by_expense_category.map((e) => ({ key: e.expense_category_id, label: e.name ?? '—', value: e.amount, detail: `×${e.count}` }))}
-          valueLabel={formatEtb}
-        />
-        <InventorySection inventory={r.inventory} />
-      </div>
-    </>
-  )
-}
+const TENANT_TZ = 'Africa/Addis_Ababa'
 
 /**
- * Reports (Phase 8): the current business day or a range of day numbers. All aggregations come from fn_report (the gate compares
- * them with a hand-calculated fixture); names are the rows' / snapshots', never known to the code.
+ * Reports: ten report types for a Daily / Weekly / Ethiopian-monthly / Custom period. Every figure comes from
+ * fn_report_period; sections the caller may not see come back null and render a neutral notice. Print / CSV / PDF are
+ * offered with reports.export and always audited (fn_log_report_export) before anything is produced.
  */
 export function ReportsPage() {
-  const { context } = useAuth()
+  const { context, can } = useAuth()
   const rid = context?.restaurant?.id ?? ''
-  const [range, setRange] = useState<DayRange>({ from: null, to: null })
+  const slug = context?.restaurant?.slug ?? ''
+  const today = useMemo(() => todayIn(TENANT_TZ), [])
+  const [period, setPeriod] = useState<Period>({ kind: 'daily', date: today })
+  const [type, setType] = useState<ReportType>('summary')
+  const range = periodRange(period)
+  const canExport = can('reports.export')
+  const exporter = useReportExport()
+
   const q = useQuery({
-    queryKey: reportsKeys.report(rid, range.from, range.to),
-    queryFn: () => fetchReport(range.from, range.to),
+    queryKey: periodReportKey(rid, range.from, range.to),
+    queryFn: () => fetchReportPeriod(range.from, range.to),
     enabled: Boolean(rid),
   })
+  const logo = useQuery({
+    queryKey: ['tenant-logo', slug],
+    queryFn: () => fetchTenantLogoUrl(slug),
+    enabled: canExport && Boolean(slug),
+    staleTime: 5 * 60_000,
+    retry: false,
+  })
+
+  const view = q.data ? buildReportView(type, q.data) : null
+  const meta: ExportMeta | null = q.data
+    ? {
+        restaurantName: context?.restaurant?.name ?? '',
+        slug,
+        from: q.data.period.from,
+        to: q.data.period.to,
+        period: periodLabel(period),
+        timezone: q.data.timezone,
+        logoUrl: logo.data ?? null,
+      }
+    : null
+  const periodError = q.error instanceof RpcError && q.error.code === 'invalid_input'
 
   return (
     <div className="space-y-4 p-4 lg:p-6">
-      <h1 className="text-2xl font-semibold text-ink">Reports</h1>
-      <DayRangeForm onApply={setRange} />
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <h1 className="text-2xl font-semibold text-ink">Reports</h1>
+        {canExport && view && meta && (
+          <ExportBar busy={exporter.busy} error={exporter.error} note={exporter.note} onExport={(f) => void exporter.run(f, view, meta)} />
+        )}
+      </div>
+      <PeriodPicker value={period} today={today} onChange={setPeriod} />
+      <ReportTabs value={type} onChange={setType} />
       {q.isPending ? (
         <PageSkeleton label="Loading the report" />
       ) : q.isError ? (
-        <ErrorState title="The report could not be loaded" onRetry={() => void q.refetch()} />
+        <ErrorState
+          title={periodError ? 'This period cannot be reported (at most 366 days).' : 'The report could not be loaded'}
+          onRetry={() => void q.refetch()}
+        />
       ) : (
-        <ReportBody r={q.data} />
+        view && <ReportPanel view={view} report={q.data} trend={period.kind !== 'daily'} />
       )}
+      {exporter.printJob && <ReportPrintLayout {...exporter.printJob} />}
     </div>
   )
 }

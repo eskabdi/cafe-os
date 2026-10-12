@@ -150,3 +150,65 @@ export function RankedBars({
     </section>
   )
 }
+
+export interface DayRow {
+  key: string
+  /** Gregorian "YYYY-MM-DD" (axis ticks show MM-DD). */
+  date: string
+  /** Ethiopian date label (tooltip and table). */
+  ethiopian: string
+  value: number
+}
+
+/** A by-business-day trend (one hue, one axis). The sr-only table carries the same figures with the Ethiopian dates. */
+export function DayTrendChart({ title, rows, valueLabel }: { title: string; rows: readonly DayRow[]; valueLabel: (v: number) => string }) {
+  return (
+    <figure className="rounded-lg border border-line bg-white p-4">
+      <figcaption className="mb-2 text-sm font-medium text-ink">{title}</figcaption>
+      {rows.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Nothing in this period.</p>
+      ) : (
+        <>
+          <div className="h-48" aria-hidden="true">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={[...rows]} margin={{ top: 4, right: 4, bottom: 0, left: 0 }} barCategoryGap="30%">
+                <CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeOpacity={0.6} />
+                <XAxis dataKey="date" tickLine={false} axisLine={false} tick={AXIS_TICK} tickFormatter={(d: string) => d.slice(5)} />
+                <YAxis tickLine={false} axisLine={false} tick={AXIS_TICK} width={48} />
+                <Tooltip
+                  cursor={{ fill: 'hsl(var(--muted))' }}
+                  contentStyle={{ color: '#1e293b' }}
+                  formatter={(v: number) => [valueLabel(v), title]}
+                  labelFormatter={(_d: string, payload) => {
+                    const row = payload[0]?.payload as DayRow | undefined
+                    return row ? `${row.ethiopian} · ${row.date}` : ''
+                  }}
+                />
+                <Bar dataKey="value" fill="hsl(var(--primary))" maxBarSize={18} radius={[3, 3, 0, 0]} isAnimationActive={false} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <table className="sr-only">
+            <caption>{title}</caption>
+            <thead>
+              <tr>
+                <th scope="col">Date</th>
+                <th scope="col">Gregorian</th>
+                <th scope="col">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.key}>
+                  <th scope="row">{r.ethiopian}</th>
+                  <td>{r.date}</td>
+                  <td>{valueLabel(r.value)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </figure>
+  )
+}
