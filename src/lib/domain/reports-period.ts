@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { ETHIOPIAN_MONTHS, toEthiopianDate } from './ethiopian-time'
+import { ETHIOPIAN_MONTHS, gregorianToJdn, jdnToGregorian, toEthiopianDate } from './ethiopian-time'
 
 // Report periods (Daily / Weekly / Monthly / Custom) as Gregorian calendar dates "YYYY-MM-DD", the shape fn_report_period
 // takes. Pure: no clock, no time zone (the caller passes "today" in the tenant's zone). The month is the ETHIOPIAN month
@@ -24,33 +24,10 @@ export interface DateRange {
 
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/
 
-// ── Julian day numbers (integer day arithmetic, no Date objects, no DST) ────────────────────────────────────────────
-function gregorianToJdn(y: number, m: number, d: number): number {
-  const a = Math.floor((14 - m) / 12)
-  const yy = y + 4800 - a
-  const mm = m + 12 * a - 3
-  return (
-    d +
-    Math.floor((153 * mm + 2) / 5) +
-    365 * yy +
-    Math.floor(yy / 4) -
-    Math.floor(yy / 100) +
-    Math.floor(yy / 400) -
-    32045
-  )
-}
-
+// ── Julian day numbers (integer day arithmetic, no Date objects, no DST; shared with ethiopian-time.ts) ─────────────
 function jdnToIso(jdn: number): string {
-  const a = jdn + 32044
-  const b = Math.floor((4 * a + 3) / 146097)
-  const c = a - Math.floor((146097 * b) / 4)
-  const d = Math.floor((4 * c + 3) / 1461)
-  const e = c - Math.floor((1461 * d) / 4)
-  const m = Math.floor((5 * e + 2) / 153)
-  const day = e - Math.floor((153 * m + 2) / 5) + 1
-  const month = m + 3 - 12 * Math.floor(m / 10)
-  const year = 100 * b + d - 4800 + Math.floor(m / 10)
-  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  const g = jdnToGregorian(jdn)
+  return `${String(g.year).padStart(4, '0')}-${String(g.month).padStart(2, '0')}-${String(g.day).padStart(2, '0')}`
 }
 
 /** A real calendar date "YYYY-MM-DD" (rejects 2026-02-30). */
@@ -110,6 +87,18 @@ export function isoToEthiopian(iso: string): { year: number; month: number; day:
   const m = ISO_DATE.exec(iso)
   if (!m) throw new Error('invalid date')
   return toEthiopianDate(Number(m[1]), Number(m[2]), Number(m[3]))
+}
+
+/** The Ethiopian years the month picker accepts. */
+export const MIN_ETH_YEAR = 1990
+export const MAX_ETH_YEAR = 2100
+
+/** A whole Ethiopian year in [MIN_ETH_YEAR, MAX_ETH_YEAR] from the year input's text (4 Arabic digits), else null. */
+export function parseEthiopianYear(text: string): number | null {
+  const t = text.trim()
+  if (!/^\d{4}$/.test(t)) return null
+  const y = Number(t)
+  return y >= MIN_ETH_YEAR && y <= MAX_ETH_YEAR ? y : null
 }
 
 /** Next / previous Ethiopian month (Pagume is followed by Meskerem of the next year). */

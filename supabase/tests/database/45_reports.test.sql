@@ -13,7 +13,7 @@
 -- Business days (tenant tz Africa/Addis_Ababa, base = local today - 20): seed day 1 opened now (base + 20), day 98 opened at local
 -- 00:30 of base + 3 (UTC: still base + 2), day 99 opened at local 08:00 of base + 7.
 begin;
-select plan(122);
+select plan(133);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -166,6 +166,10 @@ select ok((tests.jv('rc') -> 'inventory') = 'null'::jsonb and (tests.jv('rc') ->
           'without inventory.view / reports.staff: inventory and by_waiter are null');
 select ok((tests.jv('rc') -> 'kpis' ->> 'gross_collected')::numeric = 414.00 and jsonb_typeof(tests.jv('rc') -> 'by_payment_method') = 'array'
           and jsonb_typeof(tests.jv('rc') -> 'installments') = 'object', 'cashier keeps the payment and installment sections');
+select is((select jsonb_agg(jsonb_build_array(x ->> 'order_no', (x ->> 'total')::numeric, x ->> 'reason', x -> 'by_name'))
+           from jsonb_array_elements(tests.jv('rc') -> 'cancellations' -> 'items') x),
+          jsonb_build_array(jsonb_build_array((select order_no from public.orders where id = tests.nv('o3')), 80.50, 'left', null)),
+          'without reports.staff: cancellations keep order no, total and reason, but by_name (who cancelled) is null');
 
 select tests.authenticate_as((select a_analyst from _f));
 insert into _n select 'ra', public.fn_report()::text;
@@ -181,6 +185,8 @@ select ok((select bool_and(tests.jv('ra') -> k = 'null'::jsonb)
 select ok((tests.jv('ra') -> 'kpis' ->> 'sales_total')::numeric = 414.00 and jsonb_array_length(tests.jv('ra') -> 'by_category') = 2
           and jsonb_array_length(tests.jv('ra') -> 'by_item') = 2 and (tests.jv('ra') -> 'cancellations' ->> 'count')::int = 1,
           'reports.view only: sales, categories, items and cancellations stay');
+select is((select count(*)::int from jsonb_array_elements(tests.jv('ra') -> 'cancellations' -> 'items') x where x -> 'by_name' <> 'null'::jsonb), 0,
+          'reports.view only: no staff name in cancellations.items[].by_name');
 select ok((public.fn_dashboard() -> 'money') is null and (public.fn_dashboard() -> 'recent') = '[]'::jsonb,
           'dashboard with reports.view but not payments.view: no money block (and no orders.view: no recent orders)');
 select tests.clear_auth();
@@ -208,8 +214,8 @@ select tests.authenticate_as((select a_cashier from _f));
 select is(jsonb_array_length(public.fn_report(1, 99) -> 'days'), (select count(*)::int from public.day_sessions where restaurant_id = (select a from _f)),
           'a day range covers every day in it');
 select is(tests.run('select public.fn_report(5, 2)'), 'P0001|invalid_input|day_range', 'a reversed range is refused');
-select is(tests.run('select public.fn_report(1, 368)'), 'P0001|invalid_input|day_range', 'more than 367 days is refused');
-select is(tests.run('select public.fn_report(1, 367)'), 'ok:1', '367 days is accepted');
+select is(tests.run('select public.fn_report(1, 367)'), 'P0001|invalid_input|day_range', 'a span of more than 366 days (to - from > 365) is refused');
+select is(tests.run('select public.fn_report(1, 366)'), 'ok:1', 'a span of 366 days is accepted (the same limit as fn_report_period)');
 select is(tests.run('select public.fn_report(0, null)'), 'P0001|invalid_input|day_range', 'day 0 is refused');
 select is((select jsonb_agg((x ->> 'day_no')::int) from jsonb_array_elements(public.fn_report(1, null) -> 'days') x), '[1]'::jsonb,
           '(1, null) is the single day 1, not an open-ended range');
@@ -275,6 +281,12 @@ select is((select jsonb_build_array((r ->> 'count')::int, (r ->> 'amount')::nume
                                     (r -> 'items' -> 0 ->> 'receipt_no') ~ '^RCT-')
            from (select tests.jv('r2') -> 'reversals' r) x),
           '[1, 253.00, "Telebirr", "Selam Abate", true]'::jsonb, 'reversals: count, amount, method, who, receipt');
+select tests.authenticate_as((select a_cashier from _f));
+select is((select jsonb_build_array((r -> 'reversals' ->> 'count')::int, r -> 'reversals' -> 'items' -> 0 -> 'by_name',
+                                    r -> 'cancellations' -> 'items' -> 0 -> 'by_name')
+           from (select public.fn_report() r) x),
+          '[1, null, null]'::jsonb, 'without reports.staff: reversals.items[].by_name is null as well');
+select tests.clear_auth();
 select is((select jsonb_build_array((i ->> 'issued_count')::int, (i ->> 'issued_total')::numeric, (i ->> 'down_total')::numeric,
                                     (i ->> 'collected_total')::numeric, (i ->> 'outstanding_total')::numeric, (i ->> 'overdue_count')::int)
            from (select tests.jv('r2') -> 'installments' i) x),
@@ -362,6 +374,40 @@ select is(tests.run(format($q$select public.fn_log_report_export('expenses', %L,
 select is(tests.run(format($q$select (public.fn_log_report_export('payments', %L, %L, 'csv') ->> 'ok')$q$, (select base from _f), (select base from _f))),
           'ok:1', 'reports.export + payments.view exports the payments report');
 select tests.clear_auth();
+
+-- ── export throttle: at most 20 report.exported rows per user in the last 60 seconds ──
+-- 25 rows of the cashier older than the window do not count
+insert into public.audit_logs (restaurant_id, actor_id, actor_type, event, action, new_data, created_at)
+  select a, a_cashier, 'user', 'report.exported', 'event', '{}'::jsonb, now() - interval '61 seconds' from _f, generate_series(1, 25);
+select tests.authenticate_as((select a_cashier from _f));
+-- the cashier already exported once above ('payments'); 19 more reach the limit of 20
+select is((select count(*)::int from generate_series(1, 19) g
+           where tests.run(format($q$select public.fn_log_report_export('summary', %L, %L, 'csv')$q$, (select base from _f), (select base from _f))) = 'ok:1'),
+          19, 'throttle: exports up to 20 in 60 seconds pass (rows older than 60 seconds ignored)');
+select is(tests.run(format($q$select public.fn_log_report_export('summary', %L, %L, 'csv')$q$, (select base from _f), (select base from _f))),
+          'P0001|rate_limited|', 'throttle: the 21st export within 60 seconds is refused with rate_limited');
+select is(tests.run(format($q$select public.fn_log_report_export('summary', %L, %L, 'csv')$q$, (select base from _f), (select base from _f))),
+          'P0001|rate_limited|', 'throttle: replay stays refused (a refused export writes no audit row)');
+select tests.clear_auth();
+select is((select count(*)::int from public.audit_logs where actor_id = (select a_cashier from _f) and event = 'report.exported'
+           and created_at > now() - interval '60 seconds'), 20, 'throttle: exactly 20 audited exports in the window, none for the refused calls');
+select tests.authenticate_as((select a_admin from _f));
+select is(tests.run(format($q$select public.fn_log_report_export('summary', %L, %L, 'csv')$q$, (select base from _f), (select base from _f))),
+          'ok:1', 'throttle is per user: another user of the tenant still exports');
+select tests.clear_auth();
+select tests.authenticate_as((select b_admin from _f));
+select is(tests.run(format($q$select public.fn_log_report_export('summary', %L, %L, 'csv')$q$, (select base from _f), (select base from _f))),
+          'ok:1', 'throttle is per user: tenant B is unaffected');
+select tests.clear_auth();
+select ok(exists (select 1 from pg_indexes where schemaname = 'public' and tablename = 'audit_logs' and indexname = 'audit_logs_report_export_idx'
+                  and indexdef like '%(restaurant_id, actor_id, created_at)%' and indexdef like '%report.exported%'),
+          'throttle count is backed by the partial index audit_logs_report_export_idx');
+
+-- ── the closed-day guard is back ON everywhere (0037 disables it on order_items for the one-off backfill) ──
+select is((select string_agg(c.relname || ':' || t.tgenabled::text, ',' order by c.relname) from pg_trigger t join pg_class c on c.oid = t.tgrelid
+           join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and t.tgname = 'trg_01_closed_day' and not t.tgisinternal),
+          'customer_sessions:O,installments:O,order_items:O,orders:O,payments:O,stock_movements:O,table_sessions:O,vouchers:O',
+          'trg_01_closed_day exists and is enabled (tgenabled = O) on every table it guards');
 
 -- ── permission / portal boundary; internal builders ──
 select tests.authenticate_as((select a_kitchen from _f));

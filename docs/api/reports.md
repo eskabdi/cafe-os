@@ -11,7 +11,7 @@ database, so the client never adds money up. The tenant comes from the JWT / pro
 
 | Endpoint | Permission | Returns |
 |---|---|---|
-| `fn_report(p_from_day_no = null, p_to_day_no = null)` | `reports.view` | report document over a range of business days (by number) |
+| `fn_report(p_from_day_no = null, p_to_day_no = null)` | `reports.view` | report document over a range of business days (by number). **Compatibility API:** the web client uses `fn_report_period`; `fn_report` stays granted for API consumers and is covered by `45_reports` |
 | `fn_report_period(p_from date, p_to date)` | `reports.view` | the same document over tenant-local calendar dates, plus `period` |
 | `fn_log_report_export(p_report, p_from, p_to, p_format)` | `reports.view` + `reports.export` (+ the section permission) | `{ok, exported_at}`; audits the export |
 | `fn_dashboard()` | `dashboard.view` (money also needs `reports.view` and `payments.view`) | the open day's floor figures and live activity |
@@ -30,11 +30,13 @@ database, so the client never adds money up. The tenant comes from the JWT / pro
 `fn_report` (business-day numbers):
 - Both bounds null: the open day, or the most recent day when none is open.
 - One bound null: that single day (`(5, null)` = day 5 only).
-- `from` or `to` < 1, `to` < `from`, or more than 367 days: `invalid_input|day_range`.
+- `from` or `to` < 1, `to` < `from`, or a span of more than 366 days (`to - from > 365`, the same limit as `fn_report_period`):
+  `invalid_input|day_range`.
 
 `fn_report_period` (calendar dates):
 - It covers the business days whose `opened_at`, converted to `restaurants.timezone`, falls on a date within `[from, to]` inclusive. A
-  day opened at local 00:30 belongs to that local date, even when the UTC date is still the previous day.
+  day opened at local 00:30 belongs to that local date, even when the UTC date is still the previous day. The filter is the sargable
+  instant range `opened_at >= local midnight of from` and `opened_at < local midnight of (to + 1)` (index `day_sessions_opened_idx`).
 - A null bound, `to` < `from`, or more than 366 calendar days (`to - from > 365`): `invalid_input|period`.
 
 ## Sources
@@ -60,7 +62,7 @@ permission. A withheld section is JSON `null`, and its key appears in `restricte
 | `expenses` | `expenses.view` or `expenses.manage` | `kpis.expenses_total`, `kpis.net_position`, `by_expense_category`, `by_day[].expenses` |
 | `installments` | `vouchers.view` | `kpis.vouchers_outstanding`, `kpis.vouchers_overdue`, `installments` |
 | `inventory` | `inventory.view` | `inventory` (both lists) |
-| `staff` | `reports.staff` | `by_waiter` |
+| `staff` | `reports.staff` | `by_waiter`, `cancellations.items[].by_name`, `reversals.items[].by_name` (null; the rest of each item, incl. the cancellation `reason`, stays) |
 
 Inventory is also station-scoped, using the same predicate as `ingredients_select` / `stock_movements_select`: only the caller's
 stations, unless they hold `inventory.adjust` or `inventory.receive`. tenant_admin covers every station.
@@ -150,6 +152,13 @@ POST /rest/v1/rpc/fn_log_report_export
 - Every call is its own audited disclosure event. It is deliberately not idempotent: two exports make two rows.
 - It is a read action, so a `past_due` tenant (otherwise `tenant_read_only`) may still export. A suspended or cancelled tenant gets
   `tenant_suspended`.
+- **Throttle:** per user, at most 20 `report.exported` rows in the last 60 seconds; the 21st call gets `rate_limited` and writes no
+  row. Calls of one user are serialised by a transaction advisory lock, and the count uses the partial index
+  `audit_logs_report_export_idx (restaurant_id, actor_id, created_at) where event = 'report.exported'`.
+- **What `reports.export` is (and is not):** an audit and UX control, not a data boundary. Every figure an export contains already
+  reaches any `reports.view` holder through `fn_report_period` (section permissions still apply), so a holder of `reports.view`
+  without `reports.export` can still read and copy the data. The audited `{report, from, to}` is the client's claim of what it is
+  about to produce; the server does not bind it to the document actually rendered.
 
 ## fn_dashboard
 
@@ -188,7 +197,8 @@ POST /rest/v1/rpc/fn_dashboard
 | Status | Body | When |
 |---|---|---|
 | 400 | `{ "code": "P0001", "message": "permission_denied" }` | missing permission (incl. `reports.export`, or the section permission of an export); any platform admin (no tenant profile) |
-| 400 | `{ "code": "P0001", "message": "invalid_input", "details": "day_range" }` | `fn_report`: `from` or `to` < 1, `to` < `from`, or more than 367 days |
+| 400 | `{ "code": "P0001", "message": "invalid_input", "details": "day_range" }` | `fn_report`: `from` or `to` < 1, `to` < `from`, or a span of more than 366 days |
+| 400 | `{ "code": "P0001", "message": "rate_limited" }` | `fn_log_report_export`: the caller already exported 20 times in the last 60 seconds |
 | 400 | `{ "code": "P0001", "message": "invalid_input", "details": "period" }` | `fn_report_period` / `fn_log_report_export`: null bound, `to` < `from`, or more than 366 days |
 | 400 | `{ "code": "P0001", "message": "invalid_input", "details": "report" }` / `"format"` | `fn_log_report_export`: unknown report type / format |
 | 400 | `{ "code": "P0001", "message": "tenant_suspended" }` | suspended or cancelled tenant (past_due keeps read access and exports) |
@@ -210,8 +220,10 @@ No other default role gets them; grant them in the matrix.
   - Realtime on `orders` and `payments`, with a unique channel topic per mount and debounced invalidation; no polling.
   - Realtime events are RLS-filtered: a waiter only receives events for their own orders, so floor-wide counts for other waiters'
     orders refresh on the next refetch.
-- **Reports:** `/r/<slug>/reports` (`src/features/reports/ReportsPage.tsx`, nav permission `reports.view`). The business-day range is
-  validated with Zod, and the server validates it again.
+- **Reports:** `/r/<slug>/reports` (`src/features/reports/ReportsPage.tsx`, nav permission `reports.view`). It calls
+  `fn_report_period` only. "Today" is the tenant-local date (`restaurants.timezone` via `fetchTenantTimezone()`), recomputed when the
+  tab regains focus / visibility and on a one-minute local timer (no server polling). The period is validated client-side, and the
+  server validates it again.
 - **Charts:**
   - One hue (the tenant primary CSS variable) and one value axis.
   - Text is never coloured by series.

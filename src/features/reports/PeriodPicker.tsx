@@ -8,7 +8,10 @@ import { ETHIOPIAN_MONTHS } from '@/lib/domain/ethiopian-time'
 import {
   defaultPeriod,
   isIsoDate,
+  MAX_ETH_YEAR,
+  MIN_ETH_YEAR,
   parseCustomRange,
+  parseEthiopianYear,
   PERIOD_KINDS,
   periodLabel,
   shiftPeriod,
@@ -88,6 +91,24 @@ function MonthFields({
   month: number
   onChange: (p: Period) => void
 }) {
+  // Local text while typing ("20", "201" are not years yet); a valid year is committed on blur / Enter only, an invalid
+  // one shows an error and keeps the current period.
+  const [draft, setDraft] = useState(String(year))
+  const [invalid, setInvalid] = useState(false)
+  const [shownYear, setShownYear] = useState(year)
+  if (shownYear !== year) {
+    // the period changed from outside (prev / next): show the new year
+    setShownYear(year)
+    setDraft(String(year))
+    setInvalid(false)
+  }
+  const commit = () => {
+    const y = parseEthiopianYear(draft)
+    if (y === null) return setInvalid(true)
+    setInvalid(false)
+    setDraft(String(y))
+    if (y !== year) onChange({ kind: 'monthly', year: y, month })
+  }
   return (
     <div className="flex flex-wrap items-end gap-3">
       <div className="space-y-1">
@@ -111,15 +132,26 @@ function MonthFields({
           id="rep-eth-year"
           type="number"
           inputMode="numeric"
-          min={1990}
-          max={2100}
+          min={MIN_ETH_YEAR}
+          max={MAX_ETH_YEAR}
           className="w-28"
-          value={year}
-          onChange={(e) => {
-            const y = Number(e.target.value)
-            if (Number.isInteger(y) && y >= 1990 && y <= 2100) onChange({ kind: 'monthly', year: y, month })
+          value={draft}
+          aria-invalid={invalid || undefined}
+          aria-describedby={invalid ? 'rep-eth-year-error' : undefined}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              commit()
+            }
           }}
         />
+        {invalid && (
+          <p id="rep-eth-year-error" role="alert" className="text-sm text-status-error">
+            Enter a year from {MIN_ETH_YEAR} to {MAX_ETH_YEAR}.
+          </p>
+        )}
       </div>
     </div>
   )

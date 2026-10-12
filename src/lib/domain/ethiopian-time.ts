@@ -28,7 +28,8 @@ export interface EthiopianDate {
 
 const ETHIOPIAN_EPOCH_OFFSET = 1723856 // JDN of the epoch minus 365 (the algorithm's cycle origin)
 
-function gregorianToJdn(y: number, m: number, d: number): number {
+/** Julian day number of a proleptic Gregorian date (year, month 1..12, day). Integer arithmetic: no Date, no DST. */
+export function gregorianToJdn(y: number, m: number, d: number): number {
   const a = Math.floor((14 - m) / 12)
   const yy = y + 4800 - a
   const mm = m + 12 * a - 3
@@ -41,6 +42,21 @@ function gregorianToJdn(y: number, m: number, d: number): number {
     Math.floor(yy / 400) -
     32045
   )
+}
+
+/** Inverse of gregorianToJdn: the proleptic Gregorian date (year, month 1..12, day) of a Julian day number. */
+export function jdnToGregorian(jdn: number): { year: number; month: number; day: number } {
+  const a = jdn + 32044
+  const b = Math.floor((4 * a + 3) / 146097)
+  const c = a - Math.floor((146097 * b) / 4)
+  const d = Math.floor((4 * c + 3) / 1461)
+  const e = c - Math.floor((1461 * d) / 4)
+  const m = Math.floor((5 * e + 2) / 153)
+  return {
+    year: 100 * b + d - 4800 + Math.floor(m / 10),
+    month: m + 3 - 12 * Math.floor(m / 10),
+    day: e - Math.floor((153 * m + 2) / 5) + 1,
+  }
 }
 
 /** Gregorian calendar date (year, month 1..12, day) to the Ethiopian date. */
