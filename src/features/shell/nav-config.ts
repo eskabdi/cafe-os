@@ -110,7 +110,8 @@ export const MODULE_NAV: readonly ModuleNavItem[] = [
     permission: 'day_close.execute',
     group: 'management',
     icon: CalendarCheck,
-    summary: 'Close the business day and review the summary.',
+    summary: 'Count cash and station stock, close the business day and open the next one.',
+    implemented: true,
   },
   {
     id: 'settings',

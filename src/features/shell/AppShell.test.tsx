@@ -282,10 +282,10 @@ describe('dynamic station navigation', () => {
 })
 
 describe('route guards', () => {
-  it('a permitted placeholder module renders an accessible coming-soon page', async () => {
+  it('a permitted module renders its page (day close, Phase 9)', async () => {
     renderAt('/r/demo-cafe/day-close', auth(ctx(['day_close.execute'])))
     expect(await screen.findByRole('heading', { level: 1, name: 'Day close' })).toBeInTheDocument()
-    expect(screen.getByText('Coming soon')).toBeInTheDocument()
+    expect(screen.queryByText('Coming soon')).toBeNull()
   })
 
   it('a module without the permission renders 403', async () => {

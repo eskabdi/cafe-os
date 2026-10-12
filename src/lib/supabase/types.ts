@@ -2792,6 +2792,19 @@ export type Database = {
         Args: { p_token: string }
         Returns: Json
       }
+      fn_close_day: {
+        Args: {
+          p_counted_cash: number
+          p_station_counts: Json
+          p_note: string
+          p_idempotency_key: string
+        }
+        Returns: Json
+      }
+      fn_close_day_preview: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
       fn_complete_forced_pin_change: {
         Args: {
           p_profile_id: string
@@ -2866,6 +2879,14 @@ export type Database = {
       }
       fn_dashboard: {
         Args: Record<PropertyKey, never>
+        Returns: Json
+      }
+      fn_day_figures: {
+        Args: { p_rid: string; p_day: string; p_station_counts: Json }
+        Returns: Json
+      }
+      fn_day_json: {
+        Args: { p_rid: string; p_day: string }
         Returns: Json
       }
       fn_decide_pin_change: {
@@ -3052,6 +3073,10 @@ export type Database = {
         Args: { p_token_hash: string; p_slug: string; p_profile_id: string }
         Returns: boolean
       }
+      fn_list_days: {
+        Args: { p_limit?: number }
+        Returns: Json
+      }
       fn_list_kiosks: {
         Args: Record<PropertyKey, never>
         Returns: Json
@@ -3146,6 +3171,10 @@ export type Database = {
           p_pad?: number
         }
         Returns: string
+      }
+      fn_open_day: {
+        Args: { p_opening_float: number; p_idempotency_key: string }
+        Returns: Json
       }
       fn_ops_purge_expired_cancelled_tenants: {
         Args: { p_limit?: number }

@@ -48,6 +48,9 @@ const DashboardPage = lazy(() =>
 const ReportsPage = lazy(() =>
   import('@/features/reports/ReportsPage').then((m) => ({ default: m.ReportsPage })),
 )
+const DayClosePage = lazy(() =>
+  import('@/features/day-close/DayClosePage').then((m) => ({ default: m.DayClosePage })),
+)
 const InventoryPage = lazy(() => import('@/features/inventory').then((m) => ({ default: m.InventoryPage })))
 const RestaurantSettingsPage = lazy(() =>
   import('@/features/tenant-admin/RestaurantSettingsPage').then((m) => ({
@@ -238,6 +241,15 @@ export const routes: RouteObject[] = [
                         element: (
                           <RequireNavPermission permission="reports.view">
                             <ReportsPage />
+                          </RequireNavPermission>
+                        ),
+                      },
+                      // Phase 9 Day close (day_close.execute, same code as the nav entry; fn_close_day / fn_open_day re-check server-side)
+                      {
+                        path: 'day-close',
+                        element: (
+                          <RequireNavPermission permission="day_close.execute">
+                            <DayClosePage />
                           </RequireNavPermission>
                         ),
                       },
