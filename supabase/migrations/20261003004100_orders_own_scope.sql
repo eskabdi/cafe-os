@@ -17,6 +17,9 @@
 -- before this migration, so it keeps that right through orders.cancel_any. Roles holding orders.cancel without orders.view_all
 -- (waiter-like) are restricted to their own orders. orders.view_all is not re-granted: it already existed, so every role with a
 -- full view today keeps it, and a role deliberately created without it (e.g. payments.create only) is not widened.
+-- Behaviour change for CUSTOM station roles: a role holding orders.cancel + station access but no orders.view_all could cancel any
+-- untouched order routed to its station; it now cancels only its own (seeded station roles hold no orders.cancel, so unaffected).
+-- A tenant that wants station staff to cancel any order grants orders.cancel_any explicitly in the permission matrix.
 --
 -- Index: orders_created_by_idx (restaurant_id, created_by, created_at desc) from 0005 already serves `created_by = me`; the
 -- station predicates keep their 0012 indexes. Realtime: orders and order_items are in the supabase_realtime publication and

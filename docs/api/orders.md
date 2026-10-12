@@ -53,3 +53,7 @@ cancel (`orders.cancel` and own order or `orders.cancel_any`).
   **order-fired chime** (owner requirement; Web Audio, armed by the "Turn sound on" button because browsers block audio without a
   gesture; the on/off choice is a per-device UI pref);
 - a new station works without a redeploy: name, colour and icon come from its row (E2E `kds.spec.ts` uses a data-only "Grill").
+
+**Upgrade note (0041):** a *custom* role with `orders.cancel` and station access but without `orders.view_all` could previously
+cancel any untouched order routed to its station; it now cancels only orders it created. Grant `orders.cancel_any` in the
+permission matrix to restore the old behaviour. Seeded station roles hold no `orders.cancel` and are unaffected.
