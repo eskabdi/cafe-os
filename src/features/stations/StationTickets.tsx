@@ -10,11 +10,28 @@ import { orderErrorMessage } from '@/features/pos/order-errors'
 import { EmptyState, ErrorState, PageSkeleton } from '@/features/shell/states'
 import { ageBand, groupTickets, minutesSince, nextAction, type Ticket } from '@/lib/domain/kds'
 import { isTenantAdminRole } from '@/lib/domain/portal'
-import { KDS_LIMIT, fetchStationLines, kdsKey, setStationStatus, subscribeToStation } from '@/lib/supabase/kds'
+import {
+  KDS_LIMIT,
+  fetchStationLines,
+  kdsKey,
+  setStationStatus,
+  subscribeToStation,
+} from '@/lib/supabase/kds'
 import { cancelOrder, fetchOpenDay, ordersKeys } from '@/lib/supabase/orders'
-import { armChime, chimeArmed, onChimeStateChange, playChime, setSoundPreferred, soundPreferred } from '@/lib/utils/order-chime'
+import {
+  armChime,
+  chimeArmed,
+  onChimeStateChange,
+  playChime,
+  setSoundPreferred,
+  soundPreferred,
+} from '@/lib/utils/order-chime'
 
-const AGE_CLASS = { ok: 'border-line', warning: 'border-status-warning', late: 'border-status-error' } as const
+const AGE_CLASS = {
+  ok: 'border-line',
+  warning: 'border-status-warning',
+  late: 'border-status-error',
+} as const
 const STATUS_TEXT = { pending: 'New', preparing: 'In progress', ready: 'Ready' } as const
 const ACTION_TEXT = { preparing: 'Start', ready: 'Ready' } as const
 /** Lines of one order arrive as separate Realtime events: one chime and one refetch per burst. */
@@ -45,11 +62,18 @@ export function StationTickets({ stationId }: { stationId: string }) {
   })
   const dayId = openDay.data?.id ?? ''
   const key = kdsKey(rid, stationId, dayId)
-  const lines = useQuery({ queryKey: key, queryFn: () => fetchStationLines(stationId, dayId), enabled: Boolean(rid && dayId) })
+  const lines = useQuery({
+    queryKey: key,
+    queryFn: () => fetchStationLines(stationId, dayId),
+    enabled: Boolean(rid && dayId),
+  })
   const [sound, setSound] = useState(() => soundPreferred() && chimeArmed())
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set())
   const [confirmCancel, setConfirmCancel] = useState<Ticket | null>(null)
-  const burst = useRef<{ timer: ReturnType<typeof setTimeout> | null; insert: boolean }>({ timer: null, insert: false })
+  const burst = useRef<{ timer: ReturnType<typeof setTimeout> | null; insert: boolean }>({
+    timer: null,
+    insert: false,
+  })
 
   useEffect(() => {
     if (!rid) return
@@ -99,8 +123,13 @@ export function StationTickets({ stationId }: { stationId: string }) {
       void qc.invalidateQueries({ queryKey: ['kds', rid, stationId] })
     }
   }
-  const advance = useMutation({ mutationFn: (a: { orderId: string; status: 'preparing' | 'ready' }) => setStationStatus(a.orderId, stationId, a.status) })
-  const cancel = useMutation({ mutationFn: (orderId: string) => cancelOrder(orderId, 'cancelled at the station') })
+  const advance = useMutation({
+    mutationFn: (a: { orderId: string; status: 'preparing' | 'ready' }) =>
+      setStationStatus(a.orderId, stationId, a.status),
+  })
+  const cancel = useMutation({
+    mutationFn: (orderId: string) => cancelOrder(orderId, 'cancelled at the station'),
+  })
 
   const tickets = useMemo(() => groupTickets(lines.data?.lines ?? []), [lines.data])
   const toggleSound = () => {
@@ -125,11 +154,17 @@ export function StationTickets({ stationId }: { stationId: string }) {
   }
   if (!rid || openDay.isPending || lines.isPending) return <PageSkeleton label="Loading tickets" />
   if (lines.isError || openDay.isError)
-    return <ErrorState title="Tickets could not be loaded" onRetry={() => void Promise.all([openDay.refetch(), lines.refetch()])} />
+    return (
+      <ErrorState
+        title="Tickets could not be loaded"
+        onRetry={() => void Promise.all([openDay.refetch(), lines.refetch()])}
+      />
+    )
 
   // the server is the authority (has_station_access); the buttons appear only where they can succeed
   const operates = (context?.station_ids ?? []).includes(stationId) || isTenantAdminRole(context?.role)
-  const canCancel = can('orders.cancel')
+  // station tickets are other users' orders: cancelling them needs orders.cancel_any as well (fn_cancel_order decides)
+  const canCancel = can('orders.cancel') && can('orders.cancel_any')
   return (
     <section aria-label="Tickets" className="space-y-4">
       <div className="flex items-center justify-between gap-2">
@@ -137,12 +172,19 @@ export function StationTickets({ stationId }: { stationId: string }) {
           {tickets.length} open {tickets.length === 1 ? 'ticket' : 'tickets'}
         </p>
         <Button variant="outline" onClick={toggleSound} aria-pressed={sound}>
-          {sound ? <Bell aria-hidden="true" className="h-4 w-4" /> : <BellOff aria-hidden="true" className="h-4 w-4" />}
+          {sound ? (
+            <Bell aria-hidden="true" className="h-4 w-4" />
+          ) : (
+            <BellOff aria-hidden="true" className="h-4 w-4" />
+          )}
           {sound ? 'Sound on' : 'Turn sound on'}
         </Button>
       </div>
       {lines.data?.truncated && (
-        <p role="status" className="rounded-md border border-status-warning bg-status-warning/10 p-2 text-sm text-ink">
+        <p
+          role="status"
+          className="rounded-md border border-status-warning bg-status-warning/10 p-2 text-sm text-ink"
+        >
           Showing the newest {KDS_LIMIT} lines. Finish or serve older tickets to see the rest.
         </p>
       )}
@@ -175,7 +217,9 @@ export function StationTickets({ stationId }: { stationId: string }) {
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <p className="text-lg font-semibold text-ink">{t.orderNo}</p>
-                      <p className="text-sm text-muted-foreground">{t.tableLabel ? `Table ${t.tableLabel}` : t.orderType}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {t.tableLabel ? `Table ${t.tableLabel}` : t.orderType}
+                      </p>
                     </div>
                     <div className="text-right">
                       <p className="text-sm font-medium text-ink">{STATUS_TEXT[t.status]}</p>
@@ -186,7 +230,9 @@ export function StationTickets({ stationId }: { stationId: string }) {
                     {t.lines.map((l) => (
                       <li key={l.id} className="text-ink">
                         <span className="font-semibold tabular-nums">{l.qty}×</span> {l.name}
-                        {l.note && <span className="block text-sm italic text-muted-foreground">{l.note}</span>}
+                        {l.note && (
+                          <span className="block text-sm italic text-muted-foreground">{l.note}</span>
+                        )}
                       </li>
                     ))}
                   </ul>
@@ -195,7 +241,11 @@ export function StationTickets({ stationId }: { stationId: string }) {
                       <Button
                         className="flex-1"
                         disabled={isBusy}
-                        onClick={() => void withBusy(t.orderId, () => advance.mutateAsync({ orderId: t.orderId, status: action }))}
+                        onClick={() =>
+                          void withBusy(t.orderId, () =>
+                            advance.mutateAsync({ orderId: t.orderId, status: action }),
+                          )
+                        }
                       >
                         {ACTION_TEXT[action]}
                       </Button>

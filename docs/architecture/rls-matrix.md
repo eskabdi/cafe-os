@@ -31,8 +31,8 @@ Suspended/cancelled tenants resolve to NULL (no access); `past_due` is read-only
 | table_sessions, customer_sessions | T + `tables.view`/`orders.view_all` (session token hash column not granted) | none (RPC) | none | none |
 | qr_credentials | T + `qr.manage`/`tables.manage` (token_hash column not granted) | none (fn_manage_qr_credential later) | none | none |
 | day_sessions | T + (`reports.view`/`day_close.execute`/`day.open`); operational staff use `fn_get_open_day()` | none (RPC) | none; closed rows trigger-frozen | none; trigger-blocked |
-| orders | T + `orders.view` + (`orders.view_all` or own or `station_ids && current_station_ids()`) | none (fn_submit_order later) | none | none |
-| order_items | T + `orders.view` + (`orders.view_all` or `station_id = any(current_station_ids())` or own order) | none | none | none |
+| orders | T + `orders.view` + (`orders.view_all` or own (`created_by = auth.uid()`) or `station_ids && current_station_ids()`): without `orders.view_all` a user sees only own orders, plus the header of orders routed to own stations (0041 rule, unchanged policy) | none (fn_submit_order) | none (fn_cancel_order: own orders, any with `orders.cancel_any`, 0041) | none |
+| order_items | T + `orders.view` + (`orders.view_all` or `station_id = any(current_station_ids())` or own order): a station reads only its routed lines, never other stations' lines of the same order | none | none | none |
 | kiosk_devices | T + `kiosks.manage` (column grant: no `token_hash`) | none (`fn_register_kiosk`) | none (`fn_revoke_kiosk`; service role refreshes `last_seen_at`) | none |
 | user_notifications | T and `recipient_id = auth.uid()` (own rows only, not even tenant_admin sees others'; column grant on every column, no secret column) | none (`fn_staff_login_blocked`, service-only) | none (`fn_mark_notification_read` sets `read_at` once; trigger refuses any other change, even for the owner role) | none |
 | restaurant_session_settings | T (any active member, no permission: every client needs the timers, also while a PIN change is required/pending; column grant on every column, no secret column) | none (`trg_create_session_settings` on `restaurants` insert) | none (`fn_update_session_timers` / `fn_reset_session_timers`: `settings.session_timers` + aal2 (0026) + W) | none |
@@ -45,6 +45,14 @@ ingredients 4, installments 1, kiosk_devices 1, menu_items 4, order_items 1, ord
 platform_admins 3, platform_invoices 4, profiles 2, qr_credentials 1, recipe_lines 4, restaurant_session_settings 1, restaurants 3, role_permissions 1,
 role_station_access 1, roles 4, stations 4, stock_movements 1, subscriptions 4, table_areas 4, table_sessions 1, tables 4, user_notifications 1, vouchers 1;
 profile_secrets, tenant_counters, idempotency_keys, tenant_admin_invitations, platform_backup_runs, mfa_resets: 0 (deny all).
+
+Orders scoped to the signed-in user (0041, note task 1). Decided by permission, never by role name: `orders.view_all` = every order (the
+default Cashier and tenant_admin hold it; a payment needs the order to be visible), otherwise own orders + own stations' lines.
+`fn_cancel_order` adds: visible AND (`created_by = auth.uid()` OR `orders.cancel_any`); a visible foreign order without `orders.cancel_any`
+is `permission_denied`, an invisible / foreign-tenant / unknown id `not_found` (no oracle). Backfill: `orders.cancel_any` to tenant_admin
+(trigger) and to every role holding `orders.cancel` AND `orders.view_all`; waiter-like roles (`orders.cancel` without `orders.view_all`)
+become own-only. Realtime applies these same SELECT policies, so a waiter's `orders` channel receives only own orders. Index:
+`orders_created_by_idx (restaurant_id, created_by, created_at desc)`. Tests: `53_orders_own_scope`, `17_rls_station_perf`.
 
 Report RPCs (0037). No new table and no policy change; the one schema change is `order_items.category_id_snapshot` (composite
 FK to `categories` ON DELETE RESTRICT) plus `category_name_snapshot`. Both are filled by the BEFORE INSERT trigger

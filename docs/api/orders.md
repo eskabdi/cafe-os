@@ -8,7 +8,7 @@ All endpoints are **Private** (signed-in tenant user) PostgREST RPCs: `POST /res
 | endpoint | permission | effect |
 |---|---|---|
 | `fn_submit_order(p_items, p_idempotency_key, p_order_type='dine-in', p_table_id=null, p_customer_note=null)` | `orders.create` | validates the cart, prices from `menu_items` (FOR SHARE), VAT from `restaurants.vat_rate`, totals, `ORD-nnnn`, station routing, recipe stock consumption, table state, audit; replay of the same key returns the same order (`replayed: true`) |
-| `fn_cancel_order(p_order_id, p_reason=null)` | `orders.cancel` + visibility | only while every line is pending, the NET payment is zero (a reversed payment does not block; 0034) and the order belongs to the open day; compensating stock reversal; returns `{order_id, order_no, status, reversed_movements, already_cancelled}`. The table is released in the table-session phase (Phase 6/QR), not here |
+| `fn_cancel_order(p_order_id, p_reason=null)` | `orders.cancel` + visibility + (own order, or `orders.cancel_any`; 0041) | only while every line is pending, the NET payment is zero (a reversed payment does not block; 0034) and the order belongs to the open day; compensating stock reversal; returns `{order_id, order_no, status, reversed_movements, already_cancelled}`. The table is released in the table-session phase (Phase 6/QR), not here |
 | `fn_set_station_items_status(p_order_id, p_station_id, p_status)` | station access | `preparing` / `ready` for that station's lines; order status rolls up |
 | `fn_serve_order(p_order_id)` | creator / `orders.view_all` | a READY order becomes `served` |
 
@@ -30,9 +30,16 @@ Errors: `day_closed`, `insufficient_stock`, `item_unavailable`, `idempotency_con
 Lock order (deadlock-free; race-tested): idempotency key → open day (FOR SHARE) → table → menu items (id order) → counter → every recipe
 ingredient of the cart in ONE statement (id order) → ledger. Order quotas are monitor-only (owner decision 2026-10-08).
 
+Order scope (migration `20261003004100_orders_own_scope.sql`): without `orders.view_all` a caller reads only own orders (plus, with station
+access, the header and own lines of orders routed to its stations). `fn_cancel_order` cancels only own orders unless the caller holds
+`orders.cancel_any`: another user's order the caller can read answers `permission_denied`; an order it cannot read (another waiter's,
+another tenant's, unknown) answers `not_found`, identical for real and unknown ids.
+
 Frontend: `/r/<slug>/pos` (`src/features/pos/PosPage.tsx`): categories and menu from the tenant's rows, cart as intent, one idempotency key
 per cart (kept across retries, renewed when the cart changes), send disabled without an open day, server totals shown after sending,
-Realtime refresh of menu and orders.
+Realtime refresh of menu and orders. The order list is "My orders" (requested with `created_by = <signed-in user>`) without
+`orders.view_all`, "Today's orders" with it; Cancel (confirm dialog → `fn_cancel_order`) appears on untouched unpaid orders the caller may
+cancel (`orders.cancel` and own order or `orders.cancel_any`).
 
 ## Station display (Phase 5)
 
@@ -40,7 +47,7 @@ Realtime refresh of menu and orders.
 - reads `order_items` of that station (`pending | preparing | ready`, order not cancelled / served) with the order header (RLS
   `order_items_select`: `orders.view` + station access); tickets grouped per order, oldest first, age badge (10 / 20 min bands, fixed
   status colours);
-- actions: Start / Ready → `fn_set_station_items_status(order, station, preparing|ready)`; Cancel (only with `orders.cancel`, every line
+- actions: Start / Ready → `fn_set_station_items_status(order, station, preparing|ready)`; Cancel (only with `orders.cancel` + `orders.cancel_any`, every line
   still pending) → `fn_cancel_order`;
 - Realtime on `order_items` filtered by `station_id` (RLS applies to every event): any change refreshes the board, an INSERT plays the
   **order-fired chime** (owner requirement; Web Audio, armed by the "Turn sound on" button because browsers block audio without a

@@ -130,17 +130,22 @@ const myOrderSchema = z.object({
   table_label_snapshot: z.string().nullable(),
   total: numericValue,
   created_at: z.string(),
+  created_by: z.string().nullable().optional(),
 })
 export type MyOrder = z.infer<typeof myOrderSchema>
 
-/** Orders of the open business day the caller may see (RLS orders_select), newest first. */
-export async function fetchDayOrders(dayId: string): Promise<MyOrder[]> {
-  const { data, error } = await supabase
+/**
+ * Orders of the open business day the caller may see (RLS orders_select), newest first. `createdBy` narrows the list to the
+ * signed-in user's own orders ("My orders"): a UX filter only; RLS already limits a caller without orders.view_all to own orders
+ * (plus the orders routed to own stations, which this page does not list).
+ */
+export async function fetchDayOrders(dayId: string, createdBy: string | null = null): Promise<MyOrder[]> {
+  let q = supabase
     .from('orders')
-    .select('id,order_no,status,payment_status,order_type,table_label_snapshot,total,created_at')
+    .select('id,order_no,status,payment_status,order_type,table_label_snapshot,total,created_at,created_by')
     .eq('day_session_id', dayId)
-    .order('created_at', { ascending: false })
-    .limit(100)
+  if (createdBy) q = q.eq('created_by', createdBy)
+  const { data, error } = await q.order('created_at', { ascending: false }).limit(100)
   if (error) throw new Error('orders_unavailable')
   return z.array(myOrderSchema).parse(data ?? [])
 }
