@@ -5,7 +5,9 @@ import {
   DEFAULT_PRIMARY,
   brandHex,
   brandThemeVars,
+  hasLowWhiteTextContrast,
   hexToHslTriplet,
+  whiteTextContrast,
 } from './theme'
 
 describe('brandHex (strict validation)', () => {
@@ -64,5 +66,27 @@ describe('brandThemeVars', () => {
   it('never touches semantic status colours', () => {
     expect(BRAND_VARS.some((v) => v.startsWith('--status'))).toBe(false)
     expect(Object.keys(brandThemeVars({})).some((k) => k.includes('status'))).toBe(false)
+  })
+})
+
+describe('white text contrast warning (branding editor)', () => {
+  it('passes the CafeOS defaults and dark brand colours', () => {
+    for (const ok of [DEFAULT_PRIMARY, DEFAULT_ACCENT, '#1d4ed8', '#000000', '#15803d']) {
+      expect(hasLowWhiteTextContrast(ok)).toBe(false)
+      expect(whiteTextContrast(ok)).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+  it('flags light colours under 4.5:1', () => {
+    for (const low of ['#ffffff', '#facc15', '#22c55e', '#60a5fa', '#ef4444']) {
+      expect(hasLowWhiteTextContrast(low)).toBe(true)
+    }
+  })
+  it('computes the WCAG ratio (white on black = 21) and ignores invalid input', () => {
+    expect(whiteTextContrast('#000000')).toBeCloseTo(21, 5)
+    expect(whiteTextContrast('#FFFFFF')).toBeCloseTo(1, 5)
+    for (const bad of ['#fff', 'red', '', null, undefined, 42]) {
+      expect(whiteTextContrast(bad)).toBeNull()
+      expect(hasLowWhiteTextContrast(bad)).toBe(false)
+    }
   })
 })

@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { useAuth, useStepUp } from '@/features/auth'
 import { ErrorState, PageSkeleton } from '@/features/shell/states'
 import { STRICT_HEX_RE, checkLogoFile } from '@/lib/domain/portal'
+import { MIN_TEXT_CONTRAST, hasLowWhiteTextContrast, whiteTextContrast } from '@/lib/domain/theme'
 import { removeLogo, signedLogoUrl, uploadLogo } from '@/lib/supabase/branding-logo'
 import { portalErrorMessage } from '@/lib/supabase/portal-errors'
 import type { RestaurantProfile } from '@/lib/supabase/tenant-admin'
@@ -28,11 +29,18 @@ function ProfileCard({ p }: { p: RestaurantProfile }) {
   const submit = (e: FormEvent) => {
     e.preventDefault()
     setError(null)
-    if (name.trim().length < 2 || name.trim().length > 80) return setError('Enter a name of 2 to 80 characters.')
-    if (phone.trim() && !PHONE_RE.test(phone.trim())) return setError('Enter a phone number with digits only, e.g. +251 911 223344.')
+    if (name.trim().length < 2 || name.trim().length > 80)
+      return setError('Enter a name of 2 to 80 characters.')
+    if (phone.trim() && !PHONE_RE.test(phone.trim()))
+      return setError('Enter a phone number with digits only, e.g. +251 911 223344.')
     stepUp
       .run(() =>
-        save.mutateAsync({ name: name.trim(), phone: phone.trim() || null, address: address.trim() || null, timezone: timezone.trim() }),
+        save.mutateAsync({
+          name: name.trim(),
+          phone: phone.trim() || null,
+          address: address.trim() || null,
+          timezone: timezone.trim(),
+        }),
       )
       .then(() => toast.success('Restaurant details saved.'))
       .catch((err: unknown) => setError(portalErrorMessage(err)))
@@ -44,13 +52,25 @@ function ProfileCard({ p }: { p: RestaurantProfile }) {
           {(a) => <Input {...a} value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />}
         </FormField>
         <FormField id="rp-phone" label="Phone">
-          {(a) => <Input {...a} inputMode="tel" value={phone} maxLength={20} onChange={(e) => setPhone(e.target.value)} />}
+          {(a) => (
+            <Input
+              {...a}
+              inputMode="tel"
+              value={phone}
+              maxLength={20}
+              onChange={(e) => setPhone(e.target.value)}
+            />
+          )}
         </FormField>
         <FormField id="rp-address" label="Address">
-          {(a) => <Input {...a} value={address} maxLength={200} onChange={(e) => setAddress(e.target.value)} />}
+          {(a) => (
+            <Input {...a} value={address} maxLength={200} onChange={(e) => setAddress(e.target.value)} />
+          )}
         </FormField>
         <FormField id="rp-tz" label="Time zone" hint="IANA name, e.g. Africa/Addis_Ababa">
-          {(a) => <Input {...a} value={timezone} maxLength={64} onChange={(e) => setTimezone(e.target.value)} />}
+          {(a) => (
+            <Input {...a} value={timezone} maxLength={64} onChange={(e) => setTimezone(e.target.value)} />
+          )}
         </FormField>
         <div className="space-y-2 sm:col-span-2">
           <FormError message={error} />
@@ -76,7 +96,8 @@ function BusinessCard({ p }: { p: RestaurantProfile }) {
     e.preventDefault()
     setError(null)
     if (!/^\d{1,2}(\.\d{1,2})?$/.test(vat.trim())) return setError('VAT is a percentage between 0 and 99.99.')
-    if (!/^\d{1,9}(\.\d{1,2})?$/.test(float.trim())) return setError('The opening float is an amount in ETB with at most 2 decimals.')
+    if (!/^\d{1,9}(\.\d{1,2})?$/.test(float.trim()))
+      return setError('The opening float is an amount in ETB with at most 2 decimals.')
     if (tin.trim() && !/^\d{10}$/.test(tin.trim())) return setError('The TIN has 10 digits.')
     stepUp
       .run(() =>
@@ -92,19 +113,50 @@ function BusinessCard({ p }: { p: RestaurantProfile }) {
   }
   return (
     <Card title="Business settings">
-      <p className="text-sm text-muted-foreground">Money settings need verification with your authenticator app.</p>
+      <p className="text-sm text-muted-foreground">
+        Money settings need verification with your authenticator app.
+      </p>
       <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2" noValidate>
         <FormField id="bs-tin" label="TIN">
-          {(a) => <Input {...a} inputMode="numeric" value={tin} maxLength={10} onChange={(e) => setTin(e.target.value.replace(/[^0-9]/g, ''))} />}
+          {(a) => (
+            <Input
+              {...a}
+              inputMode="numeric"
+              value={tin}
+              maxLength={10}
+              onChange={(e) => setTin(e.target.value.replace(/[^0-9]/g, ''))}
+            />
+          )}
         </FormField>
         <FormField id="bs-vat" label="VAT (%)">
-          {(a) => <Input {...a} inputMode="decimal" value={vat} maxLength={5} onChange={(e) => setVat(e.target.value)} />}
+          {(a) => (
+            <Input
+              {...a}
+              inputMode="decimal"
+              value={vat}
+              maxLength={5}
+              onChange={(e) => setVat(e.target.value)}
+            />
+          )}
         </FormField>
         <FormField id="bs-float" label="Opening float (ETB)">
-          {(a) => <Input {...a} inputMode="decimal" value={float} maxLength={12} onChange={(e) => setFloat(e.target.value)} />}
+          {(a) => (
+            <Input
+              {...a}
+              inputMode="decimal"
+              value={float}
+              maxLength={12}
+              onChange={(e) => setFloat(e.target.value)}
+            />
+          )}
         </FormField>
         <label className="flex min-h-[44px] items-center gap-3 self-end text-sm text-ink">
-          <input type="checkbox" className="h-5 w-5 accent-primary" checked={autoConsume} onChange={(e) => setAutoConsume(e.target.checked)} />
+          <input
+            type="checkbox"
+            className="h-5 w-5 accent-primary"
+            checked={autoConsume}
+            onChange={(e) => setAutoConsume(e.target.checked)}
+          />
           Deduct stock automatically from recipes
         </label>
         <div className="space-y-2 sm:col-span-2">
@@ -119,9 +171,24 @@ function BusinessCard({ p }: { p: RestaurantProfile }) {
   )
 }
 
-function ColorInput({ id, label, value, onChange }: { id: string; label: string; value: string; onChange: (v: string) => void }) {
+function ColorInput({
+  id,
+  label,
+  value,
+  onChange,
+}: {
+  id: string
+  label: string
+  value: string
+  onChange: (v: string) => void
+}) {
   return (
-    <FormField id={id} label={label} hint="#rrggbb" error={STRICT_HEX_RE.test(value) ? undefined : 'Use the form #rrggbb.'}>
+    <FormField
+      id={id}
+      label={label}
+      hint="#rrggbb"
+      error={STRICT_HEX_RE.test(value) ? undefined : 'Use the form #rrggbb.'}
+    >
       {(a) => (
         <div className="flex items-center gap-2">
           <input
@@ -183,7 +250,8 @@ function BrandingCard({ p }: { p: RestaurantProfile }) {
   const submit = (e: FormEvent) => {
     e.preventDefault()
     setError(null)
-    if (!STRICT_HEX_RE.test(primary) || !STRICT_HEX_RE.test(accent)) return setError('Colours use the form #rrggbb.')
+    if (!STRICT_HEX_RE.test(primary) || !STRICT_HEX_RE.test(accent))
+      return setError('Colours use the form #rrggbb.')
     stepUp
       .run(() => save.mutateAsync({ primary, accent, logoPath }))
       .then(() => {
@@ -195,24 +263,48 @@ function BrandingCard({ p }: { p: RestaurantProfile }) {
   return (
     <Card title="Branding">
       <p className="text-sm text-muted-foreground">
-        Your colours replace the CafeOS red in buttons and highlights. Status colours (cancelled, overdue, errors) never change.
+        Your colours replace the CafeOS red in buttons and highlights. Status colours (cancelled, overdue,
+        errors) never change.
       </p>
       <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2" noValidate>
         <ColorInput id="br-primary" label="Primary colour" value={primary} onChange={setPrimary} />
         <ColorInput id="br-accent" label="Accent colour" value={accent} onChange={setAccent} />
         <div className="flex items-center gap-3 sm:col-span-2" aria-label="Preview">
-          <span className="rounded-md px-4 py-2 text-sm font-semibold text-white" style={{ backgroundColor: STRICT_HEX_RE.test(primary) ? primary : DEFAULT_PRIMARY }}>
+          <span
+            className="rounded-md px-4 py-2 text-sm font-semibold text-white"
+            style={{ backgroundColor: STRICT_HEX_RE.test(primary) ? primary : DEFAULT_PRIMARY }}
+          >
             Primary
           </span>
-          <span className="rounded-md px-4 py-2 text-sm font-semibold text-white" style={{ backgroundColor: STRICT_HEX_RE.test(accent) ? accent : DEFAULT_ACCENT }}>
+          <span
+            className="rounded-md px-4 py-2 text-sm font-semibold text-white"
+            style={{ backgroundColor: STRICT_HEX_RE.test(accent) ? accent : DEFAULT_ACCENT }}
+          >
             Accent
           </span>
         </div>
+        {(['primary', 'accent'] as const)
+          .filter((k) => hasLowWhiteTextContrast(k === 'primary' ? primary : accent))
+          .map((k) => (
+            <p
+              key={k}
+              role="status"
+              className="rounded-md border border-status-warning px-3 py-2 text-sm text-status-warning sm:col-span-2"
+            >
+              Low contrast: white text on the {k} colour is{' '}
+              {(whiteTextContrast(k === 'primary' ? primary : accent) ?? 0).toFixed(1)}:1, under the{' '}
+              {MIN_TEXT_CONTRAST}:1 readability minimum. Choose a darker colour so buttons stay readable.
+            </p>
+          ))}
         <div className="space-y-2 sm:col-span-2">
           <p className="text-sm font-medium text-ink">Logo</p>
           <div className="flex flex-wrap items-center gap-3">
             {logoPath && logoUrl.data ? (
-              <img src={logoUrl.data} alt="Restaurant logo" className="h-16 w-16 rounded border border-line object-contain" />
+              <img
+                src={logoUrl.data}
+                alt="Restaurant logo"
+                className="h-16 w-16 rounded border border-line object-contain"
+              />
             ) : (
               <span className="flex h-16 w-16 items-center justify-center rounded border border-dashed border-line text-xs text-muted-foreground">
                 {logoPath ? '…' : 'No logo'}
@@ -226,7 +318,12 @@ function BrandingCard({ p }: { p: RestaurantProfile }) {
               id="br-logo"
               onChange={(e) => void pick(e.target.files?.[0])}
             />
-            <Button type="button" variant="outline" disabled={uploading} onClick={() => fileRef.current?.click()}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={uploading}
+              onClick={() => fileRef.current?.click()}
+            >
               {uploading ? 'Uploading…' : logoPath ? 'Replace logo' : 'Upload logo'}
             </Button>
             {logoPath && (
@@ -235,7 +332,9 @@ function BrandingCard({ p }: { p: RestaurantProfile }) {
               </Button>
             )}
           </div>
-          <p className="text-xs text-muted-foreground">PNG, JPEG or WebP, at most 1 MiB. Shown on your sign-in page.</p>
+          <p className="text-xs text-muted-foreground">
+            PNG, JPEG or WebP, at most 1 MiB. Shown on your sign-in page.
+          </p>
         </div>
         <div className="space-y-2 sm:col-span-2">
           <FormError message={error} />
@@ -253,7 +352,13 @@ function BrandingCard({ p }: { p: RestaurantProfile }) {
 export function RestaurantSettingsPage() {
   const profile = useRestaurantProfile()
   if (profile.isPending) return <PageSkeleton label="Loading the restaurant settings" />
-  if (profile.isError) return <ErrorState title="The restaurant settings could not be loaded" onRetry={() => void profile.refetch()} />
+  if (profile.isError)
+    return (
+      <ErrorState
+        title="The restaurant settings could not be loaded"
+        onRetry={() => void profile.refetch()}
+      />
+    )
   const p = profile.data
   return (
     <div className="mx-auto max-w-3xl space-y-5 p-4 lg:p-6">

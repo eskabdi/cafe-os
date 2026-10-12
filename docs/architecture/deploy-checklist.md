@@ -1,5 +1,10 @@
 # Deploy checklist (hosted Supabase projects)
 
+**Start with the cutover runbook: [docs/operations/production-cutover.md](../operations/production-cutover.md)** (project creation, auth
+settings, CI deploy with approval, secrets, DNS/TLS, Super Admin bootstrap, smoke tests, rollback, go/no-go). This file lists the
+per-migration hosted checks the runbook refers to; every item still applies. See also [secrets](../operations/secrets.md),
+[backups and DR](../operations/backups-and-dr.md) and [monitoring](../operations/monitoring.md).
+
 Do these BEFORE a hosted project takes real users. Items marked (manual) cannot be enforced by migrations.
 
 1. **Auth hook (manual).** Dashboard > Authentication > Hooks > "Password verification attempt" = Postgres function

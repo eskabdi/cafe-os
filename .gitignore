@@ -10,3 +10,8 @@ test-results
 coverage
 *.tsbuildinfo
 .DS_Store
+
+# ops logical backups (scripts/ops/logical-backup.sh); never commit a dump
+backups/
+*.dump
+*.dump.age

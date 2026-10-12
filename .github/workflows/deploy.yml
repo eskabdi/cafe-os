@@ -1,0 +1,135 @@
+# Manual deployment to a hosted Supabase project + static host (docs/operations/production-cutover.md).
+#
+# Never runs on push or pull_request: workflow_dispatch only. Each target is a GitHub Environment ("staging", "production")
+# holding its own secrets/variables. The "production" Environment MUST be configured (Settings > Environments) with
+# required reviewers and a deployment-branch rule of `main` only; this file also refuses production from any other ref.
+#
+# dry_run (default TRUE) runs the quality gate and `supabase db push --dry-run`, builds the site, and stops: nothing is
+# changed. It never seeds (db push applies supabase/migrations only; seed.sql is local/CI only and refuses hosted databases).
+#
+# Environment secrets: SUPABASE_ACCESS_TOKEN, SUPABASE_DB_URL. Environment variables (public): SUPABASE_PROJECT_REF,
+# VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY. Function secrets (PIN_PEPPER, ALLOWED_ORIGINS, INVITE_REDIRECT_URL,
+# RECOVERY_REDIRECT_URL) are set once with `supabase secrets set` by the owner, never here (docs/operations/secrets.md).
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [staging, production]
+        default: staging
+      dry_run:
+        description: Dry run (db push --dry-run, build only; deploys nothing)
+        type: boolean
+        default: true
+      deploy_functions:
+        description: Deploy Edge Functions after the migrations
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false # never interrupt a migration
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Production only from main
+        if: inputs.environment == 'production' && github.ref != 'refs/heads/main'
+        run: |
+          echo "production deploys must run from refs/heads/main (got ${GITHUB_REF})"
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level=high --prod
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test -- --run
+
+  deploy:
+    needs: [quality]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The Environment gate: required reviewers on "production" pause the job here until approved.
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ vars.APP_URL }}
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+      VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+      DRY_RUN: ${{ inputs.dry_run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check environment configuration
+        run: |
+          missing=""
+          for v in SUPABASE_ACCESS_TOKEN SUPABASE_DB_URL SUPABASE_PROJECT_REF VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then echo "missing in this Environment:$missing"; exit 1; fi
+          if ! printf '%s' "$SUPABASE_PROJECT_REF" | grep -Eq '^[a-z0-9]{20}$'; then echo "SUPABASE_PROJECT_REF is not a project ref"; exit 1; fi
+          if [ "$VITE_SUPABASE_URL" != "https://${SUPABASE_PROJECT_REF}.supabase.co" ]; then
+            echo "VITE_SUPABASE_URL must be https://<SUPABASE_PROJECT_REF>.supabase.co for this Environment"; exit 1
+          fi
+          case "$SUPABASE_DB_URL" in *"$SUPABASE_PROJECT_REF"*) ;; *) echo "SUPABASE_DB_URL does not point at SUPABASE_PROJECT_REF"; exit 1 ;; esac
+
+      - uses: supabase/setup-cli@45a513f8c64c0bc8e0e3dfe572b5c95be85f6359 # v3.0.1
+        with:
+          version: 2.119.0
+
+      - name: Pending migrations (dry run, always)
+        run: supabase db push --db-url "$SUPABASE_DB_URL" --dry-run
+
+      - name: Apply migrations (no seed)
+        if: inputs.dry_run == false
+        run: supabase db push --db-url "$SUPABASE_DB_URL"
+
+      - name: Deploy Edge Functions
+        if: inputs.dry_run == false && inputs.deploy_functions
+        run: supabase functions deploy --project-ref "$SUPABASE_PROJECT_REF"
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - name: Narrow the CSP to this project's origin (dist/_headers)
+        run: |
+          sed -i -e "s#https://\*\.supabase\.co#https://${SUPABASE_PROJECT_REF}.supabase.co#g" \
+                 -e "s#wss://\*\.supabase\.co#wss://${SUPABASE_PROJECT_REF}.supabase.co#g" dist/_headers
+          if grep -v '^#' dist/_headers | grep -q '\*\.supabase\.co'; then echo "wildcard Supabase origin left in dist/_headers"; exit 1; fi
+          grep -q "connect-src 'self' https://${SUPABASE_PROJECT_REF}.supabase.co wss://${SUPABASE_PROJECT_REF}.supabase.co" dist/_headers
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: site-${{ inputs.environment }}-${{ github.sha }}
+          path: dist/
+          retention-days: 30
+
+      - name: Upload static site (PLACEHOLDER, host-specific)
+        if: inputs.dry_run == false
+        run: |
+          # Replace with your host's deploy command, using a host token stored as an Environment secret, e.g.
+          #   Cloudflare Pages: wrangler pages deploy dist --project-name <name> --branch <env>
+          #   Netlify:          netlify deploy --dir dist --prod
+          # The host MUST serve dist/_headers (or replicate those headers) and rewrite unknown paths to /index.html.
+          echo "No static host configured: dist/ is attached to this run as an artifact. Deploy it manually."
