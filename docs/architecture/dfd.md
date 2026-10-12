@@ -211,10 +211,13 @@ flowchart LR
 ## Level 1: dashboard and reports (Phase 8)
 ```mermaid
 flowchart LR
-    DASH["Dashboard SPA /r/<slug>/dashboard"] -->|fn_dashboard()| D["definer RPC: tenant from JWT, dashboard.view; money only with reports.view"]
-    REP["Reports SPA /r/<slug>/reports"] -->|fn_report(from_day_no, to_day_no)| R["definer RPC: tenant from JWT, reports.view, range <= 367 days"]
-    D -->|open day only| R
-    R -->|read, tenant-filtered| SRC[("orders / order_items / payments / expenses / stock_movements / ingredients / vouchers / day_sessions")]
+    DASH["Dashboard SPA /r/<slug>/dashboard"] -->|fn_dashboard()| D["definer RPC: tenant from JWT, dashboard.view; money only with reports.view + payments.view"]
+    REP["Reports SPA /r/<slug>/reports"] -->|"fn_report(day nos) / fn_report_period(from, to)"| R["definer RPCs: tenant from JWT, reports.view, per-section gating (restricted[])"]
+    REP -->|"fn_log_report_export (before print / CSV / PDF)"| X["definer RPC: reports.view + reports.export"]
+    X -->|report.exported| AUD[("audit_logs")]
+    D -->|"open day only (fn_report_light)"| B["internal fn_report_light / fn_report_build"]
+    R --> B
+    B -->|read, tenant-filtered| SRC[("orders / order_items / payments / expenses / stock_movements / ingredients / vouchers / installments / day_sessions")]
     D -->|recent: fn_order_visible| ORD[("orders")]
     ORD -.->|Realtime (RLS orders_select) -> invalidate| DASH
     PAY[("payments")] -.->|Realtime INSERT (RLS payments.view) -> invalidate| DASH
