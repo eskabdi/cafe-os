@@ -27,7 +27,7 @@ authoritative. The reason is recorded in `admin_audit_log` and in the tenant's `
 | no verified authenticator and no half-done reset to finish | 409 | `{ "error": "no_factor" }` |
 | the reset row expired (> 5 min), was already completed, or was superseded by a newer completed reset | 409 | `{ "error": "reset_expired" }` |
 | another reset of the same admin is in flight (claimed, not completed, not expired) | 409 | `{ "error": "reset_in_progress" }` |
-| `resend_recovery` but the admin has a verified factor again, has no completed reset, or a reset is pending | 409 | `{ "error": "recovery_not_available" }` |
+| `resend_recovery` but the admin has a verified factor again, has no completed reset, a reset is pending / in flight, or the admin signed in after the latest completion (the link was used) | 409 | `{ "error": "recovery_not_available" }` |
 | the tenant is suspended or cancelled (at prepare, claim or completion) | 409 | `{ "error": "tenant_suspended" }` |
 | throttled | 429 | `{ "error": "try_later" }` |
 | anything else (the password rotation or the sign-out failed: factors untouched; a factor GoTrue could not delete -> `factors_remain`): the reset is NOT completed, run it again | 503 | `{ "error": "server_error" }` |
@@ -56,29 +56,33 @@ never leaves an account with no factor but a working old password.
    (this or another reset of the user is claimed and in flight). Stamps `claimed_at` (claimed rows keep cutting old sessions off even after
    they expire: the password may be rotated). Returns `{ reset_id, profile_id, user_id, created_at, factor_ids }`.
 4. SERVICE ROLE `auth.admin.updateUserById(userId, { password })` with base64url(32 random bytes) + `aA1!` (passes any GoTrue strength
-   policy). Never logged or returned. On failure: 503 and STOP (sessions and factors untouched; run it again).
+   policy). Never logged or returned. On failure: SERVICE ROLE `fn_platform_mfa_reset_abort(reset_id, 'rotate')` (admin audit
+   `tenant_admin.mfa_reset_aborted`; the row stays claimed, so it keeps cutting the older sessions off and blocks other claims until it
+   expires), then 503 and STOP (sessions and factors untouched; run it again).
 5. SERVICE ROLE `fn_platform_mfa_reset_sign_out(reset_id)` (claimed, uncompleted rows only): revokes live trusted devices (`mfa_reset`),
    deletes session attestations and every `auth.sessions` row of the user (null when not permitted), records the counts on the row, audits
-   `tenant_admin.mfa_reset_signed_out`. On failure: 503 and STOP (factors untouched).
+   `tenant_admin.mfa_reset_signed_out`. On failure: `fn_platform_mfa_reset_abort(reset_id, 'sign_out')`, then 503 and STOP (factors
+   untouched).
 6. SERVICE ROLE `auth.admin.mfa.deleteFactor({ id, userId })` for every prepared factor id, then `auth.admin.mfa.listFactors({ userId })`
    and delete EVERY factor still listed: one that failed to delete, or one enrolled after the reset was requested (never treated as
    legitimate; logged as `factor_enrolled_during_reset`). An unreadable list: 503.
-7. SERVICE ROLE `fn_platform_complete_mfa_reset(reset_id)`: locks the row; unknown -> `not_found`, completed ->
-   `invalid_state/reset_completed`, expired -> `invalid_state/reset_expired`, older than the user's latest completed reset ->
-   `invalid_state/reset_superseded`. Actor, target, tenant and reason come from the row. If the requester is no longer an active
+7. SERVICE ROLE `fn_platform_complete_mfa_reset(reset_id, late_factors)` (`late_factors` = the factors step 6 found enrolled after the
+   request, 0..100): locks the row; unknown -> `not_found`, completed -> `invalid_state/reset_completed`, expired ->
+   `invalid_state/reset_expired`, older than the user's latest completed reset -> `invalid_state/reset_superseded`, never claimed ->
+   `invalid_state/reset_not_claimed`, sign-out step never ran -> `invalid_state/reset_not_signed_out`. Actor, target, tenant and reason come from the row. If the requester is no longer an active
    Super Admin, the target no longer an active tenant_admin of that tenant, or the tenant is suspended / cancelled: raises while a verified
    factor remains; once the factors are gone it RETURNS `{ profile_id, refused }` and writes `tenant_admin.mfa_reset_incomplete` (admin trail)
    and `auth.mfa_reset_incomplete_by_platform` (the tenant's audit_logs, with the reason). Refuses `invalid_state/factors_remain` while a
    verified factor remains. Otherwise revokes anything that appeared since step 5 (devices, attestations, sessions), stamps `completed_at`,
    and audits `tenant_admin.mfa_reset` (admin_audit_log, actor = the requesting Super Admin) and `auth.mfa_reset_by_platform` (the tenant's
-   audit_logs, actor_type platform_admin, with the reason); the counts are totals with step 5.
+   audit_logs, actor_type platform_admin, with the reason); the counts are totals with step 5, and both rows carry `late_factors`.
 8. Anon client `auth.resetPasswordForEmail(<registered e-mail>, { redirectTo: RECOVERY_REDIRECT_URL })` (implicit flow). Sent AFTER
    step 7 so the recovery session is newer than `completed_at`. The e-mail address is read with the service role
    (`auth.admin.getUserById`), never taken from the request.
 
 `action: "resend_recovery"`: step 1, then AS THE CALLER `fn_platform_prepare_recovery_resend(restaurant_id, profile_id, reason)` (same guard,
-TOTP, reason, target and tenant rules; `invalid_state/recovery_not_available` unless the admin has no verified factor, its latest reset is
-completed and nothing is pending or in flight; audited `tenant_admin.recovery_resent` + the tenant's `auth.recovery_resent_by_platform`, with the
+TOTP, reason, target and tenant rules; `invalid_state/recovery_not_available` unless the admin has no verified factor, a reset of the admin
+was completed, nothing is pending or in flight, and the admin has not signed in since the latest completion; audited `tenant_admin.recovery_resent` + the tenant's `auth.recovery_resent_by_platform`, with the
 reason), then step 8. Nothing else changes.
 
 ## Sessions that survive the reset

@@ -3201,7 +3201,7 @@ export type Database = {
         Returns: Json
       }
       fn_platform_complete_mfa_reset: {
-        Args: { p_reset_id: string }
+        Args: { p_reset_id: string; p_late_factors?: number }
         Returns: Json
       }
       fn_platform_create_invoice: {
@@ -3277,6 +3277,10 @@ export type Database = {
           p_limit?: number
           p_offset?: number
         }
+        Returns: Json
+      }
+      fn_platform_mfa_reset_abort: {
+        Args: { p_reset_id: string; p_stage: string }
         Returns: Json
       }
       fn_platform_mfa_reset_sign_out: {

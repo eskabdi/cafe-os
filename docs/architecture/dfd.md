@@ -110,7 +110,7 @@ flowchart LR
     MFR -->|3 auth.admin.updateUserById: random password (service role); failure = stop| GT
     MFR -->|4 fn_platform_mfa_reset_sign_out (service role): trusted devices, attestations, auth.sessions| TD[("trusted_devices, session_device_attestations, auth.sessions")]
     MFR -->|5 auth.admin.mfa.deleteFactor per factor, then listFactors + delete every one left (service role)| GT
-    MFR -->|6 fn_platform_complete_mfa_reset(reset_id) (service role; actor, target, reason from the row): revoke again, completed_at| TD
+    MFR -->|6 fn_platform_complete_mfa_reset(reset_id, late_factors) (service role; claimed + signed out rows only; actor, target, reason from the row): revoke again, completed_at| TD
     MFR -->|6 audit: tenant_admin.mfa_reset + tenant auth.mfa_reset_by_platform (with reason)| AAL
     MFR -->|7 resetPasswordForEmail(registered e-mail, RECOVERY_REDIRECT_URL) (anon); also action resend_recovery after fn_platform_prepare_recovery_resend| GT
     SA -.->|no RLS path, no profile| X["tenant operational rows: 0 rows, tenant RPCs: permission_denied"]

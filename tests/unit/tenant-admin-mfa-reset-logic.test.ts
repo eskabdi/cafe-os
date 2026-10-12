@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   MAX_BODY_BYTES,
+  MAX_LATE_FACTORS,
+  abortParams,
+  completeParams,
   interpretClaim,
   interpretComplete,
   interpretPrepare,
@@ -280,6 +283,7 @@ describe('mapRpcError / shapeFailure', () => {
     expect(mapCompleteError('invalid_state', 'reset_completed')).toBe('reset_expired')
     expect(mapCompleteError('invalid_state', 'factors_remain')).toBe('server_error')
     expect(mapCompleteError('invalid_state', 'reset_not_claimed')).toBe('server_error')
+    expect(mapCompleteError('invalid_state', 'reset_not_signed_out')).toBe('server_error')
     expect(mapCompleteError('invalid_state', 'reset_in_progress')).toBe('reset_in_progress')
     expect(mapCompleteError('tenant_suspended')).toBe('tenant_suspended')
     expect(shapeFailure('reset_in_progress')).toMatchObject({
@@ -343,5 +347,26 @@ describe('mapRpcError / shapeFailure', () => {
       headers: { 'Cache-Control': 'no-store', 'Content-Type': 'application/json' },
     })
     expect(shapeResendSuccess(PID, false).body).toMatchObject({ recovery_sent: false })
+  })
+})
+
+describe('completeParams / abortParams', () => {
+  const RID = '0f0e0d0c-0b0a-4908-8706-050403020100'
+  it('passes the late factor count found by remainingFactors to the completion', () => {
+    expect(completeParams(RID, 0)).toEqual({ p_reset_id: RID, p_late_factors: 0 })
+    expect(completeParams(RID, 2)).toEqual({ p_reset_id: RID, p_late_factors: 2 })
+    expect(completeParams(RID, MAX_LATE_FACTORS)).toEqual({ p_reset_id: RID, p_late_factors: 100 })
+    const late = remainingFactors(
+      { factors: [{ id: RID, created_at: '2026-10-12T09:00:00Z' }] },
+      Date.parse('2026-10-12T08:00:00Z'),
+    )
+    expect(late && completeParams(RID, late.late).p_late_factors).toBe(1)
+  })
+  it.each([-1, 1.5, Number.NaN, MAX_LATE_FACTORS + 1])('refuses an impossible count (%s)', (n) => {
+    expect(() => completeParams(RID, n)).toThrow('late_factors')
+  })
+  it('names the stage of an aborted reset', () => {
+    expect(abortParams(RID, 'rotate')).toEqual({ p_reset_id: RID, p_stage: 'rotate' })
+    expect(abortParams(RID, 'sign_out')).toEqual({ p_reset_id: RID, p_stage: 'sign_out' })
   })
 })

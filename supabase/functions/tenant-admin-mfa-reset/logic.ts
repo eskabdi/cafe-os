@@ -141,6 +141,24 @@ export function remainingFactors(data: unknown, resetCreatedAt: number): { ids: 
   return { ids, late }
 }
 
+/** Upper bound of late_factors accepted by fn_platform_complete_mfa_reset (= the longest list remainingFactors accepts). */
+export const MAX_LATE_FACTORS = MAX_FACTORS * 5
+
+/**
+ * The completion RPC's arguments: the reset id and the number of factors enrolled during the reset (remainingFactors().late), which
+ * the database records as late_factors in both audit trails. A count outside 0..MAX_LATE_FACTORS is a programming error (throws).
+ */
+export function completeParams(resetId: string, lateFactors: number): { p_reset_id: string; p_late_factors: number } {
+  if (!Number.isInteger(lateFactors) || lateFactors < 0 || lateFactors > MAX_LATE_FACTORS) throw new Error('late_factors')
+  return { p_reset_id: resetId, p_late_factors: lateFactors }
+}
+
+/** Where a claimed reset stopped before the factors were touched: the password rotation or the sign-out step. */
+export type AbortStage = 'rotate' | 'sign_out'
+export function abortParams(resetId: string, stage: AbortStage): { p_reset_id: string; p_stage: AbortStage } {
+  return { p_reset_id: resetId, p_stage: stage }
+}
+
 /** {profile_id, user_id} from fn_platform_prepare_recovery_resend, both the requested profile. */
 export function interpretResend(data: unknown, profileId: string): { userId: string } | null {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) return null
@@ -238,8 +256,8 @@ export function mapRpcError(message: unknown, detail?: unknown): FailureKind {
 /**
  * Maps the SQL error of a service-role step (claim, sign-out, completion). reset_expired / reset_superseded / reset_completed: the
  * reset row can no longer be used (the Super Admin starts again); reset_in_progress: another reset of this admin is running (claim);
- * tenant_suspended: the tenant was suspended / cancelled meanwhile; factors_remain, reset_not_claimed and anything else:
- * server_error (retry).
+ * tenant_suspended: the tenant was suspended / cancelled meanwhile; factors_remain, reset_not_claimed, reset_not_signed_out and
+ * anything else: server_error (retry).
  */
 export function mapCompleteError(message: unknown, detail?: unknown): FailureKind {
   switch (typeof message === 'string' ? message : '') {

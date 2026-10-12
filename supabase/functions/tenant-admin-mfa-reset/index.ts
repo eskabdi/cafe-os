@@ -15,19 +15,22 @@
 //      refusal happens here, BEFORE anything changes (two concurrent resets can never overwrite a password the user already set
 //      from the first recovery link);
 //   4. SERVICE ROLE admin.auth.admin.updateUserById(userId, { password: <32 random bytes> }); the value is never logged or returned.
-//      If this fails the function stops (503) BEFORE touching sessions or factors;
+//      If this fails the function stops (503) BEFORE touching sessions or factors, after recording the abort
+//      (fn_platform_mfa_reset_abort(reset_id, 'rotate'): admin audit tenant_admin.mfa_reset_aborted; the row stays claimed);
 //   5. SERVICE ROLE fn_platform_mfa_reset_sign_out(reset_id): revokes trusted devices and attestations, deletes auth sessions (null
-//      when not permitted). On failure: 503, factors untouched;
+//      when not permitted). On failure: abort recorded (stage 'sign_out'), 503, factors untouched;
 //   6. SERVICE ROLE admin.auth.admin.mfa.deleteFactor for each prepared factor id, then admin.auth.admin.mfa.listFactors and delete
 //      EVERY factor still listed (one enrolled after the reset was requested is never treated as legitimate);
-//   7. SERVICE ROLE fn_platform_complete_mfa_reset(reset_id): re-checks everything, refuses while a verified factor remains
-//      (factors_remain), revokes anything that appeared since step 5, stamps completed_at, audits in both trails;
+//   7. SERVICE ROLE fn_platform_complete_mfa_reset(reset_id, late_factors): re-checks everything, refuses a row that was never
+//      claimed / signed out and while a verified factor remains (factors_remain), revokes anything that appeared since step 5, stamps
+//      completed_at, audits in both trails (with late_factors: the factors enrolled during the reset that step 6 found);
 //   8. anon client resetPasswordForEmail(<registered e-mail>, { redirectTo: RECOVERY_REDIRECT_URL }) AFTER completion (so the
 //      recovery session is newer than completed_at). A failure here does not undo the reset: recovery_sent = false.
 // Returns { profile_id, mfa_reset, factors_removed, sessions_revoked, devices_revoked, password_rotated, recovery_sent }.
 //
 // action 'resend_recovery': AS THE CALLER fn_platform_prepare_recovery_resend(restaurant_id, profile_id, reason) (same guard, TOTP,
-// target and tenant rules; only for an admin with no verified factor whose latest reset is completed, else recovery_not_available;
+// target and tenant rules; only for an admin with no verified factor, a completed reset, nothing pending / in flight and no sign-in
+// since the latest completion, else recovery_not_available;
 // audited tenant_admin.recovery_resent + the tenant's auth.recovery_resent_by_platform), then step 8.
 // Returns { profile_id, action: 'resend_recovery', recovery_sent }. Nothing sensitive is logged.
 //
@@ -41,6 +44,8 @@ import { extractBearer } from '../staff-create/logic.ts'
 import { isSafeRedirect } from '../tenant-admin-invite/logic.ts'
 import {
   MAX_BODY_BYTES,
+  abortParams,
+  completeParams,
   interpretClaim,
   interpretComplete,
   interpretPrepare,
@@ -54,6 +59,7 @@ import {
   shapeFailure,
   shapeResendSuccess,
   shapeSuccess,
+  type AbortStage,
   type MfaResetInput,
   type ShapedResponse,
 } from './logic.ts'
@@ -100,6 +106,7 @@ async function reset(token: string, input: MfaResetInput): Promise<ShapedRespons
   const rotated = await admin.auth.admin.updateUserById(prepared.userId, { password: rotationPassword() })
   if (rotated.error) {
     console.warn('tenant-admin-mfa-reset: password_rotation_failed')
+    await recordAbort(admin, prepared.resetId, 'rotate')
     return shapeFailure('server_error')
   }
 
@@ -107,6 +114,7 @@ async function reset(token: string, input: MfaResetInput): Promise<ShapedRespons
   const signedOut = out.error ? null : interpretSignOut(out.data, input.profile_id)
   if (!signedOut) {
     console.warn('tenant-admin-mfa-reset: sign_out_failed')
+    await recordAbort(admin, prepared.resetId, 'sign_out')
     return shapeFailure(out.error ? mapCompleteError(out.error.message, out.error.details) : 'server_error')
   }
 
@@ -129,7 +137,8 @@ async function reset(token: string, input: MfaResetInput): Promise<ShapedRespons
   for (const id of left.ids) await tryDelete(id)
   if (failed > 0) console.warn(`tenant-admin-mfa-reset: factor_delete_failed count=${failed}`)
 
-  const done = await admin.rpc('fn_platform_complete_mfa_reset', { p_reset_id: prepared.resetId })
+  // the factors enrolled during the reset are recorded in both audit trails of the completion
+  const done = await admin.rpc('fn_platform_complete_mfa_reset', completeParams(prepared.resetId, left.late))
   if (done.error) return shapeFailure(mapCompleteError(done.error.message, done.error.details))
   const result = interpretComplete(done.data, input.profile_id)
   if (!result) return shapeFailure('server_error')
@@ -139,6 +148,19 @@ async function reset(token: string, input: MfaResetInput): Promise<ShapedRespons
   if (!recoverySent) console.warn('tenant-admin-mfa-reset: recovery_email_not_sent')
   // the completion reports totals (it adds the sign-out step's counts recorded on the reset row)
   return shapeSuccess(input.profile_id, result, removed, recoverySent)
+}
+
+/**
+ * A claimed reset stopped before the factors were touched (rotation or sign-out failed): audit it (admin_audit_log
+ * tenant_admin.mfa_reset_aborted). Best effort: the row stays claimed either way, and the caller already answers 503.
+ */
+async function recordAbort(admin: SupabaseClient, resetId: string, stage: AbortStage): Promise<void> {
+  try {
+    const res = await admin.rpc('fn_platform_mfa_reset_abort', abortParams(resetId, stage))
+    if (res.error) console.warn(`tenant-admin-mfa-reset: abort_not_recorded stage=${stage}`)
+  } catch {
+    console.warn(`tenant-admin-mfa-reset: abort_not_recorded stage=${stage}`)
+  }
 }
 
 /** action 'resend_recovery': the audited caller-scoped check, then the recovery e-mail to the registered address. */

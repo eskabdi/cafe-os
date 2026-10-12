@@ -10,8 +10,12 @@
 --   * fn_platform_prepare_recovery_resend (caller, Super Admin + recent TOTP): happy path + audit in both trails, unauthorized,
 --     cross-tenant, not available (no completed reset / a factor exists), suspended tenant, replay (audited each time)
 --   * fn_platform_get_tenant: recovery_resend_available
+--   * fn_platform_complete_mfa_reset refuses a row never claimed / never signed out, validates late_factors and records it in both
+--     trails; fn_platform_mfa_reset_abort (service role) audits a stop after the claim and leaves the row claimed
+--   * resend stays available when a LATER-requested reset was abandoned after an earlier one completed, and disappears once the
+--     admin signed in after the completion
 begin;
-select plan(57);
+select plan(89);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -59,6 +63,9 @@ select ok(has_function_privilege('service_role', 'public.fn_platform_claim_mfa_r
           and has_function_privilege('service_role', 'public.fn_platform_mfa_reset_sign_out(uuid)', 'EXECUTE'), 'service_role executes claim and sign-out');
 select ok(not has_function_privilege('service_role', 'public.fn_mfa_reset_revoke_access(uuid,uuid)', 'EXECUTE'), 'service_role cannot call the revoke internal directly');
 select is((select string_agg(r, ',' order by r) from unnest(array['anon', 'authenticated', 'service_role']) r
+           where has_function_privilege(r, 'public.fn_platform_mfa_reset_abort(uuid,text)', 'EXECUTE')), 'service_role',
+          'abort: service_role only');
+select is((select string_agg(r, ',' order by r) from unnest(array['anon', 'authenticated', 'service_role']) r
            where has_function_privilege(r, 'public.fn_platform_prepare_recovery_resend(uuid,uuid,text)', 'EXECUTE')), 'authenticated',
           'resend prepare: authenticated only (the Super Admin through the Edge Function, as the caller)');
 
@@ -102,6 +109,8 @@ insert into _c select 'n_sess', to_jsonb((select count(*) from auth.sessions whe
 select tests.authenticate_as_service_role();
 select is(tests.run(format('select public.fn_platform_mfa_reset_sign_out(%L)', tests.u50('r2'))), 'P0001|invalid_state|reset_not_claimed',
           'sign-out: an unclaimed row is refused');
+select is(tests.run(format('select public.fn_platform_complete_mfa_reset(%L)', tests.u50('r2'))), 'P0001|invalid_state|reset_not_claimed',
+          'complete: a row that was never claimed is refused (no password rotation happened under it)');
 insert into _c select 's1', public.fn_platform_mfa_reset_sign_out(tests.u50('r1'));
 select is((select (v -> 'sessions_revoked') = (select v from _c where k = 'n_sess') from _c where k = 's1'), true, 'sign-out: every session of the user counted');
 select tests.clear_auth();
@@ -185,10 +194,20 @@ delete from auth.mfa_factors where user_id = (select a_admin from _f);
 -- ═════════ 7. suspended / cancelled tenant: claim, complete (both ways) and resend refused; refusal in both trails ═════════
 select tests.add_verified_factor((select b_admin from _f)) where tests.n_factors((select b_admin from _f), 'verified') = 0;
 select tests.aal2((select su from _f));
-insert into _c select 'rB', public.fn_platform_prepare_mfa_reset((select b from _f), (select b_admin from _f), 'lost phone B');
+insert into _c select 'rB0', public.fn_platform_prepare_mfa_reset((select b from _f), (select b_admin from _f), 'lost phone B, first try');
 select lives_ok(format($q$select public.fn_suspend_tenant(%L, 'non-payment of the invoice')$q$, (select b from _f)), 'setup: second-cafe suspended after the request');
 select tests.authenticate_as_service_role();
-select is(tests.run(format('select public.fn_platform_claim_mfa_reset(%L)', tests.u50('rB'))), 'P0001|tenant_suspended|', 'claim: suspended tenant refused before anything changes');
+select is(tests.run(format('select public.fn_platform_claim_mfa_reset(%L)', tests.u50('rB0'))), 'P0001|tenant_suspended|', 'claim: suspended tenant refused before anything changes');
+select tests.aal2((select su from _f));
+select lives_ok(format($q$select public.fn_reactivate_tenant(%L, 'invoice paid')$q$, (select b from _f)), 'setup: second-cafe reactivated');
+-- a reset that got through claim and sign-out, then the tenant is suspended before the completion
+insert into _c select 'rB', public.fn_platform_prepare_mfa_reset((select b from _f), (select b_admin from _f), 'lost phone B');
+select tests.authenticate_as_service_role();
+select lives_ok(format('select public.fn_platform_claim_mfa_reset(%L)', tests.u50('rB')), 'setup: rB claimed');
+select lives_ok(format('select public.fn_platform_mfa_reset_sign_out(%L)', tests.u50('rB')), 'setup: rB signed out');
+select tests.aal2((select su from _f));
+select lives_ok(format($q$select public.fn_suspend_tenant(%L, 'non-payment again')$q$, (select b from _f)), 'setup: second-cafe suspended again');
+select tests.authenticate_as_service_role();
 select is(tests.run(format('select public.fn_platform_complete_mfa_reset(%L)', tests.u50('rB'))), 'P0001|tenant_suspended|',
           'complete: suspended tenant refused (raised while the factors remain)');
 select tests.clear_auth();
@@ -208,7 +227,7 @@ select ok((select completed_at is null from public.mfa_resets where id = tests.u
 select tests.aal2((select su from _f));
 select is(tests.run(format($q$select public.fn_platform_prepare_mfa_reset(%L, %L, 'finish B')$q$, (select b from _f), (select b_admin from _f))),
           'P0001|tenant_suspended|', 'finishing it is refused too while the tenant is suspended');
-select lives_ok(format($q$select public.fn_suspend_tenant(%L, 'non-payment again')$q$, (select a from _f)), 'setup: central-cafe suspended');
+select lives_ok(format($q$select public.fn_suspend_tenant(%L, 'non-payment of central')$q$, (select a from _f)), 'setup: central-cafe suspended');
 select is(tests.run(format($q$select public.fn_platform_prepare_recovery_resend(%L, %L, 'link expired')$q$, (select a from _f), (select a_admin from _f))),
           'P0001|tenant_suspended|', 'resend: suspended tenant refused');
 select is((select (e ->> 'recovery_resend_available')::boolean from jsonb_array_elements(public.fn_platform_get_tenant((select a from _f)) -> 'tenant_admins') e
@@ -235,5 +254,78 @@ select tests.clear_auth();
 select ok(exists (select 1 from pg_trigger where tgrelid = 'public.mfa_resets'::regclass and tgname = 'trg_00_no_truncate' and not tgisinternal),
           'mfa_resets carries the statement-level TRUNCATE guard');
 
+-- ═════════ 10. completion order, abort, late factors; resend after a LATER-requested reset was abandoned ═════════
+select tests.aal2((select su from _f));
+select lives_ok(format($q$select public.fn_reactivate_tenant(%L, 'invoice paid')$q$, (select a from _f)), 'setup: central-cafe reactivated');
+select tests.clear_auth();
+select tests.add_verified_factor((select a_admin2 from _f)) where tests.n_factors((select a_admin2 from _f), 'verified') = 0;
+select tests.aal2((select su from _f));
+insert into _c select 'D1', public.fn_platform_prepare_mfa_reset((select a from _f), (select a_admin2 from _f), 'lost phone dawit');
+insert into _c select 'D2', public.fn_platform_prepare_mfa_reset((select a from _f), (select a_admin2 from _f), 'lost phone dawit, later tab');
+select tests.clear_auth();
+-- owner: D1 requested 20 min ago (still valid); D2 requested LATER (10 min ago) and abandoned: expired, never claimed
+update public.mfa_resets set created_at = now() - interval '20 minutes', expires_at = now() + interval '5 minutes' where id = tests.u50('D1');
+update public.mfa_resets set created_at = now() - interval '10 minutes', expires_at = now() - interval '5 minutes' where id = tests.u50('D2');
+select tests.authenticate_as_service_role();
+select is(tests.run(format('select public.fn_platform_mfa_reset_abort(%L, ''rotate'')', tests.u50('D1'))), 'P0001|invalid_state|reset_not_claimed',
+          'abort: an unclaimed row is refused');
+select lives_ok(format('select public.fn_platform_claim_mfa_reset(%L)', tests.u50('D1')), 'setup: D1 claimed');
+select is(tests.run(format('select public.fn_platform_complete_mfa_reset(%L)', tests.u50('D1'))), 'P0001|invalid_state|reset_not_signed_out',
+          'complete: a claimed row whose sign-out step never ran is refused');
+select is(tests.run(format('select public.fn_platform_mfa_reset_abort(%L, ''delete'')', tests.u50('D1'))), 'P0001|invalid_input|stage', 'abort: stage is rotate | sign_out');
+select is(tests.run('select public.fn_platform_mfa_reset_abort(null, ''rotate'')'), 'P0001|invalid_input|reset_id', 'abort: reset id required');
+select is(tests.run('select public.fn_platform_mfa_reset_abort(gen_random_uuid(), ''rotate'')'), 'P0001|not_found|', 'abort: unknown reset id');
+select is(public.fn_platform_mfa_reset_abort(tests.u50('D1'), 'rotate'),
+          jsonb_build_object('reset_id', tests.u50('D1'), 'profile_id', (select a_admin2 from _f), 'stage', 'rotate'), 'abort: {reset_id, profile_id, stage}');
+select tests.aal2((select su from _f));
+select is(tests.run(format('select public.fn_platform_mfa_reset_abort(%L, ''rotate'')', tests.u50('D1'))),
+          '42501|permission denied for function fn_platform_mfa_reset_abort|', 'the super admin itself cannot call abort');
+select tests.clear_auth();
+select is((select platform_admin_id::text || '|' || restaurant_id::text || '|' || (detail ->> 'profile_id') || '|' || (detail ->> 'stage') || '|' || (detail ->> 'signed_out')
+           from public.admin_audit_log where action = 'tenant_admin.mfa_reset_aborted' and detail ->> 'reset_id' = tests.u50('D1')::text),
+          (select su::text || '|' || a::text || '|' || a_admin2::text from _f) || '|rotate|false', 'abort audited: actor = the requester, tenant, target, stage');
+select ok((select claimed_at is not null and completed_at is null from public.mfa_resets where id = tests.u50('D1')),
+          'the aborted row stays claimed (it keeps cutting the older sessions off) and is not completed');
+-- (the database lets the claimed row go on; the Edge Function itself starts over after an abort)
+select tests.authenticate_as_service_role();
+select lives_ok(format('select public.fn_platform_mfa_reset_sign_out(%L)', tests.u50('D1')), 'setup: D1 signed out');
+select tests.clear_auth();
+delete from auth.mfa_factors where user_id = (select a_admin2 from _f);
+select tests.authenticate_as_service_role();
+select is(tests.run(format('select public.fn_platform_complete_mfa_reset(%L, -1)', tests.u50('D1'))), 'P0001|invalid_input|late_factors', 'late_factors >= 0');
+select is(tests.run(format('select public.fn_platform_complete_mfa_reset(%L, 101)', tests.u50('D1'))), 'P0001|invalid_input|late_factors', 'late_factors <= 100');
+select is(tests.run(format('select public.fn_platform_complete_mfa_reset(%L, null)', tests.u50('D1'))), 'P0001|invalid_input|late_factors', 'late_factors not null');
+insert into _c select 'dD1', public.fn_platform_complete_mfa_reset(tests.u50('D1'), 2);
+select tests.clear_auth();
+select is((select (detail ->> 'late_factors') from public.admin_audit_log where action = 'tenant_admin.mfa_reset' and detail ->> 'reset_id' = tests.u50('D1')::text),
+          '2', 'admin trail: late_factors (factors enrolled during the reset)');
+select is((select (new_data ->> 'late_factors') from public.audit_logs where event = 'auth.mfa_reset_by_platform' and new_data ->> 'profile_id' = (select a_admin2::text from _f)),
+          '2', 'tenant trail: late_factors');
+select is((select (detail ->> 'late_factors') from public.admin_audit_log where action = 'tenant_admin.mfa_reset' and detail ->> 'reset_id' = tests.u50('r1')::text),
+          '0', 'a completion without late factors records 0');
+-- the scenario: D2 was requested AFTER D1 and BEFORE D1 completed, then abandoned (the latest reset by request time is not completed)
+select ok((select d2.created_at > d1.created_at and d2.created_at < d1.completed_at and d2.completed_at is null and d2.claimed_at is null and d2.expires_at <= now()
+           from public.mfa_resets d1, public.mfa_resets d2 where d1.id = tests.u50('D1') and d2.id = tests.u50('D2')),
+          'fixture: the later-requested D2 is abandoned while the earlier D1 completed');
+select ok(public.fn_mfa_recovery_resend_available((select a_admin2 from _f)), 'resend stays available: the abandoned later request does not lock the admin out');
+select tests.aal2((select su from _f));
+select is((select (e ->> 'recovery_resend_available')::boolean from jsonb_array_elements(public.fn_platform_get_tenant((select a from _f)) -> 'tenant_admins') e
+           where e ->> 'profile_id' = (select a_admin2::text from _f)), true, 'detail: dawit can get the recovery e-mail again');
+select lives_ok(format($q$select public.fn_platform_prepare_recovery_resend(%L, %L, 'link expired, dawit')$q$, (select a from _f), (select a_admin2 from _f)),
+                'resend for dawit succeeds');
+select tests.clear_auth();
+-- the admin opened the recovery link (signed in after the completion) but never set a password / enrolled: resend must stay available
+update auth.users set last_sign_in_at = (select completed_at + interval '1 second' from public.mfa_resets where id = tests.u50('D1')) where id = (select a_admin2 from _f);
+select ok(public.fn_mfa_recovery_resend_available((select a_admin2 from _f)), 'signed in via the link but no factor yet: resend still available (no lockout)');
+select tests.aal2((select su from _f));
+select is((select (e ->> 'recovery_resend_available')::boolean from jsonb_array_elements(public.fn_platform_get_tenant((select a from _f)) -> 'tenant_admins') e
+           where e ->> 'profile_id' = (select a_admin2::text from _f)), true, 'detail: resend still offered after a link sign-in without enrolment');
+select lives_ok(format($q$select public.fn_platform_prepare_recovery_resend(%L, %L, 'link opened, password never set')$q$, (select a from _f), (select a_admin2 from _f)),
+                'resend after a link sign-in succeeds');
+select tests.clear_auth();
+-- once a verified factor exists again, resend is gone (enrolment is the end of the recovery)
+insert into auth.mfa_factors (id, user_id, friendly_name, factor_type, status, created_at, updated_at)
+values (gen_random_uuid(), (select a_admin2 from _f), 'new phone', 'totp', 'verified', now(), now());
+select ok(not public.fn_mfa_recovery_resend_available((select a_admin2 from _f)), 'a verified factor again: resend not available');
 select * from finish();
 rollback;

@@ -42,9 +42,12 @@
 --     fn_platform_mfa_reset_sign_out(reset_id)   SERVICE ROLE ONLY, AFTER the rotation and BEFORE the factors are deleted: a claimed,
 --        uncompleted row only. Revokes the live trusted devices (reason 'mfa_reset'), drops the session attestations, deletes the
 --        auth sessions (null when the DB role may not) and records the counts on the row. Audited ('tenant_admin.mfa_reset_signed_out').
---     fn_platform_complete_mfa_reset(reset_id)        SERVICE ROLE ONLY. Consumes the row FOR UPDATE: unknown -> not_found, completed ->
---        invalid_state|reset_completed (replay), expired -> invalid_state|reset_expired, requested before the user's latest completed
---        reset -> invalid_state|reset_superseded. Actor, profile, restaurant and reason come
+--     fn_platform_complete_mfa_reset(reset_id, late_factors)   SERVICE ROLE ONLY. Consumes the row FOR UPDATE: unknown -> not_found,
+--        completed -> invalid_state|reset_completed (replay), expired -> invalid_state|reset_expired, requested before the user's latest
+--        completed reset -> invalid_state|reset_superseded, never claimed -> invalid_state|reset_not_claimed, sign-out step never ran
+--        -> invalid_state|reset_not_signed_out (the Edge Function's order is enforced, not assumed). late_factors (0..100, default 0):
+--        the factors the Edge Function's re-list found that were enrolled after the request, recorded as 'late_factors' in every
+--        audit row of the completion. Actor, profile, restaurant and reason come
 --        from the row, never from the caller. Re-checks the requester is still an active Super Admin, the target still an active
 --        tenant_admin of that restaurant and the tenant neither suspended nor cancelled: when that fails AFTER the factors are gone it
 --        RETURNS {refused: permission_denied|not_found|tenant_suspended} (no exception, so the admin audit
@@ -53,6 +56,10 @@
 --        trusted devices again, drops their session attestations, deletes their auth sessions (null when the DB role may not; totals
 --        include the sign-out step), and stamps completed_at. Audited twice: admin_audit_log 'tenant_admin.mfa_reset' and the tenant's
 --        audit_logs 'auth.mfa_reset_by_platform' (actor = the requesting Super Admin, actor_type platform_admin, WITH the reason).
+--     fn_platform_mfa_reset_abort(reset_id, stage)   SERVICE ROLE ONLY: the Edge Function stopped after the claim because the password
+--        rotation ('rotate') or the sign-out step ('sign_out') failed. A claimed, uncompleted row only (reset_not_claimed /
+--        reset_completed). Audited (admin_audit_log 'tenant_admin.mfa_reset_aborted' with the stage); the row STAYS claimed, so it keeps
+--        cutting the user's older sessions off (the password may already be rotated) and blocks other claims until it expires.
 --     fn_session_after_mfa_reset() -> fn_mfa_session_ok() (0032) + fn_require_recent_totp() (0032) + fn_require_step_up() (0032): the
 --        JWT session (session_id claim -> auth.sessions.created_at) must have been created AFTER (a) the latest completed_at of the
 --        user's resets and (b) the created_at of every reset of the user that is not completed and either not expired or claimed
@@ -64,8 +71,9 @@
 --        fn_require_step_up -> fn_session_after_mfa_reset + fn_mfa_session_ok; fn_trust_device and the step-up actions ->
 --        fn_require_recent_totp).
 --     fn_platform_prepare_recovery_resend(restaurant, profile, reason)   AS THE CALLER (same guard + recent TOTP + target rules +
---        tenant_suspended as prepare): only when fn_mfa_recovery_resend_available (no verified factor, the user's latest reset is
---        completed, nothing pending or in flight), else invalid_state|recovery_not_available. Audited (admin_audit_log
+--        tenant_suspended as prepare): only when fn_mfa_recovery_resend_available (no verified factor, a completed reset exists,
+--        nothing pending or in flight, and the user has not signed in since the latest completion: the recovery link was not used),
+--        else invalid_state|recovery_not_available. Audited (admin_audit_log
 --        'tenant_admin.recovery_resent' + the tenant's 'auth.recovery_resent_by_platform', with the reason). The Edge Function then
 --        sends the recovery e-mail: a Tenant Admin whose recovery link expired is never locked out for good.
 --     The Edge Function sends the recovery e-mail after completion: the Tenant Admin proves the e-mail inbox, sets a new password
@@ -418,20 +426,23 @@ as $$
 $$;
 revoke all on function public.fn_mfa_reset_pending(uuid) from public, anon, authenticated;
 
--- the recovery e-mail may be sent again: no verified factor, the user's LATEST reset (by request time) is completed, and nothing is
--- pending or in flight (a completed reset whose recovery link expired would otherwise lock the Tenant Admin out for good)
+-- the recovery e-mail may be sent again: no verified factor, a reset of the user was completed, nothing is pending or in flight
+-- (an older reset that was never completed does not count: it was superseded by the completion, or it expired unclaimed), and the
+-- user has not signed in since the latest completion (the recovery link was not used yet). A completed reset whose recovery link
+-- expired would otherwise lock the Tenant Admin out for good.
 create or replace function public.fn_mfa_recovery_resend_available(p_user_id uuid)
 returns boolean
 language sql stable security definer set search_path = ''
 as $$
   select not exists (select 1 from auth.mfa_factors f where f.user_id = p_user_id and f.status = 'verified')
-     and coalesce((select r.completed_at is not null from public.mfa_resets r where r.user_id = p_user_id
-                   order by r.created_at desc, (r.completed_at is not null) desc limit 1), false)
+     and exists (select 1 from public.mfa_resets c where c.user_id = p_user_id and c.completed_at is not null)
      and not public.fn_mfa_reset_pending(p_user_id)
      and not exists (select 1 from public.mfa_resets r where r.user_id = p_user_id and r.completed_at is null
                        and (r.expires_at > now() or r.claimed_at is not null)
                        and r.created_at > (select max(c.completed_at) from public.mfa_resets c
                                            where c.user_id = p_user_id and c.completed_at is not null))
+  -- deliberately NOT gated on auth.users.last_sign_in_at: opening the recovery link signs the user in, so an admin who opened it but
+  -- never set a password would be locked out again. Extra e-mails only reach the registered inbox and are audited.
 $$;
 revoke all on function public.fn_mfa_recovery_resend_available(uuid) from public, anon, authenticated;
 
@@ -593,8 +604,8 @@ end;
 $$;
 
 -- C4. step 6 (SERVICE ROLE, after GoTrue deleted the factors): consume the reset row; devices, attestations, sessions (again: anything
--- that appeared since the sign-out step), completed_at, audit
-create or replace function public.fn_platform_complete_mfa_reset(p_reset_id uuid)
+-- that appeared since the sign-out step), completed_at, audit. p_late_factors: factors the Edge Function found enrolled during the reset
+create or replace function public.fn_platform_complete_mfa_reset(p_reset_id uuid, p_late_factors integer default 0)
 returns jsonb
 language plpgsql
 security definer
@@ -611,6 +622,10 @@ declare
 begin
   if not public.is_service_role() then perform public.fn_err('permission_denied'); end if;
   if p_reset_id is null then perform public.fn_err('invalid_input', 'reset_id'); end if;
+  -- remainingFactors (Edge Function) accepts at most 100 listed factors
+  if p_late_factors is null or p_late_factors < 0 or p_late_factors > 100 then
+    perform public.fn_err('invalid_input', 'late_factors');
+  end if;
   select * into r from public.mfa_resets m where m.id = p_reset_id for update;
   if not found then perform public.fn_err('not_found'); end if;
   if r.completed_at is not null then perform public.fn_err('invalid_state', 'reset_completed'); end if;
@@ -619,6 +634,9 @@ begin
   if exists (select 1 from public.mfa_resets c where c.user_id = r.user_id and c.completed_at > r.created_at) then
     perform public.fn_err('invalid_state', 'reset_superseded');
   end if;
+  -- the Edge Function's order is enforced: claim (before the rotation) and sign-out (before the factors are deleted) must have run
+  if r.claimed_at is null then perform public.fn_err('invalid_state', 'reset_not_claimed'); end if;
+  if r.signed_out_at is null then perform public.fn_err('invalid_state', 'reset_not_signed_out'); end if;
 
   v_factors_gone := not exists (select 1 from auth.mfa_factors f where f.user_id = r.user_id and f.status = 'verified');
   if not exists (select 1 from public.platform_admins a
@@ -640,10 +658,11 @@ begin
     -- the factors are already gone: RETURN (not raise) so these records of the half-done reset survive, in both trails
     insert into public.admin_audit_log (platform_admin_id, restaurant_id, action, detail)
     values (r.requested_by, r.restaurant_id, 'tenant_admin.mfa_reset_incomplete',
-            jsonb_build_object('profile_id', r.user_id, 'reset_id', r.id, 'refused', v_refusal, 'reason', r.reason));
+            jsonb_build_object('profile_id', r.user_id, 'reset_id', r.id, 'refused', v_refusal, 'reason', r.reason,
+                               'late_factors', p_late_factors));
     insert into public.audit_logs (restaurant_id, actor_id, actor_type, event, action, new_data)
     values (r.restaurant_id, r.requested_by, 'platform_admin', 'auth.mfa_reset_incomplete_by_platform', 'event',
-            jsonb_build_object('profile_id', r.user_id, 'reason', r.reason, 'refused', v_refusal));
+            jsonb_build_object('profile_id', r.user_id, 'reason', r.reason, 'refused', v_refusal, 'late_factors', p_late_factors));
     return jsonb_build_object('profile_id', r.user_id, 'refused', v_refusal);
   end if;
   if not v_factors_gone then perform public.fn_err('invalid_state', 'factors_remain'); end if;
@@ -651,8 +670,7 @@ begin
   select * into v from public.fn_mfa_reset_revoke_access(r.user_id, r.requested_by);
   -- totals: the sign-out step (when it ran) + this one; unknown (null) as soon as either could not touch auth.sessions
   v_devices := coalesce(r.devices_revoked, 0) + v.devices;
-  v_sessions := case when r.signed_out_at is null then v.sessions
-                     when r.sessions_revoked is null or v.sessions is null then null
+  v_sessions := case when r.sessions_revoked is null or v.sessions is null then null
                      else r.sessions_revoked + v.sessions end;
   -- stamped AFTER the sign-out: every session created before this instant fails fn_session_after_mfa_reset
   update public.mfa_resets set completed_at = clock_timestamp() where id = r.id;
@@ -660,12 +678,38 @@ begin
   insert into public.admin_audit_log (platform_admin_id, restaurant_id, action, detail)
   values (r.requested_by, r.restaurant_id, 'tenant_admin.mfa_reset',
           jsonb_build_object('profile_id', r.user_id, 'reset_id', r.id, 'reason', r.reason,
-                             'sessions_revoked', v_sessions, 'devices_revoked', v_devices));
+                             'sessions_revoked', v_sessions, 'devices_revoked', v_devices, 'late_factors', p_late_factors));
   insert into public.audit_logs (restaurant_id, actor_id, actor_type, event, action, new_data)
   values (r.restaurant_id, r.requested_by, 'platform_admin', 'auth.mfa_reset_by_platform', 'event',
           jsonb_build_object('profile_id', r.user_id, 'reason', r.reason,
-                             'sessions_revoked', v_sessions, 'devices_revoked', v_devices));
+                             'sessions_revoked', v_sessions, 'devices_revoked', v_devices, 'late_factors', p_late_factors));
   return jsonb_build_object('profile_id', r.user_id, 'sessions_revoked', v_sessions, 'devices_revoked', v_devices);
+end;
+$$;
+
+-- C4b. (SERVICE ROLE) the Edge Function stopped after the claim: the password rotation ('rotate') or the sign-out step ('sign_out')
+-- failed. Audit only: the row STAYS claimed (the password may already be rotated, so it keeps cutting the older sessions off) and
+-- blocks every other claim of the user until it expires; the Super Admin then starts again
+create or replace function public.fn_platform_mfa_reset_abort(p_reset_id uuid, p_stage text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  r public.mfa_resets%rowtype;
+begin
+  if not public.is_service_role() then perform public.fn_err('permission_denied'); end if;
+  if p_reset_id is null then perform public.fn_err('invalid_input', 'reset_id'); end if;
+  if p_stage is null or p_stage not in ('rotate', 'sign_out') then perform public.fn_err('invalid_input', 'stage'); end if;
+  select * into r from public.mfa_resets m where m.id = p_reset_id for update;
+  if not found then perform public.fn_err('not_found'); end if;
+  if r.completed_at is not null then perform public.fn_err('invalid_state', 'reset_completed'); end if;
+  if r.claimed_at is null then perform public.fn_err('invalid_state', 'reset_not_claimed'); end if;
+  insert into public.admin_audit_log (platform_admin_id, restaurant_id, action, detail)
+  values (r.requested_by, r.restaurant_id, 'tenant_admin.mfa_reset_aborted',
+          jsonb_build_object('profile_id', r.user_id, 'reset_id', r.id, 'stage', p_stage, 'signed_out', r.signed_out_at is not null));
+  return jsonb_build_object('reset_id', r.id, 'profile_id', r.user_id, 'stage', p_stage);
 end;
 $$;
 
@@ -709,5 +753,7 @@ revoke all on function public.fn_platform_claim_mfa_reset(uuid) from public, ano
 grant execute on function public.fn_platform_claim_mfa_reset(uuid) to service_role;
 revoke all on function public.fn_platform_mfa_reset_sign_out(uuid) from public, anon, authenticated, service_role;
 grant execute on function public.fn_platform_mfa_reset_sign_out(uuid) to service_role;
-revoke all on function public.fn_platform_complete_mfa_reset(uuid) from public, anon, authenticated, service_role;
-grant execute on function public.fn_platform_complete_mfa_reset(uuid) to service_role;
+revoke all on function public.fn_platform_complete_mfa_reset(uuid, integer) from public, anon, authenticated, service_role;
+grant execute on function public.fn_platform_complete_mfa_reset(uuid, integer) to service_role;
+revoke all on function public.fn_platform_mfa_reset_abort(uuid, text) from public, anon, authenticated, service_role;
+grant execute on function public.fn_platform_mfa_reset_abort(uuid, text) to service_role;

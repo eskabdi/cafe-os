@@ -4,7 +4,7 @@
 -- service step), cross-tenant (not_found, no oracle), validation, the single-use reset row (expired / completed / superseded), audit
 -- rows with the right actor and reason, sessions that survived the reset, finishing a half-done reset.
 begin;
-select plan(86);
+select plan(92);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -161,6 +161,9 @@ select tests.as_anon();
 select is(tests.run(format($q$select public.fn_platform_complete_mfa_reset(%L)$q$, (select v ->> 'reset_id' from _c where k = 'prep2'))),
           '42501|permission denied for function fn_platform_complete_mfa_reset|', 'anon cannot execute complete');
 select tests.authenticate_as_service_role();
+-- the Edge Function's steps before the factors go: claim (before the rotation), sign-out (after it); the completion requires both
+select lives_ok(format('select public.fn_platform_claim_mfa_reset(%L)', (select v ->> 'reset_id' from _c where k = 'prep2')), 'setup: prep2 claimed');
+select lives_ok(format('select public.fn_platform_mfa_reset_sign_out(%L)', (select v ->> 'reset_id' from _c where k = 'prep2')), 'setup: prep2 signed out');
 select is(tests.run(format($q$select public.fn_platform_complete_mfa_reset(%L)$q$, (select v ->> 'reset_id' from _c where k = 'prep2'))),
           'P0001|invalid_state|factors_remain', 'complete refuses while a verified factor remains');
 select is(tests.run('select public.fn_platform_complete_mfa_reset(gen_random_uuid())'), 'P0001|not_found|', 'an unknown reset id: not_found');
@@ -180,7 +183,7 @@ select tests.authenticate_as_service_role();
 insert into _c select 'done', public.fn_platform_complete_mfa_reset((select (v ->> 'reset_id')::uuid from _c where k = 'prep2'));
 select is((select v from _c where k = 'done'),
           jsonb_build_object('profile_id', (select a_admin from _f), 'sessions_revoked', 2, 'devices_revoked', 2),
-          'complete: {profile_id, sessions_revoked, devices_revoked}');
+          'complete: {profile_id, sessions_revoked, devices_revoked} (totals: the sign-out step + the completion)');
 select tests.clear_auth();
 select ok((select completed_at is not null from public.mfa_resets where id = (select (v ->> 'reset_id')::uuid from _c where k = 'prep2')), 'the reset row is consumed (completed_at)');
 select is((select count(*)::int from public.trusted_devices where user_id = (select a_admin from _f) and revoked_at is null), 0, 'every live trusted device is revoked');
@@ -256,6 +259,9 @@ do $$ begin perform tests.create_auth_user('00000000-0000-4000-8000-0000000000c8
 insert into public.platform_admins (id, full_name, role, is_active) values ('00000000-0000-4000-8000-0000000000c8', 'Second Super', 'platform_super_admin', true);
 select tests.aal2('00000000-0000-4000-8000-0000000000c8');
 insert into _c select 'prepB', public.fn_platform_prepare_mfa_reset((select b from _f), (select b_admin from _f), 'lost phone B');
+select tests.authenticate_as_service_role();
+select lives_ok(format('select public.fn_platform_claim_mfa_reset(%L)', (select v ->> 'reset_id' from _c where k = 'prepB')), 'setup: prepB claimed');
+select lives_ok(format('select public.fn_platform_mfa_reset_sign_out(%L)', (select v ->> 'reset_id' from _c where k = 'prepB')), 'setup: prepB signed out');
 select tests.clear_auth();
 update public.platform_admins set is_active = false where id = '00000000-0000-4000-8000-0000000000c8';
 select tests.authenticate_as_service_role();
@@ -272,6 +278,10 @@ select is((select platform_admin_id::text || '|' || restaurant_id::text || '|' |
            where action = 'tenant_admin.mfa_reset_incomplete'),
           '00000000-0000-4000-8000-0000000000c8|' || (select b::text from _f) || '|permission_denied', 'admin_audit_log: tenant_admin.mfa_reset_incomplete persists');
 select ok((select completed_at is null from public.mfa_resets where id = (select (v ->> 'reset_id')::uuid from _c where k = 'prepB')), 'the refused reset is not completed');
+-- the claimed, refused attempt blocks every other claim of the user until it expires (5 min): age it
+update public.mfa_resets set created_at = now() - interval '10 minutes', expires_at = now() - interval '5 minutes',
+                             claimed_at = now() - interval '9 minutes', signed_out_at = now() - interval '9 minutes'
+ where id = (select (v ->> 'reset_id')::uuid from _c where k = 'prepB');
 select tests.aal2((select su from _f));
 select is((select (e ->> 'mfa_enrolled') || '|' || (e ->> 'mfa_reset_pending')
            from jsonb_array_elements(public.fn_platform_get_tenant((select b from _f)) -> 'tenant_admins') e),
@@ -281,8 +291,14 @@ select is((select v -> 'factor_ids' from _c where k = 'finishB'), '[]'::jsonb, '
 select is((select detail ->> 'finishing' from public.admin_audit_log where action = 'tenant_admin.mfa_reset_requested' and detail ->> 'reason' = 'finish the reset of B'),
           'true', 'the request is audited as finishing a half-done reset');
 select tests.authenticate_as_service_role();
+select lives_ok(format('select public.fn_platform_claim_mfa_reset(%L)', (select v ->> 'reset_id' from _c where k = 'finishB')), 'setup: finishB claimed');
+select lives_ok(format('select public.fn_platform_mfa_reset_sign_out(%L)', (select v ->> 'reset_id' from _c where k = 'finishB')), 'setup: finishB signed out');
 select is(public.fn_platform_complete_mfa_reset((select (v ->> 'reset_id')::uuid from _c where k = 'finishB')) - 'sessions_revoked' - 'devices_revoked',
           jsonb_build_object('profile_id', (select b_admin from _f)), 'the finishing reset completes');
+select tests.clear_auth();
+-- give the refused first attempt its 5 minutes back: it is spent by the completion, not merely by its age
+update public.mfa_resets set expires_at = now() + interval '5 minutes' where id = (select (v ->> 'reset_id')::uuid from _c where k = 'prepB');
+select tests.authenticate_as_service_role();
 select is(tests.run(format($q$select public.fn_platform_complete_mfa_reset(%L)$q$, (select v ->> 'reset_id' from _c where k = 'prepB'))),
           'P0001|invalid_state|reset_superseded', 'the refused first attempt can no longer be used');
 select tests.aal2((select su from _f));

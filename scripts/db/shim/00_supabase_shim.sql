@@ -47,6 +47,7 @@ create table auth.users (
   email varchar(255),
   encrypted_password varchar(255),
   email_confirmed_at timestamptz,
+  last_sign_in_at timestamptz,   -- GoTrue stamps it on every sign-in (0036 recovery resend reads it)
   confirmation_token varchar(255) default '',
   recovery_token varchar(255) default '',
   email_change_token_new varchar(255) default '',

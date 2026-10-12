@@ -62,7 +62,7 @@ select is((select string_agg(name, ',' order by name) from _fn
                           -- 0036 MFA reset (service-role completion step, post-reset session rule, half-done reset)
                           'fn_platform_complete_mfa_reset', 'fn_session_after_mfa_reset', 'fn_mfa_reset_pending',
                           'fn_platform_claim_mfa_reset', 'fn_platform_mfa_reset_sign_out', 'fn_mfa_reset_revoke_access',
-                          'fn_mfa_reset_target_check', 'fn_mfa_recovery_resend_available')
+                          'fn_mfa_reset_target_check', 'fn_mfa_recovery_resend_available', 'fn_platform_mfa_reset_abort')
              and (has_function_privilege('authenticated', oid, 'execute') or has_function_privilege('anon', oid, 'execute'))),
           null, 'PIN, audit, seeding, counter, idempotency, session-timer, step-up, stock-ledger and order-pipeline internal functions are not client-executable');
 select is((select string_agg(name, ',' order by name) from _fn where prorettype = 'trigger'::regtype
@@ -83,17 +83,18 @@ select is((select string_agg(name, ',' order by name) from _fn
 -- Phase 3B: every platform RPC goes through the single aal2 gate, and nobody but authenticated (never anon / service_role) can call one
 select is((select string_agg(name, ',' order by name) from _fn where name like 'fn\_platform\_%' and name not in ('fn_platform_guard', 'fn_platform_mfa_satisfied', 'fn_platform_tenant_json', 'fn_platform_reason',
                                                                                       'fn_platform_complete_mfa_reset', 'fn_platform_claim_mfa_reset',
-                                                                                      'fn_platform_mfa_reset_sign_out' /* 0036: service_role steps, is_service_role() */)
+                                                                                      'fn_platform_mfa_reset_sign_out', 'fn_platform_mfa_reset_abort' /* 0036: service_role steps, is_service_role() */)
            and prosrc !~ 'perform public\.fn_platform_guard\(\)|:= public\.fn_platform_guard\(\)'), null, 'every fn_platform_* RPC calls fn_platform_guard()');
 select is((select string_agg(name, ',' order by name) from _fn where name like 'fn\_platform\_%'
            and (has_function_privilege('anon', oid, 'execute') or has_function_privilege('service_role', oid, 'execute'))),
-          'fn_platform_claim_mfa_reset,fn_platform_complete_mfa_reset,fn_platform_mfa_reset_sign_out',
-          'no platform RPC is executable by anon or service_role (except the 0036 service-role claim / sign-out / completion steps of the MFA reset)');
+          'fn_platform_claim_mfa_reset,fn_platform_complete_mfa_reset,fn_platform_mfa_reset_abort,fn_platform_mfa_reset_sign_out',
+          'no platform RPC is executable by anon or service_role (except the 0036 service-role claim / sign-out / abort / completion steps of the MFA reset)');
 select is((select string_agg(name, ',' order by name) from _fn where has_function_privilege('service_role', oid, 'execute') and name in
            ('fn_attach_tenant_admin_invitation', 'fn_abort_tenant_admin_invitation', 'fn_ops_register_platform_admin', 'fn_plan_tenant_admin_invitation_delivery',
             'fn_record_tenant_admin_invitation_sent', 'fn_tenant_admin_invitation_cleanup_user', 'fn_tenant_logo_for_slug', 'fn_ops_purge_expired_cancelled_tenants',
-            'fn_admin_reset_user_pin', 'fn_platform_complete_mfa_reset', 'fn_platform_claim_mfa_reset', 'fn_platform_mfa_reset_sign_out')),
-          'fn_abort_tenant_admin_invitation,fn_admin_reset_user_pin,fn_attach_tenant_admin_invitation,fn_ops_purge_expired_cancelled_tenants,fn_ops_register_platform_admin,fn_plan_tenant_admin_invitation_delivery,fn_platform_claim_mfa_reset,fn_platform_complete_mfa_reset,fn_platform_mfa_reset_sign_out,fn_record_tenant_admin_invitation_sent,fn_tenant_admin_invitation_cleanup_user,fn_tenant_logo_for_slug',
+            'fn_admin_reset_user_pin', 'fn_platform_complete_mfa_reset', 'fn_platform_claim_mfa_reset', 'fn_platform_mfa_reset_sign_out',
+            'fn_platform_mfa_reset_abort')),
+          'fn_abort_tenant_admin_invitation,fn_admin_reset_user_pin,fn_attach_tenant_admin_invitation,fn_ops_purge_expired_cancelled_tenants,fn_ops_register_platform_admin,fn_plan_tenant_admin_invitation_delivery,fn_platform_claim_mfa_reset,fn_platform_complete_mfa_reset,fn_platform_mfa_reset_abort,fn_platform_mfa_reset_sign_out,fn_record_tenant_admin_invitation_sent,fn_tenant_admin_invitation_cleanup_user,fn_tenant_logo_for_slug',
           'the invitation binding and Super Admin registration are service_role only (Edge Function / ops)');
 -- a definer function must never hand rows of tenant tables to a client (it would bypass RLS)
 select is((select string_agg(name, ',' order by name) from _fn

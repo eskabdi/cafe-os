@@ -14,7 +14,7 @@
 --   * audit integrity: rows not forgeable / editable / deletable (client, service_role, owner), reason in both trails, actor from the
 --     reset row, no cross-tenant visibility, admin_audit_log invisible to tenant users
 begin;
-select plan(101);
+select plan(106);
 
 create temp table _f on commit drop as
 select tests.tenant_id('central-cafe') a, tests.tenant_id('second-cafe') b,
@@ -116,7 +116,7 @@ select is((select string_agg(r || ':' || p, ',') from unnest(array['anon', 'auth
 select is((select string_agg(r || ':' || f, ',') from unnest(array['anon', 'authenticated']) r,
              unnest(array['public.fn_session_after_mfa_reset()', 'public.fn_mfa_reset_pending(uuid)', 'public.fn_plan_normalize(jsonb)',
                           'public.fn_write_admin_audit(text,uuid,jsonb)', 'public.fn_write_audit(text,jsonb,uuid)',
-                          'public.fn_platform_complete_mfa_reset(uuid)']) f
+                          'public.fn_platform_complete_mfa_reset(uuid,integer)', 'public.fn_platform_mfa_reset_abort(uuid,text)']) f
            where has_function_privilege(r, f, 'EXECUTE')), null,
           'internal predicates / audit writers / the service step: not executable by anon or authenticated (no reset-state oracle, no forged audit)');
 select ok(not exists (select 1 from pg_publication_tables where tablename = 'mfa_resets'), 'mfa_resets is not streamed by any publication (Realtime)');
@@ -191,8 +191,12 @@ do $$ begin
 end $$;
 select is(tests.run(format($q$select public.fn_platform_complete_mfa_reset(%L)$q$, tests.u49('r_sel1'))),
           '42501|permission denied for function fn_platform_complete_mfa_reset|', 'a forged service_role claim on an authenticated connection: EXECUTE denied');
+-- the Edge Function claims r_sel1 (before the rotation) and runs the sign-out step (after it)
+select tests.authenticate_as_service_role();
+select lives_ok(format('select public.fn_platform_claim_mfa_reset(%L)', tests.u49('r_sel1')), 'setup: r_sel1 claimed');
+select lives_ok(format('select public.fn_platform_mfa_reset_sign_out(%L)', tests.u49('r_sel1')), 'setup: r_sel1 signed out');
 select tests.clear_auth();
--- GoTrue deletes selam's factors (the Edge Function's step 3)
+-- GoTrue deletes selam's factors (the Edge Function's step 6)
 delete from auth.mfa_factors where user_id = (select a_admin from _f);
 select tests.authenticate_as_service_role();
 insert into _c select 'done_sel1', public.fn_platform_complete_mfa_reset(tests.u49('r_sel1'));
@@ -287,10 +291,16 @@ select lives_ok('select public.fn_require_recent_totp()', 'control: the fresh se
 -- ═════════ 7. complete: target deactivated between prepare and complete ═════════
 -- independent of section 5: if the old session managed to deactivate dawit there, he is active again here
 update public.profiles set is_active = true where id = (select a_admin2 from _f) and not is_active;
-insert into _c select 'n_sess_a2', to_jsonb((select count(*) from auth.sessions where user_id = (select a_admin2 from _f)));
 select tests.c49c((select su from _f), tests.u49('sid_su'), 'aal2', tests.amr49(now()));
 insert into _c select 'r_dawit', public.fn_platform_prepare_mfa_reset((select a from _f), (select a_admin2 from _f), 'lost phone dawit');
+select tests.authenticate_as_service_role();
+select lives_ok(format('select public.fn_platform_claim_mfa_reset(%L)', tests.u49('r_dawit')), 'setup: r_dawit claimed');
+select lives_ok(format('select public.fn_platform_mfa_reset_sign_out(%L)', tests.u49('r_dawit')), 'setup: r_dawit signed out');
 select tests.clear_auth();
+-- a session that appeared after the sign-out step (e.g. a refresh): the refused completion must not touch it
+insert into auth.sessions (id, user_id, created_at, updated_at) select gen_random_uuid(), a_admin2, now(), now() from _f;
+insert into _c select 'n_sess_a2', to_jsonb((select count(*) from auth.sessions where user_id = (select a_admin2 from _f)));
+select is((select (v #>> '{}')::int from _c where k = 'n_sess_a2'), 1, 'control: dawit holds a session at completion time');
 delete from auth.mfa_factors where user_id = (select a_admin2 from _f);
 update public.profiles set is_active = false where id = (select a_admin2 from _f);
 select tests.authenticate_as_service_role();
