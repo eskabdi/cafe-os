@@ -1,8 +1,10 @@
 # Notes: future TODO tasks
 
-Owner requests recorded on 2026-10-12. **Not implemented yet. Do not start without picking them up as a planned task.**
+Owner requests recorded on 2026-10-12. Task 1 is done; tasks 2 and 3 are **not implemented yet. Do not start them without picking them up as a planned task.**
 
 ## 1. Orders page scoped to the signed-in user
+
+**Done 2026-10-12** (migration `20261003004100_orders_own_scope.sql`, pgTAP `53_orders_own_scope`, E2E `orders-own-scope.spec.ts`): scope decided by `orders.view_all` / new `orders.cancel_any`, see `docs/architecture/rls-matrix.md`.
 
 - The orders page shows only the signed-in user's orders, filtered by user id.
   - A waiter can see and cancel **only their own orders**.

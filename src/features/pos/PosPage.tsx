@@ -3,16 +3,27 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Minus, Plus, Search, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/select'
 import { useAuth } from '@/features/auth'
 import { EmptyState, ErrorState, PageSkeleton } from '@/features/shell/states'
-import { addItem, itemCount, previewSubtotal, removeLine, setNote, setQty, toPayload, type Cart } from '@/lib/domain/cart'
+import {
+  addItem,
+  itemCount,
+  previewSubtotal,
+  removeLine,
+  setNote,
+  setQty,
+  toPayload,
+  type Cart,
+} from '@/lib/domain/cart'
 import { formatEtb } from '@/lib/domain/decimal'
 import { fetchMenuItems, menuItemsKey, subscribeToMenu } from '@/lib/supabase/menu'
 import { errorCode } from '@/lib/supabase/menu-inventory-errors'
 import {
   ORDER_TYPES,
+  cancelOrder,
   fetchDayOrders,
   fetchOpenDay,
   fetchTables,
@@ -26,15 +37,28 @@ import {
 import { categoriesKey, fetchCategories } from '@/lib/supabase/reference-data'
 import { orderErrorMessage } from './order-errors'
 
-const ORDER_TYPE_LABEL: Record<OrderType, string> = { 'dine-in': 'Dine-in', takeaway: 'Takeaway', delivery: 'Delivery' }
+const ORDER_TYPE_LABEL: Record<OrderType, string> = {
+  'dine-in': 'Dine-in',
+  takeaway: 'Takeaway',
+  delivery: 'Delivery',
+}
 const newKey = () => crypto.randomUUID()
 /**
  * Answers that prove the order was NOT created (the database refused it). Anything else (network, timeout, gateway, unknown) is
  * ambiguous: the server MAY have committed it, so the same key must be resent before anything changes.
  */
 const DEFINITIVE = new Set([
-  'day_closed', 'insufficient_stock', 'item_unavailable', 'idempotency_conflict', 'invalid_state', 'invalid_input',
-  'permission_denied', 'tenant_suspended', 'tenant_read_only', 'not_found', 'not_authenticated',
+  'day_closed',
+  'insufficient_stock',
+  'item_unavailable',
+  'idempotency_conflict',
+  'invalid_state',
+  'invalid_input',
+  'permission_denied',
+  'tenant_suspended',
+  'tenant_read_only',
+  'not_found',
+  'not_authenticated',
 ])
 
 /**
@@ -43,8 +67,14 @@ const DEFINITIVE = new Set([
  * One idempotency key per cart: a retry after a network error returns the same order, never a second one.
  */
 export function PosPage() {
-  const { context } = useAuth()
+  const { context, can, session } = useAuth()
   const rid = context?.restaurant?.id ?? ''
+  const uid = session?.user.id ?? ''
+  // scope by PERMISSION (never by role name): without orders.view_all the list is the signed-in user's own orders. UX only:
+  // orders_select (RLS) and fn_cancel_order enforce the same rule server-side.
+  const mineOnly = !can('orders.view_all')
+  const mayCancel = (createdBy: string | null | undefined) =>
+    can('orders.cancel') && (can('orders.cancel_any') || (Boolean(uid) && createdBy === uid))
   const qc = useQueryClient()
   // the open day is re-read from the server (focus, retry, day_closed answers): a day opened after sign-in unlocks sending
   const openDayQuery = useQuery({
@@ -57,11 +87,15 @@ export function PosPage() {
   })
   const openDay = openDayQuery.data ?? null
   const menu = useQuery({ queryKey: menuItemsKey(rid), queryFn: fetchMenuItems, enabled: Boolean(rid) })
-  const categories = useQuery({ queryKey: categoriesKey(rid), queryFn: fetchCategories, enabled: Boolean(rid) })
+  const categories = useQuery({
+    queryKey: categoriesKey(rid),
+    queryFn: fetchCategories,
+    enabled: Boolean(rid),
+  })
   const tables = useQuery({ queryKey: ordersKeys.tables(rid), queryFn: fetchTables, enabled: Boolean(rid) })
   const dayOrders = useQuery({
-    queryKey: [...ordersKeys.mine(rid), openDay?.id ?? ''],
-    queryFn: () => fetchDayOrders(openDay?.id ?? ''),
+    queryKey: [...ordersKeys.mine(rid), openDay?.id ?? '', mineOnly ? uid : 'all'],
+    queryFn: () => fetchDayOrders(openDay?.id ?? '', mineOnly ? uid : null),
     enabled: Boolean(rid && openDay),
   })
   const [cart, setCart] = useState<Cart>([])
@@ -71,6 +105,7 @@ export function PosPage() {
   const [tableId, setTableId] = useState('')
   const [note, setOrderNote] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [confirmCancel, setConfirmCancel] = useState<{ id: string; orderNo: string } | null>(null)
   const [last, setLast] = useState<SubmitResult | null>(null)
   // true after a send whose outcome is unknown: the cart and its fields are frozen until the SAME key gets a definitive answer
   const [unsure, setUnsure] = useState(false)
@@ -83,7 +118,10 @@ export function PosPage() {
       if (table === 'menu_items') void qc.invalidateQueries({ queryKey: menuItemsKey(rid) })
       if (table === 'categories') void qc.invalidateQueries({ queryKey: categoriesKey(rid) })
     })
-    const offOrders = subscribeToOrders(rid, () => void qc.invalidateQueries({ queryKey: ordersKeys.mine(rid) }))
+    const offOrders = subscribeToOrders(
+      rid,
+      () => void qc.invalidateQueries({ queryKey: ordersKeys.mine(rid) }),
+    )
     return () => {
       offMenu()
       offOrders()
@@ -121,7 +159,21 @@ export function PosPage() {
     },
   })
 
-  const activeCategories = useMemo(() => (categories.data ?? []).filter((c) => c.is_active), [categories.data])
+  const cancel = useMutation({
+    mutationFn: (orderId: string) => cancelOrder(orderId, null),
+    onSuccess: (r) => {
+      toast.success(`Order ${r.order_no} cancelled`)
+      void qc.invalidateQueries({ queryKey: ordersKeys.mine(rid) })
+      void qc.invalidateQueries({ queryKey: ordersKeys.tables(rid) })
+    },
+    onError: (e) => toast.error(orderErrorMessage(e)),
+    onSettled: () => setConfirmCancel(null),
+  })
+
+  const activeCategories = useMemo(
+    () => (categories.data ?? []).filter((c) => c.is_active),
+    [categories.data],
+  )
   const activeCategoryIds = useMemo(() => new Set(activeCategories.map((c) => c.id)), [activeCategories])
   const items = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -155,11 +207,18 @@ export function PosPage() {
 
   if (menu.isPending || categories.isPending) return <PageSkeleton label="Loading the menu" />
   if (menu.isError || categories.isError)
-    return <ErrorState title="The menu could not be loaded" onRetry={() => void Promise.all([menu.refetch(), categories.refetch()])} />
+    return (
+      <ErrorState
+        title="The menu could not be loaded"
+        onRetry={() => void Promise.all([menu.refetch(), categories.refetch()])}
+      />
+    )
 
   // while the tables load a dine-in order waits for them; if they cannot load, the server accepts an order without a table
-  const needsTable = orderType === 'dine-in' && !tables.isError && (tables.isPending || (tables.data?.length ?? 0) > 0)
-  const canSubmit = Boolean(openDay) && cart.length > 0 && !submit.isPending && (!needsTable || Boolean(tableId))
+  const needsTable =
+    orderType === 'dine-in' && !tables.isError && (tables.isPending || (tables.data?.length ?? 0) > 0)
+  const canSubmit =
+    Boolean(openDay) && cart.length > 0 && !submit.isPending && (!needsTable || Boolean(tableId))
 
   return (
     <div className="grid gap-4 p-4 lg:grid-cols-[1fr_380px] lg:p-6">
@@ -168,16 +227,32 @@ export function PosPage() {
           New order
         </h1>
         {!openDay && (
-          <p role="alert" className="rounded-md border border-status-warning bg-status-warning/10 p-3 text-sm text-ink">
+          <p
+            role="alert"
+            className="rounded-md border border-status-warning bg-status-warning/10 p-3 text-sm text-ink"
+          >
             No business day is open. Orders can be prepared but not sent until a manager opens the day.{' '}
-            <button type="button" className="font-medium underline" onClick={() => void openDayQuery.refetch()}>
+            <button
+              type="button"
+              className="font-medium underline"
+              onClick={() => void openDayQuery.refetch()}
+            >
               Check again
             </button>
           </p>
         )}
         <div className="relative">
-          <Search aria-hidden="true" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input aria-label="Search the menu" className="pl-9" value={search} maxLength={60} onChange={(e) => setSearch(e.target.value)} />
+          <Search
+            aria-hidden="true"
+            className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+          />
+          <Input
+            aria-label="Search the menu"
+            className="pl-9"
+            value={search}
+            maxLength={60}
+            onChange={(e) => setSearch(e.target.value)}
+          />
         </div>
         <div role="group" aria-label="Categories" className="flex flex-wrap gap-2">
           {[{ id: 'all', name: 'All', color: null as string | null }, ...activeCategories].map((c) => (
@@ -216,7 +291,10 @@ export function PosPage() {
         )}
       </section>
 
-      <aside aria-labelledby="pos-cart" className="space-y-4 rounded-card border border-line bg-white p-4 lg:sticky lg:top-[calc(var(--shell-header-h,53px)+1rem)] lg:self-start">
+      <aside
+        aria-labelledby="pos-cart"
+        className="space-y-4 rounded-card border border-line bg-white p-4 lg:sticky lg:top-[calc(var(--shell-header-h,53px)+1rem)] lg:self-start"
+      >
         <h2 id="pos-cart" className="text-lg font-semibold text-ink">
           Order ({itemCount(cart)})
         </h2>
@@ -264,16 +342,31 @@ export function PosPage() {
               <li key={l.key} className="space-y-2 py-2">
                 <div className="flex items-center gap-2">
                   <span className="min-w-0 flex-1 truncate font-medium text-ink">{l.name}</span>
-                  <Button size="icon" variant="ghost" aria-label={`One less ${l.name}`} onClick={() => change(setQty(cart, l.key, l.qty - 1))}>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    aria-label={`One less ${l.name}`}
+                    onClick={() => change(setQty(cart, l.key, l.qty - 1))}
+                  >
                     <Minus aria-hidden="true" className="h-4 w-4" />
                   </Button>
                   <span className="w-6 text-center tabular-nums" aria-label={`Quantity of ${l.name}`}>
                     {l.qty}
                   </span>
-                  <Button size="icon" variant="ghost" aria-label={`One more ${l.name}`} onClick={() => change(setQty(cart, l.key, l.qty + 1))}>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    aria-label={`One more ${l.name}`}
+                    onClick={() => change(setQty(cart, l.key, l.qty + 1))}
+                  >
                     <Plus aria-hidden="true" className="h-4 w-4" />
                   </Button>
-                  <Button size="icon" variant="ghost" aria-label={`Remove ${l.name}`} onClick={() => change(removeLine(cart, l.key))}>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    aria-label={`Remove ${l.name}`}
+                    onClick={() => change(removeLine(cart, l.key))}
+                  >
                     <Trash2 aria-hidden="true" className="h-4 w-4" />
                   </Button>
                 </div>
@@ -321,33 +414,63 @@ export function PosPage() {
             </button>
           </p>
         )}
-        {needsTable && !tableId && cart.length > 0 && <p className="text-xs text-muted-foreground">Choose a table for a dine-in order.</p>}
+        {needsTable && !tableId && cart.length > 0 && (
+          <p className="text-xs text-muted-foreground">Choose a table for a dine-in order.</p>
+        )}
         {last && (
           <div className="rounded-md bg-status-success/10 p-3 text-sm text-ink" data-testid="pos-last-order">
             <p className="font-semibold">Order {last.order_no} sent</p>
             {isFullOrder(last) && (
               <p className="tabular-nums">
-                Subtotal {formatEtb(last.subtotal)} · VAT {formatEtb(last.vat_amount)} · Total {formatEtb(last.total)}
+                Subtotal {formatEtb(last.subtotal)} · VAT {formatEtb(last.vat_amount)} · Total{' '}
+                {formatEtb(last.total)}
               </p>
             )}
           </div>
         )}
         {openDay && dayOrders.isSuccess && dayOrders.data.length > 0 && (
           <details>
-            <summary className="cursor-pointer text-sm font-medium text-ink">Today’s orders ({dayOrders.data.length})</summary>
-            <ul className="mt-2 space-y-1 text-sm">
+            <summary className="cursor-pointer text-sm font-medium text-ink">
+              {mineOnly ? 'My orders' : 'Today’s orders'} ({dayOrders.data.length})
+            </summary>
+            <ul className="mt-2 space-y-1 text-sm" aria-label={mineOnly ? 'My orders' : 'Today’s orders'}>
               {dayOrders.data.map((o) => (
-                <li key={o.id} className="flex justify-between gap-2">
+                <li key={o.id} className="flex items-center justify-between gap-2">
                   <span>
                     {o.order_no}
                     {o.table_label_snapshot ? ` · ${o.table_label_snapshot}` : ''} · {o.status}
                   </span>
-                  <span className="tabular-nums">{formatEtb(o.total)}</span>
+                  <span className="flex items-center gap-2">
+                    <span className="tabular-nums">{formatEtb(o.total)}</span>
+                    {/* the server cancels only an untouched, unpaid order; it decides (fn_cancel_order) */}
+                    {mayCancel(o.created_by) && o.status === 'submitted' && o.payment_status === 'unpaid' && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={cancel.isPending}
+                        onClick={() => setConfirmCancel({ id: o.id, orderNo: o.order_no })}
+                        aria-label={`Cancel order ${o.order_no}`}
+                      >
+                        Cancel
+                      </Button>
+                    )}
+                  </span>
                 </li>
               ))}
             </ul>
           </details>
         )}
+        <ConfirmDialog
+          open={confirmCancel !== null}
+          title={`Cancel order ${confirmCancel?.orderNo ?? ''}?`}
+          description="The whole order is cancelled at every station and its stock is returned. This cannot be undone."
+          confirmLabel="Cancel the order"
+          busy={cancel.isPending}
+          onConfirm={() => {
+            if (confirmCancel) cancel.mutate(confirmCancel.id)
+          }}
+          onCancel={() => setConfirmCancel(null)}
+        />
       </aside>
     </div>
   )
