@@ -46,6 +46,29 @@ platform_admins 3, platform_invoices 4, profiles 2, qr_credentials 1, recipe_lin
 role_station_access 1, roles 4, stations 4, stock_movements 1, subscriptions 4, table_areas 4, table_sessions 1, tables 4, user_notifications 1, vouchers 1;
 profile_secrets, tenant_counters, idempotency_keys, tenant_admin_invitations, platform_backup_runs, mfa_resets: 0 (deny all).
 
+Report RPCs (0037). No new table and no policy change; the one schema change is `order_items.category_id_snapshot` (composite
+FK to `categories` ON DELETE RESTRICT) plus `category_name_snapshot`. Both are filled by the BEFORE INSERT trigger
+`fn_order_item_category_snapshot`, frozen on UPDATE and covered by the existing `order_items` policies. The RPCs are SECURITY DEFINER, so
+they bypass the table policies above and enforce the equivalent rules themselves:
+
+| RPC | caller check | tenant scope | field-level rule |
+|---|---|---|---|
+| `fn_report(p_from_day_no, p_to_day_no)` | T + `reports.view` (past_due readable; suspended/cancelled `tenant_suspended`; platform admin `permission_denied`) | every subquery filtered by `fn_tenant_status_guard(false)` | per-section gating, see below |
+| `fn_report_period(p_from, p_to)` | T + `reports.view` (same status rules) | same; days chosen by the tenant-local `opened_at` date | per-section gating, see below |
+| `fn_log_report_export(report, from, to, format)` | T + `reports.view` + `reports.export` + the section permission of that report type; past_due allowed (read action) | tenant of the audit row = caller's (`fn_write_audit`) | writes `audit_logs` `report.exported` |
+| `fn_dashboard()` | T + `dashboard.view` | same | status counts floor-wide; `recent` = `fn_order_visible` rule with permissions hoisted; money keys and `recent[].total` only with `reports.view` AND `payments.view`; `low_stock_count` only with `inventory.view`, station-scoped as `ingredients_select` |
+| `fn_report_days`, `fn_report_light`, `fn_report_build` | internal: no EXECUTE for anon / authenticated / service_role | caller-supplied tenant id, so never client-callable | n/a |
+
+Per-section gating (`fn_report_build`): a withheld section is JSON `null` and its key is listed in `restricted`.
+
+| section key | needs (besides `reports.view`) | fields withheld |
+|---|---|---|
+| `payments` | `payments.view` | `kpis.gross_collected`, `kpis.cash_collected`, `kpis.net_position`, `by_payment_method`, `by_day[].collected`, `reversals` |
+| `expenses` | `expenses.view` or `expenses.manage` | `kpis.expenses_total`, `kpis.net_position`, `by_expense_category`, `by_day[].expenses` |
+| `installments` | `vouchers.view` | `kpis.vouchers_outstanding`, `kpis.vouchers_overdue`, `installments` |
+| `inventory` | `inventory.view`; rows limited to `station_id = any(current_station_ids())` unless `inventory.adjust` / `inventory.receive` (the `ingredients_select` / `stock_movements_select` predicate) | `inventory.low_stock`, `inventory.consumption` |
+| `staff` | `reports.staff` | `by_waiter` |
+
 ## Migration 0010 hardening (found by the adversarial suite, `supabase/tests/database/1*_*.test.sql`)
 - **Realtime**: `qr_credentials` was removed from `supabase_realtime`. postgres_changes streams whole rows (column privileges do not apply),
   which would have sent `token_hash` to subscribers. Accepted residual: `orders.public_token_hash` (sha256 of a random tracking token) is still

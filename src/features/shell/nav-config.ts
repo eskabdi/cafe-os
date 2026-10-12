@@ -1,4 +1,5 @@
 import {
+  BarChart3,
   CalendarCheck,
   ChefHat,
   CreditCard,
@@ -38,6 +39,7 @@ export const MODULE_NAV: readonly ModuleNavItem[] = [
     group: 'operations',
     icon: LayoutDashboard,
     summary: 'Live sales and activity for the open business day.',
+    implemented: true,
   },
   {
     id: 'pos',
@@ -89,6 +91,16 @@ export const MODULE_NAV: readonly ModuleNavItem[] = [
     group: 'management',
     icon: Warehouse,
     summary: 'Ingredients, stock levels and movements.',
+    implemented: true,
+  },
+  {
+    id: 'reports',
+    label: 'Reports',
+    segment: 'reports',
+    permission: 'reports.view',
+    group: 'management',
+    icon: BarChart3,
+    summary: 'Sales, payments, categories, staff, expenses and stock by business day.',
     implemented: true,
   },
   {

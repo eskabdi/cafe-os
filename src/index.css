@@ -78,3 +78,80 @@
     display: none !important;
   }
 }
+
+/* Report printing (ReportPrintLayout, portalled to <body> only while a print job runs): the app is removed from the page
+   flow so it adds no blank pages; tables repeat their header row and rows do not split across pages. */
+@media screen {
+  .report-print {
+    display: none;
+  }
+}
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+  body:has(> .report-print) > #root {
+    display: none !important;
+  }
+  .report-print,
+  .report-print * {
+    visibility: visible !important;
+  }
+  .report-print {
+    display: block;
+    color: #000;
+    font-size: 10pt;
+  }
+  .report-print-header {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #000;
+  }
+  .report-print-logo {
+    width: 48px;
+    height: 48px;
+    object-fit: contain;
+  }
+  .report-print-restaurant {
+    font-size: 12pt;
+    font-weight: 600;
+  }
+  .report-print h1 {
+    font-size: 14pt;
+    font-weight: 600;
+  }
+  .report-print table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 12px;
+  }
+  .report-print caption {
+    text-align: left;
+    font-weight: 600;
+    padding: 4px 0;
+  }
+  .report-print thead {
+    display: table-header-group;
+  }
+  .report-print tr {
+    break-inside: avoid;
+  }
+  .report-print th,
+  .report-print td {
+    border-bottom: 1px solid #999;
+    padding: 3px 6px;
+    text-align: left;
+    font-weight: normal;
+  }
+  .report-print thead th {
+    font-weight: 600;
+  }
+  .report-print .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+}

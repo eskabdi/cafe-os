@@ -5,8 +5,34 @@ import {
   formatEthiopianDateTime,
   formatEthiopianTime,
   formatInternationalDateTime,
+  gregorianToJdn,
+  jdnToGregorian,
   toEthiopianDate,
 } from './ethiopian-time'
+
+describe('Julian day numbers (shared by the calendar and report periods)', () => {
+  it('matches known JDNs', () => {
+    expect(gregorianToJdn(2000, 1, 1)).toBe(2451545)
+    expect(gregorianToJdn(1970, 1, 1)).toBe(2440588)
+    expect(gregorianToJdn(8, 8, 27)).toBe(1724221) // the Amete Mihret epoch (Meskerem 1, year 1)
+  })
+
+  it('jdnToGregorian is the exact inverse across leap days and centuries', () => {
+    for (const [y, m, d] of [
+      [2024, 2, 29],
+      [2023, 12, 31],
+      [1900, 3, 1],
+      [2000, 2, 29],
+      [2026, 9, 11],
+    ] as const) {
+      expect(jdnToGregorian(gregorianToJdn(y, m, d))).toEqual({ year: y, month: m, day: d })
+    }
+    for (let j = 2451545; j < 2451545 + 1500; j += 1) {
+      const g = jdnToGregorian(j)
+      expect(gregorianToJdn(g.year, g.month, g.day)).toBe(j)
+    }
+  })
+})
 
 describe('Ethiopian calendar', () => {
   it('converts known dates', () => {

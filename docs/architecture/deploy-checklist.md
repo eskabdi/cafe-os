@@ -70,4 +70,4 @@ Do these BEFORE a hosted project takes real users. Items marked (manual) cannot 
     out of aal2 for good); if DELETE fails, resets report `sessions_revoked: null` and old sessions are not signed out (they stay shut out of MFA-gated
     actions only by the post-reset session rule). Fix the grants (`grant select, delete on auth.sessions to postgres`) before enabling the function.
     Deploy the migration and the function together (an older function build calls neither the claim nor the sign-out step).
-- Amharic fonts: put `Tayitu.ttf` and `Jiret.ttf` in `public/fonts/` (owner-supplied; `src/index.css` `.font-amharic`, CSP `font-src 'self'`).
+- Amharic fonts: `public/fonts/Tayitu.ttf` (primary) and `public/fonts/Jiret.ttf` (secondary) are in the repo (owner-supplied 2026-10-12). Used by `src/index.css` `.font-amharic` and the PDF export; CSP `font-src 'self'`.

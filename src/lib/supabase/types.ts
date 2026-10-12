@@ -852,6 +852,8 @@ export type Database = {
       }
       order_items: {
         Row: {
+          category_id_snapshot: string
+          category_name_snapshot: string
           created_at: string
           id: string
           item_status: string
@@ -871,6 +873,8 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          category_id_snapshot: string
+          category_name_snapshot: string
           created_at?: string
           id?: string
           item_status?: string
@@ -890,6 +894,8 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          category_id_snapshot?: string
+          category_name_snapshot?: string
           created_at?: string
           id?: string
           item_status?: string
@@ -909,6 +915,13 @@ export type Database = {
           updated_at?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "order_items_category_fk"
+            columns: ["restaurant_id", "category_id_snapshot"]
+            isOneToOne: false
+            referencedRelation: "categories"
+            referencedColumns: ["restaurant_id", "id"]
+          },
           {
             foreignKeyName: "order_items_menu_fk"
             columns: ["restaurant_id", "menu_item_id"]
@@ -2851,6 +2864,10 @@ export type Database = {
         }
         Returns: Json
       }
+      fn_dashboard: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
       fn_decide_pin_change: {
         Args: { p_profile_id: string; p_approve: boolean }
         Returns: Json
@@ -3074,6 +3091,15 @@ export type Database = {
       }
       fn_list_vouchers: {
         Args: { p_status?: string; p_limit?: number }
+        Returns: Json
+      }
+      fn_log_report_export: {
+        Args: {
+          p_report: string
+          p_from: string
+          p_to: string
+          p_format: string
+        }
         Returns: Json
       }
       fn_mark_notification_read: {
@@ -3433,6 +3459,26 @@ export type Database = {
       }
       fn_reject_pin_change: {
         Args: { p_profile_id: string }
+        Returns: Json
+      }
+      fn_report: {
+        Args: { p_from_day_no?: number; p_to_day_no?: number }
+        Returns: Json
+      }
+      fn_report_build: {
+        Args: { p_rid: string; p_days: string[] }
+        Returns: Json
+      }
+      fn_report_days: {
+        Args: { p_rid: string; p_from: number; p_to: number }
+        Returns: string[]
+      }
+      fn_report_light: {
+        Args: { p_rid: string; p_days: string[] }
+        Returns: Json
+      }
+      fn_report_period: {
+        Args: { p_from: string; p_to: string }
         Returns: Json
       }
       fn_require_aal2: {
