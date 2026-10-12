@@ -16,3 +16,13 @@ Owner requests recorded on 2026-10-12. **Not implemented yet. Do not start witho
   - **Station:** their own station's items, such as queue, in progress, ready, and preparation times.
 - Every other role keeps the current main dashboard unchanged.
 - Choose the dashboard by role permissions or station access. Never key it on role or station names: these are the dynamic tenant domains.
+
+## 3. Rename the product from "CafeOS" to "Asor"
+
+- Replace every "CafeOS" name, text and string with "Asor". This covers:
+  - UI copy, the page `<title>`, the PWA manifest (`name` and `short_name`), email templates, docs, the README and the specs where they refer to the product.
+  - Code identifiers and comments.
+- The new logo (`public/icons/*`, `favicon.ico`) is already in place.
+- Do the rename as one planned task:
+  - Do not rename database objects, migrations, storage paths or test container names (such as `cafeos-dbtest`) without a migration plan.
+  - Keep `docs/prototype/cafeos.html` archived under its original name.

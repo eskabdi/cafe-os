@@ -2,17 +2,27 @@ import type { ReactNode } from 'react'
 import { Outlet, useParams } from 'react-router-dom'
 import { useAuth } from '@/features/auth'
 import { tenantHomePath } from '@/features/pin-change/pin-paths'
-import { canOpenStation } from '@/lib/domain/navigation'
+import { canOpenModule, canOpenStation } from '@/lib/domain/navigation'
 import { ForbiddenState } from './states'
 
 // Route guards for the tenant shell. UX only: they decide what to render. RLS and the security-definer RPC checks are the
 // authorization ceiling, so a bypassed guard exposes no data.
 
 /** Renders the route only when the session context holds `permission`; otherwise an in-shell 403 page. */
-export function RequireNavPermission({ permission, children }: { permission: string; children?: ReactNode }) {
+export function RequireNavPermission({
+  permission,
+  anyOf,
+  children,
+}: {
+  permission: string
+  /** Further codes that also open the route (any of them), mirroring the nav entry's `alsoPermissions`. */
+  anyOf?: readonly string[]
+  children?: ReactNode
+}) {
   const { can, context } = useAuth()
   const slug = context?.restaurant?.slug ?? ''
-  if (!can(permission)) return <ForbiddenState homePath={tenantHomePath(slug)} />
+  if (!canOpenModule({ permission, alsoPermissions: anyOf }, can))
+    return <ForbiddenState homePath={tenantHomePath(slug)} />
   return <>{children ?? <Outlet />}</>
 }
 

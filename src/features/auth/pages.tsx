@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { PlatformLogo } from '@/components/brand/PlatformLogo'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { PLATFORM_SUPER_ADMIN, portalOf } from '@/lib/domain/portal'
@@ -11,9 +12,16 @@ import { useAuth } from './useAuth'
 
 /** The tenant's current logo (signed 10-minute URL from the public tenant-logo function); nothing when there is none. */
 function TenantLogo({ slug }: { slug: string }) {
-  const logo = useQuery({ queryKey: ['tenant-logo', slug], queryFn: () => fetchTenantLogoUrl(slug), staleTime: 5 * 60_000, retry: false })
+  const logo = useQuery({
+    queryKey: ['tenant-logo', slug],
+    queryFn: () => fetchTenantLogoUrl(slug),
+    staleTime: 5 * 60_000,
+    retry: false,
+  })
   if (!logo.data) return null
-  return <img src={logo.data} alt="" className="mx-auto h-16 w-16 object-contain" referrerPolicy="no-referrer" />
+  return (
+    <img src={logo.data} alt="" className="mx-auto h-16 w-16 object-contain" referrerPolicy="no-referrer" />
+  )
 }
 
 function AuthShell({
@@ -30,7 +38,7 @@ function AuthShell({
   return (
     <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-6 p-6">
       <header className="space-y-1 text-center">
-        {logoSlug && <TenantLogo slug={logoSlug} />}
+        {logoSlug ? <TenantLogo slug={logoSlug} /> : <PlatformLogo size={64} className="mx-auto" />}
         <p className="text-2xl font-bold text-ink">
           Cafe<span className="text-primary">OS</span>
         </p>
@@ -106,7 +114,10 @@ export function TenantAdminLoginPage() {
   return (
     <AuthShell title="Admin sign-in" subtitle="Owners and managers use email and password" logoSlug={slug}>
       {notice && (
-        <p role="status" className="mb-4 rounded-card border border-status-success/40 bg-status-success/10 p-3 text-sm text-ink">
+        <p
+          role="status"
+          className="mb-4 rounded-card border border-status-success/40 bg-status-success/10 p-3 text-sm text-ink"
+        >
           {notice}
         </p>
       )}
@@ -136,7 +147,11 @@ export function PlatformLoginPage() {
   // one account = one portal: a signed-in tenant identity is sent to its own Tenant Portal, never into this one
   const portal = portalOf(context)
   useRedirectIfAlreadySignedIn(
-    portal === 'platform' ? '/platform' : portal === 'tenant' && context?.restaurant ? `/r/${context.restaurant.slug}` : null,
+    portal === 'platform'
+      ? '/platform'
+      : portal === 'tenant' && context?.restaurant
+        ? `/r/${context.restaurant.slug}`
+        : null,
   )
   return (
     <AuthShell title="Platform sign-in" subtitle="Platform administrators only">

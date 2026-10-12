@@ -2,6 +2,7 @@ import { Suspense, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { LogOut, Menu, X } from 'lucide-react'
+import { PlatformLogo } from '@/components/brand/PlatformLogo'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/features/auth'
 import { ShellErrorBoundary } from '@/features/shell/ErrorBoundary'
@@ -9,7 +10,8 @@ import { PageSkeleton } from '@/features/shell/states'
 import { cn } from '@/lib/utils/cn'
 import { PLATFORM_NAV } from './platform-nav'
 
-const focusRing = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
+const focusRing =
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
 const linkClass = ({ isActive }: { isActive: boolean }) =>
   cn(
     'flex min-h-[44px] items-center gap-3 rounded-md px-3 text-sm font-medium transition-colors',
@@ -51,7 +53,9 @@ function MobileNav() {
           aria-describedby={undefined}
         >
           <div className="flex items-center justify-between border-b border-line px-3">
-            <DialogPrimitive.Title className="text-base font-semibold text-ink">Navigation</DialogPrimitive.Title>
+            <DialogPrimitive.Title className="text-base font-semibold text-ink">
+              Navigation
+            </DialogPrimitive.Title>
             <DialogPrimitive.Close asChild>
               <Button variant="ghost" size="icon" aria-label="Close navigation">
                 <X aria-hidden="true" className="h-5 w-5" />
@@ -83,10 +87,18 @@ export function PlatformShell() {
       <header className="sticky top-0 z-40 border-b border-line bg-white">
         <div className="flex items-center gap-2 px-2 py-1 lg:px-4">
           <MobileNav />
-          <Link to="/platform" className={`inline-flex min-h-[44px] items-center text-lg font-bold text-ink ${focusRing}`}>
-            Cafe<span className="text-primary">OS</span>
+          <Link
+            to="/platform"
+            className={`inline-flex min-h-[44px] items-center gap-2 text-lg font-bold text-ink ${focusRing}`}
+          >
+            <PlatformLogo size={32} />
+            <span>
+              Cafe<span className="text-primary">OS</span>
+            </span>
           </Link>
-          <span className="ml-2 rounded-pill border border-line px-2.5 py-0.5 text-xs font-semibold text-ink">Platform admin</span>
+          <span className="ml-2 rounded-pill border border-line px-2.5 py-0.5 text-xs font-semibold text-ink">
+            Platform admin
+          </span>
           <div className="ml-auto flex items-center gap-2">
             <span className="hidden text-sm font-medium text-ink md:block" data-testid="platform-actor">
               Super Admin

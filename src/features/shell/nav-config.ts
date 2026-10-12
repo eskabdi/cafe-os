@@ -108,9 +108,12 @@ export const MODULE_NAV: readonly ModuleNavItem[] = [
     label: 'Day close',
     segment: 'day-close',
     permission: 'day_close.execute',
+    // a role with only day.open must still reach the page to open a new day (the close UI stays hidden without day_close.execute)
+    alsoPermissions: ['day.open'],
     group: 'management',
     icon: CalendarCheck,
-    summary: 'Close the business day and review the summary.',
+    summary: 'Count cash and station stock, close the business day and open the next one.',
+    implemented: true,
   },
   {
     id: 'settings',

@@ -223,3 +223,21 @@ flowchart LR
     PAY[("payments")] -.->|Realtime INSERT (RLS payments.view) -> invalidate| DASH
 ```
 
+## Level 1: day close and new day (Phase 9)
+```mermaid
+flowchart LR
+    UI["Day close SPA /r/<slug>/day-close (day_close.execute)"] -->|"fn_close_day_preview()"| P["definer RPC: tenant from JWT, read-only figures"]
+    UI -->|"expenses insert (RLS expenses.manage; day, snapshots, author by trigger)"| E[("expenses")]
+    UI -->|"fn_close_day(counted cash, ingredient counts, note, key)"| C["definer RPC: open day FOR UPDATE, unpaid-order block"]
+    P --> F["internal fn_day_figures"]
+    C --> F
+    F -->|read, tenant-filtered| SRC[("payments / expenses / orders / ingredients / stations")]
+    C -->|"snapshot + variance, status closed"| D[("day_sessions")]
+    C -->|expire| S[("table_sessions / customer_sessions / tables")]
+    C -->|day.closed| AUD[("audit_logs")]
+    UI -->|"fn_open_day(opening float, key) (day.open)"| O["definer RPC: day_no = last + 1, reset daily counters"]
+    O --> D
+    O -->|day.opened| AUD
+    UI -->|"fn_list_days()"| D
+```
+

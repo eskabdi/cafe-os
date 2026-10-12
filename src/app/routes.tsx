@@ -48,6 +48,11 @@ const DashboardPage = lazy(() =>
 const ReportsPage = lazy(() =>
   import('@/features/reports/ReportsPage').then((m) => ({ default: m.ReportsPage })),
 )
+const DayClosePage = lazy(() =>
+  import('@/features/day-close/DayClosePage').then((m) => ({ default: m.DayClosePage })),
+)
+// same codes as the Day close nav entry (day_close.execute or day.open)
+const DAY_CLOSE_ALSO = ['day.open'] as const
 const InventoryPage = lazy(() => import('@/features/inventory').then((m) => ({ default: m.InventoryPage })))
 const RestaurantSettingsPage = lazy(() =>
   import('@/features/tenant-admin/RestaurantSettingsPage').then((m) => ({
@@ -241,6 +246,15 @@ export const routes: RouteObject[] = [
                           </RequireNavPermission>
                         ),
                       },
+                      // Phase 9 Day close (day_close.execute or day.open, same codes as the nav entry; fn_close_day / fn_open_day re-check server-side)
+                      {
+                        path: 'day-close',
+                        element: (
+                          <RequireNavPermission permission="day_close.execute" anyOf={DAY_CLOSE_ALSO}>
+                            <DayClosePage />
+                          </RequireNavPermission>
+                        ),
+                      },
                       // Phase 3 modules: same permission codes as their nav entries (menu.view / inventory.view).
                       {
                         path: 'menu',
@@ -258,7 +272,7 @@ export const routes: RouteObject[] = [
                           </RequireNavPermission>
                         ),
                       },
-                      // Generated from the nav catalogue: modules without a page yet (Day close, ...) as "coming soon" placeholders.
+                      // Generated from the nav catalogue: modules without a page yet as "coming soon" placeholders (none left after Phase 9).
                       ...placeholderModuleRoutes(),
                       // ONE generic board for every station row (by UUID); never a per-station route.
                       {
